@@ -2,7 +2,7 @@
 //  BalloonHunterApp.swift
 //  BalloonHunter
 //
-//  Created by Andreas Spiess on 31.07.2025.
+//  Created by Andreas Spiess on 26.07.2025.
 //
 
 import SwiftUI
