@@ -74,7 +74,7 @@ struct MapView: View {
             VStack(spacing: 0) {
                 ZStack {
                     Map(coordinateRegion: $region)
-                        .frame(height: geometry.size.height * 0.5)
+                        .frame(height: geometry.size.height * 0.8)
                         .edgesIgnoringSafeArea(.top)
                     balloonTrackOverlayView
                     predictionTrackOverlayView
@@ -83,7 +83,6 @@ struct MapView: View {
                     burstPinOverlay
                     drivingRouteOverlay
                 }
-                .frame(height: geometry.size.height * 0.5)
 
                 /*
                 Group {
@@ -115,7 +114,7 @@ struct MapView: View {
         }
         .onChange(of: ble.latestTelemetry) { telemetry in
             if let telemetry = telemetry {
-                print("[MapView DEBUG] Received telemetry lat: \(telemetry.latitude), lon: \(telemetry.longitude)")
+                //print("[MapView DEBUG] Received telemetry lat: \(telemetry.latitude), lon: \(telemetry.longitude)")
                 let coordinate: CLLocationCoordinate2D
                 if telemetry.latitude == 0 && telemetry.longitude == 0 {
                     if let locCoord = locationManager.location?.coordinate {
@@ -125,14 +124,14 @@ struct MapView: View {
                     }
                 } else {
                     coordinate = CLLocationCoordinate2D(latitude: telemetry.latitude, longitude: telemetry.longitude)
-                    print("[MapView DEBUG] Assigned coordinate: \(coordinate.latitude), \(coordinate.longitude)")
+                    //print("[MapView DEBUG] Assigned coordinate: \(coordinate.latitude), \(coordinate.longitude)")
                 }
                 region.center = coordinate
                 if telemetry.latitude != 0 || telemetry.longitude != 0 {
                     let coord = CLLocationCoordinate2D(latitude: telemetry.latitude, longitude: telemetry.longitude)
                     if balloonTrack.isEmpty || balloonTrack.last != coord {
                         balloonTrack.append(coord)
-                        print("[MapView DEBUG] BalloonTrack last: \(balloonTrack.last?.latitude ?? 0), \(balloonTrack.last?.longitude ?? 0) (count: \(balloonTrack.count))")
+                        //print("[MapView DEBUG] BalloonTrack last: \(balloonTrack.last?.latitude ?? 0), \(balloonTrack.last?.longitude ?? 0) (count: \(balloonTrack.count))")
                         if !balloonTrack.isEmpty {
                             // Removed debug prints
                         }
