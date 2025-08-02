@@ -228,7 +228,9 @@ class BLEManager: NSObject, ObservableObject {
                 let uiUpdateStart = Date()
                 await MainActor.run {
                     if let t = telemetry {
+                        print("[BLEManager DEBUG] Before setting latestTelemetry to lat: \(t.latitude), lon: \(t.longitude)")
                         self.latestTelemetry = t
+                        print("[BLEManager DEBUG] After setting latestTelemetry to lat: \(t.latitude), lon: \(t.longitude)")
                         // Updating frequency and tipo here is silent (no prints)
                         self.sondeSettings.frequency = t.frequency
                         self.sondeSettings.tipo = Int(t.probeType.filter("0123456789".contains)) ?? self.sondeSettings.tipo
@@ -379,7 +381,7 @@ extension BLEManager: CBPeripheralDelegate {
                     error: Error?) {
         if let data = characteristic.value,
            let text = String(data: data, encoding: .utf8) {
-            print("[DEBUG] BLE Rx: \(text)")
+            print("[BLE DEBUG] Received message: \(text.trimmingCharacters(in: .whitespacesAndNewlines))")
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
             
             Task { [weak self] in
@@ -410,15 +412,12 @@ extension BLEManager: CBPeripheralDelegate {
                     sendCommand("?")
                 }
                 if let telemetry = Telemetry.parseLongFormat(from: components) {
-                    print("[DEBUG] /0 msg: probeType=\(telemetry.probeType) frequency=\(telemetry.frequency) name=\(telemetry.name) lat=\(telemetry.latitude) lon=\(telemetry.longitude) alt=\(telemetry.altitude) hSpeed=\(telemetry.horizontalSpeed) vSpeed=\(telemetry.verticalSpeed) signal=\(telemetry.signalStrength) batt=\(telemetry.batteryPercentage) afc=\(telemetry.afc) burstKiller=\(telemetry.burstKiller) burstKillerTime=\(telemetry.burstKillerTime) batteryVoltage=\(telemetry.batteryVoltage) buzzerMute=\(telemetry.buzzerMute) firmware=\(telemetry.firmwareVersion)")
-                    print("[BLE DEBUG] Type 0: probeType=\(telemetry.probeType) freq=\(telemetry.frequency) alt=\(telemetry.altitude) batt=\(telemetry.batteryPercentage)% ver=\(telemetry.firmwareVersion)")
+                    Task { @MainActor in
+                        self.latestTelemetry = telemetry
+                    }
 
-                    print("[DEBUG] Before persist: UserDefaults frequency:", UserDefaults.standard.double(forKey: "StoredSondeFrequency"), "type:", UserDefaults.standard.string(forKey: "StoredSondeType") ?? "nil")
                     BLEManager.storedFrequency = telemetry.frequency
                     BLEManager.storedType = telemetry.probeType
-                    print("[DEBUG] After persist: UserDefaults frequency:", UserDefaults.standard.double(forKey: "StoredSondeFrequency"), "type:", UserDefaults.standard.string(forKey: "StoredSondeType") ?? "nil")
-                    print("[DEBUG] Persisted frequency: \(telemetry.frequency)")
-                    print("[DEBUG] Persisted probeType: \(telemetry.probeType)")
 
                     Task { [weak self] in
                         guard let self = self else { return }
@@ -450,24 +449,19 @@ extension BLEManager: CBPeripheralDelegate {
                                 self.sondeSettings.tipo = Int(telemetry.probeType.filter("0123456789".contains)) ?? s.tipo
                             }
                             UserDefaults.standard.saveSondeSettings(self.sondeSettings)
-                            // Removed prints here for sondeSettings update in case "0"
                         }
                         await self.telemetryBuffer.update(telemetry: telemetry, signalStrength: telemetry.signalStrength, validSignal: true)
                     }
                 }
             case "1", "2", "3":
                 if let telemetry = Telemetry.parseLongFormat(from: components) {
+                    Task { @MainActor in
+                        self.latestTelemetry = telemetry
+                    }
 
-                    print("[BLE DEBUG] Type \(messageType): probeType=\(telemetry.probeType) freq=\(telemetry.frequency) alt=\(telemetry.altitude) batt=\(telemetry.batteryPercentage)% ver=\(telemetry.firmwareVersion)")
-
-                    // Removed debug prints only if messageType == "3":
                     if messageType != "3" {
-                        print("[DEBUG] Before persist: UserDefaults frequency:", UserDefaults.standard.double(forKey: "StoredSondeFrequency"), "type:", UserDefaults.standard.string(forKey: "StoredSondeType") ?? "nil")
                         BLEManager.storedFrequency = telemetry.frequency
                         BLEManager.storedType = telemetry.probeType
-                        print("[DEBUG] After persist: UserDefaults frequency:", UserDefaults.standard.double(forKey: "StoredSondeFrequency"), "type:", UserDefaults.standard.string(forKey: "StoredSondeType") ?? "nil")
-                        print("[DEBUG] Persisted frequency: \(telemetry.frequency)")
-                        print("[DEBUG] Persisted probeType: \(telemetry.probeType)")
                     } else {
                         BLEManager.storedFrequency = telemetry.frequency
                         BLEManager.storedType = telemetry.probeType
@@ -503,10 +497,8 @@ extension BLEManager: CBPeripheralDelegate {
                                 self.sondeSettings.tipo = Int(telemetry.probeType.filter("0123456789".contains)) ?? s.tipo
                             }
                             UserDefaults.standard.saveSondeSettings(self.sondeSettings)
-                            // Only print sondeSettings update if messageType == "3"
                             if messageType == "3" {
-                                print("[BLE DEBUG] Received 3/ message: \(text)")
-                                // Removed detailed debug prints and field-by-field output per instructions
+                                print("[BLE DEBUG] Received 3/ message: \(trimmed)")
                             }
                         }
                         await self.telemetryBuffer.update(telemetry: telemetry, signalStrength: telemetry.signalStrength, validSignal: true)
@@ -514,7 +506,6 @@ extension BLEManager: CBPeripheralDelegate {
                 }
             default:
                 if var telemetry = Telemetry.parseShortFormat(from: components) {
-                    print("[BLE DEBUG] Type \(messageType): probeType=\(telemetry.probeType) freq=\(telemetry.frequency) alt=\(telemetry.altitude) batt=\(telemetry.batteryPercentage)% ver=\(telemetry.firmwareVersion)")
                     Task { [weak self] in
                         guard let self = self else { return }
                         if let prev = self.latestTelemetry {

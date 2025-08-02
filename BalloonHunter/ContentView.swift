@@ -4,14 +4,13 @@ struct ContentView: View {
     @State private var showingMenu = false
     @ObservedObject private var ble = BLEManager.shared
     @StateObject private var locationManager = LocationManager()
-    @State private var sondeDataHeight: CGFloat = 0
 
     var body: some View {
         ZStack(alignment: .topLeading) {
             GeometryReader { geometry in
                 VStack(spacing: 0) {
                     MapView(locationManager: locationManager)
-                        .frame(height: geometry.size.height - sondeDataHeight)
+                        .frame(height: geometry.size.height * 0.8)
                     
                     Group {
                         if let telemetry = ble.latestTelemetry {
@@ -41,13 +40,7 @@ struct ContentView: View {
                         }
                     }
                     .background(Color(.systemGroupedBackground))
-                    .background(
-                        GeometryReader { proxy in
-                            Color.clear
-                                .onAppear { sondeDataHeight = proxy.size.height }
-                                .onChange(of: proxy.size.height) { sondeDataHeight = $0 }
-                        }
-                    )
+                    .frame(height: geometry.size.height * 0.2)
                 }
             }
 
