@@ -3,6 +3,7 @@ import SwiftUI
 struct ContentView: View {
     @ObservedObject private var ble = BLEManager.shared
     @StateObject private var locationManager = LocationManager()
+    @StateObject private var predictionInfo = PredictionInfo()
 
     @State private var showMenu = false
     
@@ -11,6 +12,7 @@ struct ContentView: View {
 
     @State private var sondeFrequency: String = ""
     @State private var sondeTypeIndex: Int = 0
+    @State private var isMuted = false
     
     enum ActiveSheet: Identifiable {
         case settings, sondeSettings
@@ -22,6 +24,17 @@ struct ContentView: View {
         }
     }
     @State private var activeSheet: ActiveSheet?
+    
+    private func sheetView(for sheet: ActiveSheet) -> some View {
+        switch sheet {
+        case .settings:
+            return AnyView(SettingsView())
+        case .sondeSettings:
+            return AnyView(SondeSettingsInputView(frequency: $sondeFrequency, sondeTypeIndex: $sondeTypeIndex, sondeTypes: ContentView.sondeTypes))
+        }
+        // Fallback (should never hit):
+        // return AnyView(EmptyView())
+    }
 
     static let sondeTypes = ["RS41", "M20", "M10", "PILOT", "DFM"]
 
@@ -42,6 +55,7 @@ struct ContentView: View {
 
     private var mapSection: some View {
         MapView(locationManager: locationManager)
+            .environmentObject(predictionInfo)
     }
 
     private func telemetrySection(_ geometry: GeometryProxy) -> some View {
@@ -58,6 +72,67 @@ struct ContentView: View {
                             HStack { Text("Batt:"); Spacer(); Text("\(telemetry.batteryPercentage)%").bold() }
                             HStack { Text("Signal:"); Spacer(); Text("\(Int(telemetry.signalStrength)) dB").bold() }
                             HStack { Text("FW:"); Spacer(); Text(telemetry.firmwareVersion).font(.caption) }
+                            HStack { Text("V-Speed:"); Spacer(); Text("\(telemetry.verticalSpeed, specifier: "%.1f") m/s").bold() }
+
+                            if let landingTime = predictionInfo.landingTime {
+                                let now = Date()
+                                let diffMinutes = Int(now.distance(to: landingTime) / 60)
+                                if landingTime > now {
+                                    HStack {
+                                        Text("Landing in")
+                                        Spacer()
+                                        Text("\(diffMinutes) min").bold()
+                                    }
+                                } else {
+                                    HStack {
+                                        Text("Landed")
+                                        Spacer()
+                                        Text("\(abs(diffMinutes)) min ago").bold()
+                                    }
+                                }
+                            } else {
+                                EmptyView()
+                            }
+                            
+                            // Refactored arrivalTime logic
+                            HStack {
+                                Text("Arrival:")
+                                Spacer()
+                                if let arrivalTime = predictionInfo.arrivalTime {
+                                    let now = Date()
+                                    let arrivalDate: Date? = {
+                                        if let date = arrivalTime as? Date {
+                                            return date
+                                        } else if let timestamp = arrivalTime as? Double {
+                                            return Date(timeIntervalSince1970: timestamp)
+                                        } else {
+                                            return nil
+                                        }
+                                    }()
+                                    if let arrivalDate = arrivalDate {
+                                        let diffSeconds = arrivalDate.timeIntervalSince(now)
+                                        if diffSeconds >= 0 {
+                                            Text("\(Int(diffSeconds/60)) min").bold()
+                                        } else {
+                                            Text("Route unavailable").foregroundColor(.secondary)
+                                        }
+                                    } else {
+                                        Text("Route unavailable").foregroundColor(.secondary)
+                                    }
+                                } else {
+                                    Text("Route unavailable").foregroundColor(.secondary)
+                                }
+                            }
+                            
+                            Button(action: {
+                                isMuted.toggle()
+                                BLEManager.shared.sendCommand("mute=\(isMuted ? 1 : 0)")
+                            }) {
+                                Image(systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                                    .foregroundColor(.primary)
+                                    .frame(maxWidth: .infinity, alignment: .center)
+                            }
+                            .padding(.top, 8)
                         }
                     }
                     .padding()
@@ -151,15 +226,12 @@ struct ContentView: View {
                                     .padding(8)
                             }
                             Button(action: {
-                                // Pressing wrench triggers BLE settings request.
-                                // The settings sheet will open only after the response is received and processed.
-                                print("[WRENCH DEBUG] Wrench button pressed.")
-                                print("[WRENCH DEBUG] Calling sendCommand('?') on BLEManager.")
+                                print("[WRENCH DEBUG] Wrench button pressed. Sending '?' command.")
                                 BLEManager.shared.sendCommand("?")
                                 let s = BLEManager.shared.sondeSettings
                                 print("[DEBUG] sondeSettings: probeType=\(s.probeType), frequency=\(s.frequency), oledSDA=\(s.oledSDA), oledSCL=\(s.oledSCL), oledRST=\(s.oledRST), ledPin=\(s.ledPin), buzPin=\(s.buzPin), batPin=\(s.batPin), lcdType=\(s.lcdType), batMin=\(s.batMin), batMax=\(s.batMax), batType=\(s.batType), callSign=\(s.callSign), rs41Bandwidth=\(s.rs41Bandwidth), m20Bandwidth=\(s.m20Bandwidth), m10Bandwidth=\(s.m10Bandwidth), pilotBandwidth=\(s.pilotBandwidth), dfmBandwidth=\(s.dfmBandwidth), frequencyCorrection=\(s.frequencyCorrection), lcdOn=\(s.lcdOn), blu=\(s.blu), baud=\(s.baud), com=\(s.com), nameType=\(s.nameType)")
-                                print("[WRENCH DEBUG] Set pendingSettingsRequest = true")
                                 pendingSettingsRequest = true
+                                print("[WRENCH DEBUG] Set pendingSettingsRequest = true")
                                 showMenu = false
                             }) {
                                 Image(systemName: "wrench.fill")
@@ -188,9 +260,6 @@ struct ContentView: View {
         }
         // MARK: - Handle BLE settings response separately from telemetry updates
         .onReceive(BLEManager.shared.$receivedText) { receivedText in
-            print("[WRENCH DEBUG] .onReceive: receivedText updated.")
-            // Check if there is a pending settings request and if the received text contains a line ending with "/o"
-            // which indicates the settings response is received
             if pendingSettingsRequest, receivedText.contains("\n"), receivedText.components(separatedBy: "\n").contains(where: { $0.hasSuffix("/o") }) {
                 print("[WRENCH DEBUG] Settings response detected, showing settings sheet.")
                 activeSheet = .settings
@@ -219,12 +288,7 @@ struct ContentView: View {
         }
         .navigationTitle("Sonde Tracker")
         .sheet(item: $activeSheet) { sheet in
-            switch sheet {
-            case .settings:
-                SettingsView()
-            case .sondeSettings:
-                SondeSettingsInputView(frequency: $sondeFrequency, sondeTypeIndex: $sondeTypeIndex, sondeTypes: ContentView.sondeTypes)
-            }
+            sheetView(for: sheet)
         }
     }
 }
@@ -277,4 +341,3 @@ struct SondeSettingsInputView: View {
 #Preview {
     ContentView()
 }
-

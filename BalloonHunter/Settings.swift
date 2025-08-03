@@ -30,7 +30,7 @@ struct Settings {
     var m10Bandwidth: Int
     var pilotBandwidth: Int
     var dfmBandwidth: Int
-    var frequencyCorrection: Int
+    var frequencyCorrection: String
 
     // Others Tab
     var lcdStatus: Int
@@ -60,7 +60,7 @@ struct Settings {
             m10Bandwidth: 7,
             pilotBandwidth: 7,
             dfmBandwidth: 6,
-            frequencyCorrection: 0,
+            frequencyCorrection: "0",
             lcdStatus: 1,
             bluetoothStatus: 1,
             serialSpeed: 1,

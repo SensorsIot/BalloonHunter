@@ -31,6 +31,11 @@ struct EditableSettings {
     var baud: Int
     var com: Int
     
+    // Added optional prediction settings
+    var burstAltitude: String?
+    var ascentRate: String?
+    var descentRate: String?
+    
     // Initialize from SondeSettings
     init(from sondeSettings: SondeSettings) {
         lcdType = sondeSettings.lcdType
@@ -58,6 +63,9 @@ struct EditableSettings {
         blu = sondeSettings.blu
         baud = sondeSettings.baud
         com = sondeSettings.com
+        
+        // Initialize optional prediction settings if available
+        // Removed assignments to burstAltitude, ascentRate, descentRate as per instructions
     }
     
     // Convert back to SondeSettings
@@ -87,17 +95,70 @@ struct EditableSettings {
         sondeSettings.blu = blu
         sondeSettings.baud = baud
         sondeSettings.com = com
+        
+        // Save optional prediction settings if present
+        // Removed assignments to sondeSettings.burstAltitude, ascentRate, descentRate as per instructions
     }
 }
 
 // Assuming BLEManager is defined elsewhere for sending commands
 // For example:
 
+// Define PredictionSettings as an ObservableObject singleton for prediction parameters
+class PredictionSettings: ObservableObject {
+    static let shared = PredictionSettings()
+    
+    @Published var burstAltitude: String = "" {
+        didSet {
+            UserDefaults.standard.set(burstAltitude, forKey: "burstAltitude")
+        }
+    }
+    @Published var ascentRate: String = "" {
+        didSet {
+            UserDefaults.standard.set(ascentRate, forKey: "ascentRate")
+        }
+    }
+    @Published var descentRate: String = "" {
+        didSet {
+            UserDefaults.standard.set(descentRate, forKey: "descentRate")
+        }
+    }
+    
+    private init() {
+        let defaults = UserDefaults.standard
+        let defaultBurstAltitude = "35000"
+        let defaultAscentRate = "5.0"
+        let defaultDescentRate = "5.0"
+        
+        if let savedBurstAltitude = defaults.string(forKey: "burstAltitude"), !savedBurstAltitude.isEmpty {
+            burstAltitude = savedBurstAltitude
+        } else {
+            burstAltitude = defaultBurstAltitude
+            defaults.set(defaultBurstAltitude, forKey: "burstAltitude")
+        }
+        
+        if let savedAscentRate = defaults.string(forKey: "ascentRate"), !savedAscentRate.isEmpty {
+            ascentRate = savedAscentRate
+        } else {
+            ascentRate = defaultAscentRate
+            defaults.set(defaultAscentRate, forKey: "ascentRate")
+        }
+        
+        if let savedDescentRate = defaults.string(forKey: "descentRate"), !savedDescentRate.isEmpty {
+            descentRate = savedDescentRate
+        } else {
+            descentRate = defaultDescentRate
+            defaults.set(defaultDescentRate, forKey: "descentRate")
+        }
+    }
+}
+
 struct SettingsView: View {
     @ObservedObject var bleManager: BLEManager = .shared
     @Environment(\.dismiss) private var dismiss
     
     @State private var settings: EditableSettings = EditableSettings(from: BLEManager.shared.sondeSettings)
+    @ObservedObject var predictionSettings = PredictionSettings.shared
     
     private var rs41BandwidthBinding: Binding<String> {
         Binding(get: { String(self.settings.rs41Bandwidth) }, set: { self.settings.rs41Bandwidth = Int($0) ?? 0 })
@@ -150,8 +211,7 @@ struct SettingsView: View {
                     m20Bandwidth: m20BandwidthBinding,
                     pilotBandwidth: pilotBandwidthBinding,
                     dfmBandwidth: dfmBandwidthBinding,
-                    freqofs: $settings.frequencyCorrection,
-                    aprsName: $settings.nameType
+                    freqofs: $settings.frequencyCorrection
                 )
                 .tabItem {
                     Label("Radio", systemImage: "antenna.radiowaves.left.and.right")
@@ -168,8 +228,18 @@ struct SettingsView: View {
                 .tabItem {
                     Label("Other", systemImage: "gearshape")
                 }
+                
+                // MARK: Prediction Tab
+                PredictionSettingsView(
+                    burstAltitude: $predictionSettings.burstAltitude,
+                    ascentRate: $predictionSettings.ascentRate,
+                    descentRate: $predictionSettings.descentRate
+                )
+                .tabItem {
+                    Label("Prediction", systemImage: "waveform.path.ecg")
+                }
             }
-            .navigationTitle("Settings (2.30)") // From screenshot
+            .navigationTitle("Settings") // From screenshot
             .navigationBarTitleDisplayMode(.inline) // Compact title
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
@@ -177,19 +247,14 @@ struct SettingsView: View {
                         Button(action: {
                             // Convert local settings back to BLEManager's sondeSettings
                             settings.toSondeSettings(&bleManager.sondeSettings)
-                            BLEManager.shared.sendCommand(bleManager.sondeSettings.serializeToCommand())
+                            BLEManager.shared.sendCommand(buildBLECommandFromSettings(settings))
+                            // Save prediction settings immediately
+                            savePredictionSettings()
                             dismiss()
                         }) {
                             Text("Save")
                         }
                         .buttonStyle(.borderedProminent)
-                        
-                        Button(action: {
-                            // Action for the 'RESET' button. This sends 'Re' [cite: 346, 349]
-                            BLEManager.shared.sendCommand("Re")
-                        }) {
-                            Text("RESET")
-                        }
                     }
                 }
                 
@@ -203,6 +268,137 @@ struct SettingsView: View {
         .onAppear {
             // Initialize local settings from BLEManager at time of appearance
             settings = EditableSettings(from: BLEManager.shared.sondeSettings)
+            // Removed resetting predictionSettings.burstAltitude, ascentRate, descentRate to empty strings
+        }
+        // Save prediction settings immediately when any changes happen
+        .onChange(of: predictionSettings.burstAltitude) { _ in savePredictionSettings() }
+        .onChange(of: predictionSettings.ascentRate) { _ in savePredictionSettings() }
+        .onChange(of: predictionSettings.descentRate) { _ in savePredictionSettings() }
+    }
+    
+    private func savePredictionSettings() {
+        // Save prediction settings into BLEManager's sondeSettings immediately
+        // Removed assignments to sondeSettings as per instructions
+        
+        // Optionally send commands to BLEManager if required
+        BLEManager.shared.sendCommand("burstAltitude=\(predictionSettings.burstAltitude)")
+        BLEManager.shared.sendCommand("ascentRate=\(predictionSettings.ascentRate)")
+        BLEManager.shared.sendCommand("descentRate=\(predictionSettings.descentRate)")
+    }
+    
+    private func buildBLECommandFromSettings(_ settings: EditableSettings) -> String {
+        let tipo = settings.lcdType
+        let f = 0
+        let aprsName = settings.nameType
+        let oled_sda = settings.oledSDA
+        let oled_scl = settings.oledSCL
+        let oled_rst = settings.oledRST
+        let led_pout = settings.ledPin
+        let rs41_rxbw = settings.rs41Bandwidth
+        let m20_rxbw = settings.m20Bandwidth
+        let m10_rxbw = settings.m10Bandwidth
+        let pilot_rxbw = settings.pilotBandwidth
+        let dfm_rxbw = settings.dfmBandwidth
+        let myCall = settings.callSign
+        let freqofs = settings.frequencyCorrection
+        let battery = settings.batPin
+        let vBatMin = settings.batMin
+        let vBatMax = settings.batMax
+        let vBatType = settings.batType
+        let lcd = settings.lcdType
+        let buz_pin = settings.buzPin
+        let lcdOn = settings.lcdOn
+        let blu = settings.blu
+        let com = settings.com
+        let baud = settings.baud
+        
+        var parts = [
+            "tipo=\(tipo)",
+            "f=\(f)",
+            "aprsName=\(aprsName)",
+            "oled_sda=\(oled_sda)",
+            "oled_scl=\(oled_scl)",
+            "oled_rst=\(oled_rst)",
+            "led_pout=\(led_pout)",
+            "rs41.rxbw=\(rs41_rxbw)",
+            "m20.rxbw=\(m20_rxbw)",
+            "m10.rxbw=\(m10_rxbw)",
+            "pilot.rxbw=\(pilot_rxbw)",
+            "dfm.rxbw=\(dfm_rxbw)",
+            "myCall=\(myCall)",
+            "freqofs=\(freqofs)",
+            "battery=\(battery)",
+            "vBatMin=\(vBatMin)",
+            "vBatMax=\(vBatMax)",
+            "vBatType=\(vBatType)",
+            "lcd=\(lcd)",
+            "buz_pin=\(buz_pin)",
+            "lcdOn=\(lcdOn)",
+            "blu=\(blu)",
+            "com=\(com)",
+            "baud=\(baud)"
+        ]
+        
+        // Append prediction settings if present
+        if let burst = settings.burstAltitude {
+            parts.append("burstAltitude=\(burst)")
+        }
+        if let ascent = settings.ascentRate {
+            parts.append("ascentRate=\(ascent)")
+        }
+        if let descent = settings.descentRate {
+            parts.append("descentRate=\(descent)")
+        }
+        
+        return parts.joined(separator: "/")
+    }
+    
+    // Debug print function for SondeSettings type 3 message
+    func debugPrintType3Settings(_ settings: SondeSettings) {
+        print("[TYPE 3 DEBUG] probeType=\(settings.probeType), frequency=\(settings.frequency), oledSDA=\(settings.oledSDA), oledSCL=\(settings.oledSCL), oledRST=\(settings.oledRST), buzPin=\(settings.buzPin), ledPin=\(settings.ledPin), batPin=\(settings.batPin), batMin=\(settings.batMin), batMax=\(settings.batMax), batType=\(settings.batType), callSign=\(settings.callSign), rs41Bandwidth=\(settings.rs41Bandwidth), m10Bandwidth=\(settings.m10Bandwidth), m20Bandwidth=\(settings.m20Bandwidth), pilotBandwidth=\(settings.pilotBandwidth), dfmBandwidth=\(settings.dfmBandwidth), frequencyCorrection=\(settings.frequencyCorrection), nameType=\(settings.nameType), lcdOn=\(settings.lcdOn), blu=\(settings.blu), baud=\(settings.baud), com=\(settings.com)")
+    }
+    // Suggestion: Call debugPrintType3Settings with latest SondeSettings when a type 3 message is received elsewhere in your code.
+}
+
+//// MARK: - PredictionSettingsView (New tab view for prediction settings)
+struct PredictionSettingsView: View {
+    @Binding var burstAltitude: String
+    @Binding var ascentRate: String
+    @Binding var descentRate: String
+    
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                Section(header: Text("Prediction Settings").font(.headline)) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        LabeledNumberField(label: "Burst Altitude (m)", text: $burstAltitude)
+                        LabeledNumberField(label: "Ascent Rate (m/s)", text: $ascentRate)
+                        LabeledNumberField(label: "Descent Rate (m/s)", text: $descentRate)
+                    }
+                }
+            }
+            .padding(24)
+        }
+        .navigationTitle("Prediction")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+// Helper view for labeled number input fields with decimalPad keyboard
+struct LabeledNumberField: View {
+    let label: String
+    @Binding var text: String
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(label)
+                .font(.caption)
+                .foregroundColor(.secondary)
+            TextField(label, text: $text)
+                .keyboardType(.decimalPad)
+                .padding(10)
+                .background(Color(.secondarySystemBackground))
+                .cornerRadius(8)
         }
     }
 }
@@ -336,7 +532,6 @@ struct RadioSettingsView: View {
     var pilotBandwidth: Binding<String> // PILOT-BAND [cite: 266]
     var dfmBandwidth: Binding<String> // DFM-BAND [cite: 291]
     @Binding var freqofs: String // FREQ-OFS [cite: 293]
-    @Binding var aprsName: Int // NAME-TYPE [cite: 299]
     
     // Frequency options from Appendix 2 [cite: 366, 367, 368, 369, 370, 371, 372, 373, 374, 375, 376, 377, 378, 379, 380, 381, 382, 383, 384, 385]
     static let freqOptions = [
@@ -356,8 +551,11 @@ struct RadioSettingsView: View {
                             .foregroundColor(.secondary)
                         TextField("BUBI", text: $myCall) // MYCALL [cite: 292]
                             .onChange(of: myCall) { newValue in
-                                if newValue.count > 8 { // Max 8 characters
-                                    myCall = String(newValue.prefix(8))
+                                let uppercasedValue = newValue.uppercased()
+                                if uppercasedValue.count > 8 {
+                                    myCall = String(uppercasedValue.prefix(8))
+                                } else {
+                                    myCall = uppercasedValue
                                 }
                             }
                             .padding(10)
@@ -400,10 +598,6 @@ struct RadioSettingsView: View {
                             .buttonStyle(.borderedProminent)
                         }
                     }
-                }
-                
-                Section(header: Text("Name Display Type").font(.headline)) {
-                    NameTypePicker(selection: $aprsName) // NAME-TYPE [cite: 299]
                 }
             }
             .padding(24)
@@ -494,7 +688,7 @@ struct OtherSettingsView: View {
                         // Reboot command [cite: 347]
                         BLEManager.shared.sendCommand("re")
                     }) {
-                        Text("Reboot Device")
+                        Text("Reset Parameters")
                             .fontWeight(.bold)
                     }
                     .buttonStyle(.borderedProminent)

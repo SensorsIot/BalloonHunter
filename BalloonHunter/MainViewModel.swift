@@ -113,7 +113,7 @@ final class MainViewModel: ObservableObject {
         settings.m10Bandwidth = sondeSettings.m10Bandwidth                        // M10 bandwidth
         settings.pilotBandwidth = sondeSettings.pilotBandwidth                    // PILOT bandwidth
         settings.dfmBandwidth = sondeSettings.dfmBandwidth                        // DFM bandwidth
-        settings.frequencyCorrection = Int(sondeSettings.frequencyCorrection) ?? Settings.default.frequencyCorrection  // Correction
+        settings.frequencyCorrection = sondeSettings.frequencyCorrection          // Correction
 
         // Others
         settings.lcdStatus = sondeSettings.lcdOn                                   // LCD On/Off

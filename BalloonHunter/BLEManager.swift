@@ -415,6 +415,7 @@ extension BLEManager: CBPeripheralDelegate {
                     error: Error?) {
         if let data = characteristic.value,
            let text = String(data: data, encoding: .utf8) {
+            // print("[BLE RAW MESSAGE] \(text.trimmingCharacters(in: .whitespacesAndNewlines))")
             // print("[BLE DEBUG] Received message: \(text.trimmingCharacters(in: .whitespacesAndNewlines))")
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
             
@@ -504,35 +505,96 @@ extension BLEManager: CBPeripheralDelegate {
                     Task { [weak self] in
                         guard let self = self else { return }
                         await MainActor.run {
-                            let s = self.sondeSettings
-                            let comp = components
+                            // For message type "3", update settings according to the provided index map
+                            if messageType == "3" {
+                                // Indices taken from the type 3 BLE message format specification:
+                                // 0: type (skip)
+                                // 1: probeType
+                                // 2: frequency
+                                // 3: oledSDA
+                                // 4: oledSCL
+                                // 5: oledRST
+                                // 6: ledPin
+                                // 7: rs41Bandwidth
+                                // 8: m20Bandwidth
+                                // 9: m10Bandwidth
+                                // 10: pilotBandwidth
+                                // 11: dfmBandwidth
+                                // 12: callSign
+                                // 13: frequencyCorrection
+                                // 14: batPin
+                                // 15: batMin
+                                // 16: batMax
+                                // 17: batType
+                                // 18: lcdType
+                                // 19: nameType
+                                // 20: buzPin
+                                // 21: firmwareVersion (if present)
+                                // 22: reserved/end marker
 
-                            // Check component count for safety
-                            if comp.count >= 21 {
-                                self.sondeSettings.oledSDA = String(comp[20])
-                                self.sondeSettings.oledSCL = (comp.count > 21) ? String(comp[21]) : s.oledSCL
-                                self.sondeSettings.oledRST = (comp.count > 22) ? String(comp[22]) : s.oledRST
-                                self.sondeSettings.ledPin = (comp.count > 23) ? String(comp[23]) : s.ledPin
-                                self.sondeSettings.buzPin = (comp.count > 24) ? String(comp[24]) : s.buzPin
-                                self.sondeSettings.batPin = (comp.count > 25) ? String(comp[25]) : s.batPin
-                                self.sondeSettings.rs41Bandwidth = (comp.count > 26) ? Int(comp[26]) ?? s.rs41Bandwidth : s.rs41Bandwidth
-                                self.sondeSettings.m20Bandwidth = (comp.count > 27) ? Int(comp[27]) ?? s.m20Bandwidth : s.m20Bandwidth
-                                self.sondeSettings.m10Bandwidth = (comp.count > 28) ? Int(comp[28]) ?? s.m10Bandwidth : s.m10Bandwidth
-                                self.sondeSettings.pilotBandwidth = (comp.count > 29) ? Int(comp[29]) ?? s.pilotBandwidth : s.pilotBandwidth
-                                self.sondeSettings.dfmBandwidth = (comp.count > 30) ? Int(comp[30]) ?? s.dfmBandwidth : s.dfmBandwidth
-                                self.sondeSettings.callSign = (comp.count > 31) ? String(comp[31]) : s.callSign
-                                self.sondeSettings.frequencyCorrection = (comp.count > 32) ? String(comp[32]) : s.frequencyCorrection
-                                self.sondeSettings.batMin = (comp.count > 33) ? String(comp[33]) : s.batMin
-                                self.sondeSettings.batMax = (comp.count > 34) ? String(comp[34]) : s.batMax
-                                self.sondeSettings.batType = (comp.count > 35) ? Int(comp[35]) ?? s.batType : s.batType
-                                self.sondeSettings.lcdType = (comp.count > 36) ? Int(comp[36]) ?? s.lcdType : s.lcdType
-                                self.sondeSettings.nameType = (comp.count > 37) ? Int(comp[37]) ?? s.nameType : s.nameType
-                                self.sondeSettings.frequency = telemetry.frequency
-                                self.sondeSettings.probeType = Int(telemetry.probeType.filter("0123456789".contains)) ?? s.probeType
+                                let comp = components
+
+                                // Safely assign with checks for component count and conversions
+                                self.sondeSettings.probeType = Int(comp[1].filter("0123456789".contains)) ?? self.sondeSettings.probeType
+                                self.sondeSettings.frequency = Double(comp[2]) ?? self.sondeSettings.frequency
+                                self.sondeSettings.oledSDA = String(comp[3])
+                                self.sondeSettings.oledSCL = String(comp[4])
+                                self.sondeSettings.oledRST = String(comp[5])
+                                self.sondeSettings.ledPin = String(comp[6])
+                                self.sondeSettings.rs41Bandwidth = Int(comp[7]) ?? self.sondeSettings.rs41Bandwidth
+                                self.sondeSettings.m20Bandwidth = Int(comp[8]) ?? self.sondeSettings.m20Bandwidth
+                                self.sondeSettings.m10Bandwidth = Int(comp[9]) ?? self.sondeSettings.m10Bandwidth
+                                self.sondeSettings.pilotBandwidth = Int(comp[10]) ?? self.sondeSettings.pilotBandwidth
+                                self.sondeSettings.dfmBandwidth = Int(comp[11]) ?? self.sondeSettings.dfmBandwidth
+                                self.sondeSettings.callSign = String(comp[12])
+                                self.sondeSettings.frequencyCorrection = String(comp[13])
+                                self.sondeSettings.batPin = String(comp[14])
+                                self.sondeSettings.batMin = String(comp[15])
+                                self.sondeSettings.batMax = String(comp[16])
+                                self.sondeSettings.batType = Int(comp[17]) ?? self.sondeSettings.batType
+                                self.sondeSettings.lcdType = Int(comp[18]) ?? self.sondeSettings.lcdType
+                                self.sondeSettings.nameType = Int(comp[19]) ?? self.sondeSettings.nameType
+                                self.sondeSettings.buzPin = String(comp[20])
+                                // firmwareVersion at index 21 may be present, but sondeSettings doesn't hold it
+                                // So we don't update sondeSettings for firmwareVersion here
+                                UserDefaults.standard.saveSondeSettings(self.sondeSettings)
+                            } else {
+                                // For message types 1 and 2, keep previous handling:
+                                let s = self.sondeSettings
+                                let comp = components
+
+                                // Check component count for safety
+                                if comp.count >= 21 {
+                                    self.sondeSettings.oledSDA = String(comp[20])
+                                    self.sondeSettings.oledSCL = (comp.count > 21) ? String(comp[21]) : s.oledSCL
+                                    self.sondeSettings.oledRST = (comp.count > 22) ? String(comp[22]) : s.oledRST
+                                    self.sondeSettings.ledPin = (comp.count > 23) ? String(comp[23]) : s.ledPin
+                                    self.sondeSettings.buzPin = (comp.count > 24) ? String(comp[24]) : s.buzPin
+                                    self.sondeSettings.batPin = (comp.count > 25) ? String(comp[25]) : s.batPin
+                                    self.sondeSettings.rs41Bandwidth = (comp.count > 26) ? Int(comp[26]) ?? s.rs41Bandwidth : s.rs41Bandwidth
+                                    self.sondeSettings.m20Bandwidth = (comp.count > 27) ? Int(comp[27]) ?? s.m20Bandwidth : s.m20Bandwidth
+                                    self.sondeSettings.m10Bandwidth = (comp.count > 28) ? Int(comp[28]) ?? s.m10Bandwidth : s.m10Bandwidth
+                                    self.sondeSettings.pilotBandwidth = (comp.count > 29) ? Int(comp[29]) ?? s.pilotBandwidth : s.pilotBandwidth
+                                    self.sondeSettings.dfmBandwidth = (comp.count > 30) ? Int(comp[30]) ?? s.dfmBandwidth : s.dfmBandwidth
+                                    self.sondeSettings.callSign = (comp.count > 31) ? String(comp[31]) : s.callSign
+                                    self.sondeSettings.frequencyCorrection = (comp.count > 32) ? String(comp[32]) : s.frequencyCorrection
+                                    self.sondeSettings.batMin = (comp.count > 33) ? String(comp[33]) : s.batMin
+                                    self.sondeSettings.batMax = (comp.count > 34) ? String(comp[34]) : s.batMax
+                                    self.sondeSettings.batType = (comp.count > 35) ? Int(comp[35]) ?? s.batType : s.batType
+                                    self.sondeSettings.lcdType = (comp.count > 36) ? Int(comp[36]) ?? s.lcdType : s.lcdType
+                                    self.sondeSettings.nameType = (comp.count > 37) ? Int(comp[37]) ?? s.nameType : s.nameType
+                                    self.sondeSettings.frequency = telemetry.frequency
+                                    self.sondeSettings.probeType = Int(telemetry.probeType.filter("0123456789".contains)) ?? s.probeType
+                                }
+                                UserDefaults.standard.saveSondeSettings(self.sondeSettings)
+                                // print("[BLE DEBUG] Received 1/2 message: \(trimmed)") // commented out as instructed
                             }
-                            UserDefaults.standard.saveSondeSettings(self.sondeSettings)
+
                             if messageType == "3" {
                                 // print("[BLE DEBUG] Received 3/ message: \(trimmed)")
+                                
+                                // Debug print for live comparison/debugging of type 3 responses
+                                SettingsView().debugPrintType3Settings(self.sondeSettings)
                             }
                         }
                         await self.telemetryBuffer.update(telemetry: telemetry, signalStrength: telemetry.signalStrength, validSignal: true)
