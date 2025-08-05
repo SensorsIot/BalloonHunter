@@ -12,6 +12,15 @@ extension CLLocationCoordinate2D: @retroactive Equatable, @retroactive Hashable 
     }
 }
 
+extension MKCoordinateRegion: Equatable {
+    public static func == (lhs: MKCoordinateRegion, rhs: MKCoordinateRegion) -> Bool {
+        lhs.center.latitude == rhs.center.latitude &&
+        lhs.center.longitude == rhs.center.longitude &&
+        lhs.span.latitudeDelta == rhs.span.latitudeDelta &&
+        lhs.span.longitudeDelta == rhs.span.longitudeDelta
+    }
+}
+
 private struct BalloonTrackOverlay: View {
     let coordinates: [CLLocationCoordinate2D]
     let region: MKCoordinateRegion
@@ -82,6 +91,7 @@ private struct UserLocationOverlay: View {
 private struct PredictionTrackOverlay: View {
     let predictionTrack: [CLLocationCoordinate2D]
     let region: MKCoordinateRegion
+    let burstCoordinate: CLLocationCoordinate2D?
 
     private func point(for coordinate: CLLocationCoordinate2D, in size: CGSize, region: MKCoordinateRegion) -> CGPoint {
         let span = region.span
@@ -123,18 +133,23 @@ private struct PredictionTrackOverlay: View {
                 }
                 .stroke(Color.blue, style: StrokeStyle(lineWidth: 4, lineCap: .round, lineJoin: .round))
                 
-                if predictionTrack.count >= 2 {
-                    let fallbackIndex = predictionTrack.count / 2
-                    let burstCoord = predictionTrack[min(fallbackIndex, predictionTrack.count - 1)]
-                    if isCoordinate(burstCoord, in: region) {
-                        let point = point(for: burstCoord, in: geo.size, region: region)
-                        Image(systemName: "burst.fill")
-                            .font(.system(size: 30))
-                            .foregroundColor(.yellow)
-                            .shadow(radius: 4)
-                            .position(x: point.x, y: point.y)
-                    }
+                if let burstCoord = burstCoordinate, isCoordinate(burstCoord, in: region) {
+                    let point = point(for: burstCoord, in: geo.size, region: region)
+                    Image(systemName: "burst.fill")
+                        .font(.system(size: 30))
+                        .foregroundColor(.yellow)
+                        .shadow(radius: 4)
+                        .position(x: point.x, y: point.y)
                 }
+            }
+            .onAppear {
+                print("[DEBUG] PredictionTrackOverlay appeared, burstCoord = \(String(describing: burstCoordinate)), region = \(region)")
+            }
+            .onChange(of: burstCoordinate) { newCoord in
+                print("[DEBUG] PredictionTrackOverlay burstCoordinate changed: \(String(describing: newCoord)), region = \(region)")
+            }
+            .onChange(of: region) { newRegion in
+                print("[DEBUG] PredictionTrackOverlay region changed: \(newRegion), burstCoord = \(String(describing: burstCoordinate))")
             }
         }
         .opacity(predictionTrack.count > 1 ? 1 : 0)
@@ -329,6 +344,7 @@ struct MapView: View {
     @State private var recentTelemetryCoordinates: [CLLocationCoordinate2D] = []
     @State private var deviceHeading: CLHeading? = nil
     @State private var lastBalloonUpdateTime: Date? = nil
+    @State private var burstCoordinate: CLLocationCoordinate2D? = nil
 
     // Added timerTick to trigger periodic UI updates
     @State private var timerTick: Int = 0
@@ -398,8 +414,6 @@ struct MapView: View {
             // No explicit invalidation of timerTick timer; no strong reference kept so it won't leak
         }
         .onChange(of: ble.latestTelemetry) { telemetry in
-            print("[MapView DEBUG] ble.latestTelemetry changed: lat=\(telemetry?.latitude ?? 0), lon=\(telemetry?.longitude ?? 0), validSignalReceived=\(ble.validSignalReceived)")
-
             if let telemetry = telemetry {
                 if telemetry.latitude != 0 || telemetry.longitude != 0 {
                     let coord = CLLocationCoordinate2D(latitude: telemetry.latitude, longitude: telemetry.longitude)
@@ -412,7 +426,6 @@ struct MapView: View {
                 }
                 // Only update timestamp if a fresh/valid signal is received from the balloon and lat/lon are non-zero
                 if ble.validSignalReceived, telemetry.latitude != 0, telemetry.longitude != 0 {
-                    print("[MapView DEBUG] Setting lastBalloonUpdateTime to now. validSignalReceived=\(ble.validSignalReceived), lat=\(telemetry.latitude), lon=\(telemetry.longitude)")
                     lastBalloonUpdateTime = Date()
                 }
                 
@@ -502,11 +515,22 @@ struct MapView: View {
     
     private func fetchPredictionAndUpdate() {
         guard let telemetry = ble.latestTelemetry else { return }
-        PredictionLogic.shared.fetchPrediction(telemetry: telemetry) { coordinates, landingTime in
+        PredictionLogic.shared.fetchPrediction(telemetry: telemetry) { coordinates, landingTime, burstCoord in
             DispatchQueue.main.async {
                 self.predictionTrack = coordinates
                 self.landingTime = landingTime
                 self.predictionInfo.landingTime = landingTime
+                self.burstCoordinate = burstCoord
+
+                print("[DEBUG] fetchPredictionAndUpdate: burstCoord = \(String(describing: burstCoord)), region center = \(self.region.center), region span = \(self.region.span)")
+                if let burstCoord = burstCoord {
+                    let latMin = self.region.center.latitude - self.region.span.latitudeDelta/2
+                    let latMax = self.region.center.latitude + self.region.span.latitudeDelta/2
+                    let lonMin = self.region.center.longitude - self.region.span.longitudeDelta/2
+                    let lonMax = self.region.center.longitude + self.region.span.longitudeDelta/2
+                    let inside = burstCoord.latitude >= latMin && burstCoord.latitude <= latMax && burstCoord.longitude >= lonMin && burstCoord.longitude <= lonMax
+                    print("[DEBUG] burstCoord in region? \(inside)")
+                }
             }
         }
     }
@@ -518,7 +542,7 @@ struct MapView: View {
     }
     
     private var predictionTrackOverlayView: some View {
-        PredictionTrackOverlay(predictionTrack: predictionTrack, region: region)
+        PredictionTrackOverlay(predictionTrack: predictionTrack, region: region, burstCoordinate: burstCoordinate)
     }
     
     private var drivingRouteOverlayView: some View {
@@ -671,14 +695,11 @@ struct MapView: View {
         if let lastUpdate = lastBalloonUpdateTime {
             let elapsed = Date().timeIntervalSince(lastUpdate)
             if elapsed < 3 {
-                print("[MapView DEBUG] mainPinColor=green (elapsed=\(elapsed))")
                 return .green
             } else {
-                print("[MapView DEBUG] mainPinColor=red (elapsed=\(elapsed))")
                 return .red
             }
         } else {
-            print("[MapView DEBUG] mainPinColor=red (no last update)")
             return .red
         }
     }
@@ -760,3 +781,4 @@ private class HeadingDelegate: NSObject, CLLocationManagerDelegate {
 #Preview {
     MapView(locationManager: LocationManager())
 }
+

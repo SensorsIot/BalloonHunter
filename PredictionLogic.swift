@@ -45,16 +45,16 @@ class PredictionLogic {
         return components.url
     }
     
-    /// Fetches the prediction track and landing time from Tawhiri API and parses the result.
-    /// Calls the completion handler on the main thread with ([CLLocationCoordinate2D], Date?)
-    func fetchPrediction(telemetry: Telemetry?, completion: @escaping ([CLLocationCoordinate2D], Date?) -> Void) {
+    /// Fetches the prediction track, landing time and burst coordinate from Tawhiri API and parses the result.
+    /// Calls the completion handler on the main thread with ([CLLocationCoordinate2D], Date?, CLLocationCoordinate2D?)
+    func fetchPrediction(telemetry: Telemetry?, completion: @escaping ([CLLocationCoordinate2D], Date?, CLLocationCoordinate2D?) -> Void) {
         guard let url = tawhiriURL(from: telemetry) else {
-            completion([], nil)
+            completion([], nil, nil)
             return
         }
         let task = URLSession.shared.dataTask(with: url) { data, response, error in
             guard let data = data else {
-                DispatchQueue.main.async { completion([], nil) }
+                DispatchQueue.main.async { completion([], nil, nil) }
                 return
             }
             let xmlParser = XMLParser(data: data)
@@ -78,11 +78,12 @@ class PredictionLogic {
                         landingTime = date
                     }
                 }
+                let burstCoord = parserDelegate.burstCoordinate
                 DispatchQueue.main.async {
-                    completion(coordsForMap, landingTime)
+                    completion(coordsForMap, landingTime, burstCoord)
                 }
             } else {
-                DispatchQueue.main.async { completion([], nil) }
+                DispatchQueue.main.async { completion([], nil, nil) }
             }
         }
         task.resume()
@@ -105,10 +106,17 @@ class KMLCoordinatesParser: NSObject, XMLParserDelegate {
     private var isInNameElement = false
     private var tempName = ""
 
+    /// Added to track burst coordinate
+    var burstCoordinate: CLLocationCoordinate2D? = nil
+    private var isInBurstPlacemark = false
+    private var burstCoordinatesFound = false
+
     func parser(_ parser: XMLParser, didStartElement elementName: String, namespaceURI: String?, qualifiedName qName: String?, attributes attributeDict: [String : String] = [:]) {
         if elementName == "Placemark" {
             isInFlightPathPlacemark = false
+            isInBurstPlacemark = false
             tempName = ""
+            burstCoordinatesFound = false
         }
         if elementName == "name" {
             isInNameElement = true
@@ -129,15 +137,20 @@ class KMLCoordinatesParser: NSObject, XMLParserDelegate {
     }
     func parser(_ parser: XMLParser, didEndElement elementName: String, namespaceURI: String?, qualifiedName qName: String?) {
         if elementName == "name" {
-            if tempName.trimmingCharacters(in: .whitespacesAndNewlines) == "Flight path" {
+            let trimmedName = tempName.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmedName == "Flight path" {
                 isInFlightPathPlacemark = true
+            } else if trimmedName.lowercased().contains("burst") {
+                isInBurstPlacemark = true
             }
             isInNameElement = false
         }
         if elementName == "Placemark" {
             isInFlightPathPlacemark = false
+            isInBurstPlacemark = false
         }
         if elementName == coordinatesTag {
+            // fallback: if isInBurstPlacemark is false, check if tempName contains "Burst"
             if isInFlightPathPlacemark && !hasParsedTrack {
                 let trimmed = foundCharacters.trimmingCharacters(in: .whitespacesAndNewlines)
                 let coordinateStrings = trimmed.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }
@@ -153,6 +166,18 @@ class KMLCoordinatesParser: NSObject, XMLParserDelegate {
                 }
                 parsedCoordinates.append(contentsOf: coords)
                 hasParsedTrack = true
+            } else if (isInBurstPlacemark || tempName.contains("Burst")) && !burstCoordinatesFound {
+                let trimmed = foundCharacters.trimmingCharacters(in: .whitespacesAndNewlines)
+                let coordinateStrings = trimmed.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }
+                if let lastCoordString = coordinateStrings.last {
+                    let parts = lastCoordString.components(separatedBy: ",")
+                    if parts.count >= 2,
+                       let lon = Double(parts[0]),
+                       let lat = Double(parts[1]) {
+                        burstCoordinate = CLLocationCoordinate2D(latitude: lat, longitude: lon)
+                        burstCoordinatesFound = true
+                    }
+                }
             }
             foundCharacters = ""
             currentElement = ""
