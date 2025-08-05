@@ -123,7 +123,6 @@ struct MapView: View {
             VStack(spacing: 0) {
                 ZStack {
                     Map(coordinateRegion: $region)
-                        .frame(height: geometry.size.height * 0.8)
                         .edgesIgnoringSafeArea(.top)
                     balloonTrackOverlayView
                     predictionTrackOverlayView
@@ -135,23 +134,7 @@ struct MapView: View {
                     userLocationOverlay
                     // TODO: Later add map rotation logic here based on deviceHeading for compass integration
                 }
-
-                /*
-                Group {
-                    if let telemetry = ble.latestTelemetry {
-                        // SondeDataView(telemetry: telemetry)
-                    } else {
-                        VStack {
-                            Text("No telemetry received yet.")
-                                .foregroundColor(.secondary)
-                                .padding()
-                        }
-                    }
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color(.systemGroupedBackground))
-                */
-                // No telemetry or other content displayed below the map currently.
+                .frame(width: geometry.size.width, height: geometry.size.height)
             }
             .frame(width: geometry.size.width, height: geometry.size.height)
         }
@@ -177,6 +160,9 @@ struct MapView: View {
                     let coord = CLLocationCoordinate2D(latitude: telemetry.latitude, longitude: telemetry.longitude)
                     if balloonTrack.isEmpty || balloonTrack.last != coord {
                         balloonTrack.append(coord)
+                        if balloonTrack.count == 1 {
+                            region = MKCoordinateRegion(center: coord, span: MKCoordinateSpan(latitudeDelta: 0.2, longitudeDelta: 0.2))
+                        }
                     }
                     // Update lastBalloonUpdateTime when valid telemetry position update occurs
                     lastBalloonUpdateTime = Date()
@@ -424,11 +410,21 @@ struct MapView: View {
     private var predictionTrackOverlayView: some View {
         GeometryReader { geo in
             Path { path in
-                let visiblePredictionTrack = predictionTrack.filter { isCoordinate($0, in: region) }
-                if visiblePredictionTrack.count > 1 {
-                    path.move(to: point(for: visiblePredictionTrack[0], in: geo.size, region: region))
-                    for coord in visiblePredictionTrack.dropFirst() {
-                        path.addLine(to: point(for: coord, in: geo.size, region: region))
+                guard predictionTrack.count > 1 else { return }
+
+                // Draw path segments only where both points are inside the region
+                var didStart = false
+                for i in 0..<(predictionTrack.count - 1) {
+                    let startCoord = predictionTrack[i]
+                    let endCoord = predictionTrack[i + 1]
+                    if isCoordinate(startCoord, in: region) && isCoordinate(endCoord, in: region) {
+                        if !didStart {
+                            path.move(to: point(for: startCoord, in: geo.size, region: region))
+                            didStart = true
+                        }
+                        path.addLine(to: point(for: endCoord, in: geo.size, region: region))
+                    } else {
+                        didStart = false
                     }
                 }
             }
