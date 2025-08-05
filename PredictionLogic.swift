@@ -61,8 +61,11 @@ class PredictionLogic {
             let parserDelegate = KMLCoordinatesParser()
             xmlParser.delegate = parserDelegate
             if xmlParser.parse() {
-                let points = parserDelegate.parsedCoordinates
-                let filteredPoints = Array(Set(points)) // Remove duplicates
+                // Altitude is now parsed and stored in CLLocation; for MapView we map to CLLocationCoordinate2D,
+                // but altitude can be used for e.g. burst marker logic in the future.
+                let coordsForMap = parserDelegate.parsedCoordinates.map { CLLocationCoordinate2D(latitude: $0.coordinate.latitude, longitude: $0.coordinate.longitude) }
+
+                // Do not deduplicate points since path order matters
                 var landingTime: Date? = nil
                 if let landingTimeStr = parserDelegate.landingTimeString {
                     var sanitizedLandingTimeStr = landingTimeStr
@@ -76,7 +79,7 @@ class PredictionLogic {
                     }
                 }
                 DispatchQueue.main.async {
-                    completion(filteredPoints, landingTime)
+                    completion(coordsForMap, landingTime)
                 }
             } else {
                 DispatchQueue.main.async { completion([], nil) }
@@ -92,36 +95,65 @@ class KMLCoordinatesParser: NSObject, XMLParserDelegate {
     private let coordinatesTag = "coordinates"
     private var currentElement = ""
     private var foundCharacters = ""
-    var parsedCoordinates: [CLLocationCoordinate2D] = []
+    /// Changed to [CLLocation] to include altitude information.
+    var parsedCoordinates: [CLLocation] = []
     var landingTimeString: String? = nil
     private var accumulatingCharacters: String = ""
+    private var hasParsedTrack = false
+
+    private var isInFlightPathPlacemark = false
+    private var isInNameElement = false
+    private var tempName = ""
 
     func parser(_ parser: XMLParser, didStartElement elementName: String, namespaceURI: String?, qualifiedName qName: String?, attributes attributeDict: [String : String] = [:]) {
+        if elementName == "Placemark" {
+            isInFlightPathPlacemark = false
+            tempName = ""
+        }
+        if elementName == "name" {
+            isInNameElement = true
+        }
         currentElement = elementName
         if elementName == coordinatesTag {
             foundCharacters = ""
         }
     }
     func parser(_ parser: XMLParser, foundCharacters string: String) {
+        if isInNameElement {
+            tempName += string
+        }
         if currentElement == coordinatesTag {
             foundCharacters += string
         }
         accumulatingCharacters += string
     }
     func parser(_ parser: XMLParser, didEndElement elementName: String, namespaceURI: String?, qualifiedName qName: String?) {
-        if elementName == coordinatesTag {
-            let trimmed = foundCharacters.trimmingCharacters(in: .whitespacesAndNewlines)
-            let coordinateStrings = trimmed.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }
-            var coords: [CLLocationCoordinate2D] = []
-            for coordString in coordinateStrings {
-                let parts = coordString.components(separatedBy: ",")
-                if parts.count >= 2,
-                   let lon = Double(parts[0]),
-                   let lat = Double(parts[1]) {
-                    coords.append(CLLocationCoordinate2D(latitude: lat, longitude: lon))
-                }
+        if elementName == "name" {
+            if tempName.trimmingCharacters(in: .whitespacesAndNewlines) == "Flight path" {
+                isInFlightPathPlacemark = true
             }
-            parsedCoordinates.append(contentsOf: coords)
+            isInNameElement = false
+        }
+        if elementName == "Placemark" {
+            isInFlightPathPlacemark = false
+        }
+        if elementName == coordinatesTag {
+            if isInFlightPathPlacemark && !hasParsedTrack {
+                let trimmed = foundCharacters.trimmingCharacters(in: .whitespacesAndNewlines)
+                let coordinateStrings = trimmed.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }
+                var coords: [CLLocation] = []
+                for coordString in coordinateStrings {
+                    let parts = coordString.components(separatedBy: ",")
+                    if parts.count >= 2,
+                       let lon = Double(parts[0]),
+                       let lat = Double(parts[1]) {
+                        let alt = (parts.count >= 3 ? Double(parts[2]) : 0) ?? 0
+                        coords.append(CLLocation(coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon), altitude: alt, horizontalAccuracy: kCLLocationAccuracyBest, verticalAccuracy: kCLLocationAccuracyBest, timestamp: Date()))
+                    }
+                }
+                parsedCoordinates.append(contentsOf: coords)
+                hasParsedTrack = true
+            }
             foundCharacters = ""
             currentElement = ""
         }
@@ -143,3 +175,4 @@ class KMLCoordinatesParser: NSObject, XMLParserDelegate {
         }
     }
 }
+

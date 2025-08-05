@@ -79,6 +79,235 @@ private struct UserLocationOverlay: View {
     }
 }
 
+private struct PredictionTrackOverlay: View {
+    let predictionTrack: [CLLocationCoordinate2D]
+    let region: MKCoordinateRegion
+
+    private func point(for coordinate: CLLocationCoordinate2D, in size: CGSize, region: MKCoordinateRegion) -> CGPoint {
+        let span = region.span
+        let center = region.center
+        let x = (coordinate.longitude - (center.longitude - span.longitudeDelta/2)) / span.longitudeDelta * size.width
+        let y = (1 - (coordinate.latitude - (center.latitude - span.latitudeDelta/2)) / span.latitudeDelta) * size.height
+        return CGPoint(x: x, y: y)
+    }
+    
+    private func isCoordinate(_ coordinate: CLLocationCoordinate2D, in region: MKCoordinateRegion) -> Bool {
+        let latMin = region.center.latitude - region.span.latitudeDelta/2
+        let latMax = region.center.latitude + region.span.latitudeDelta/2
+        let lonMin = region.center.longitude - region.span.longitudeDelta/2
+        let lonMax = region.center.longitude + region.span.longitudeDelta/2
+        return coordinate.latitude >= latMin && coordinate.latitude <= latMax && coordinate.longitude >= lonMin && coordinate.longitude <= lonMax
+    }
+
+    var body: some View {
+        GeometryReader { geo in
+            ZStack {
+                Path { path in
+                    guard predictionTrack.count > 1 else { return }
+
+                    // Draw path segments only where both points are inside the region
+                    var didStart = false
+                    for i in 0..<(predictionTrack.count - 1) {
+                        let startCoord = predictionTrack[i]
+                        let endCoord = predictionTrack[i + 1]
+                        if isCoordinate(startCoord, in: region) && isCoordinate(endCoord, in: region) {
+                            if !didStart {
+                                path.move(to: point(for: startCoord, in: geo.size, region: region))
+                                didStart = true
+                            }
+                            path.addLine(to: point(for: endCoord, in: geo.size, region: region))
+                        } else {
+                            didStart = false
+                        }
+                    }
+                }
+                .stroke(Color.blue, style: StrokeStyle(lineWidth: 4, lineCap: .round, lineJoin: .round))
+                
+                if predictionTrack.count >= 2 {
+                    let fallbackIndex = predictionTrack.count / 2
+                    let burstCoord = predictionTrack[min(fallbackIndex, predictionTrack.count - 1)]
+                    if isCoordinate(burstCoord, in: region) {
+                        let point = point(for: burstCoord, in: geo.size, region: region)
+                        Image(systemName: "burst.fill")
+                            .font(.system(size: 30))
+                            .foregroundColor(.yellow)
+                            .shadow(radius: 4)
+                            .position(x: point.x, y: point.y)
+                    }
+                }
+            }
+        }
+        .opacity(predictionTrack.count > 1 ? 1 : 0)
+        .allowsHitTesting(false)
+    }
+}
+
+private struct DrivingRouteOverlay: View {
+    let drivingRoute: MKPolyline?
+    let region: MKCoordinateRegion
+
+    private func point(for coordinate: CLLocationCoordinate2D, in size: CGSize, region: MKCoordinateRegion) -> CGPoint {
+        let span = region.span
+        let center = region.center
+        let x = (coordinate.longitude - (center.longitude - span.longitudeDelta/2)) / span.longitudeDelta * size.width
+        let y = (1 - (coordinate.latitude - (center.latitude - span.latitudeDelta/2)) / span.latitudeDelta) * size.height
+        return CGPoint(x: x, y: y)
+    }
+
+    var body: some View {
+        GeometryReader { geo in
+            if let polyline = drivingRoute {
+                Path { path in
+                    let points = polyline.points()
+                    guard polyline.pointCount > 1 else { return }
+                    let firstCoord = points[0].coordinate
+                    path.move(to: point(for: firstCoord, in: geo.size, region: region))
+                    for i in 1..<polyline.pointCount {
+                        let coord = points[i].coordinate
+                        path.addLine(to: point(for: coord, in: geo.size, region: region))
+                    }
+                }
+                .stroke(Color.purple, style: StrokeStyle(lineWidth: 6, lineCap: .round, lineJoin: .round))
+                .opacity(0.7)
+            }
+        }
+        .allowsHitTesting(false)
+    }
+}
+
+private struct LastPredictionPinOverlay: View {
+    let lastPredictionPin: MapView.MapPin?
+    let region: MKCoordinateRegion
+
+    private func point(for coordinate: CLLocationCoordinate2D, in size: CGSize, region: MKCoordinateRegion) -> CGPoint {
+        let span = region.span
+        let center = region.center
+        let x = (coordinate.longitude - (center.longitude - span.longitudeDelta/2)) / span.longitudeDelta * size.width
+        let y = (1 - (coordinate.latitude - (center.latitude - span.latitudeDelta/2)) / span.latitudeDelta) * size.height
+        return CGPoint(x: x, y: y)
+    }
+    
+    private func isCoordinate(_ coordinate: CLLocationCoordinate2D, in region: MKCoordinateRegion) -> Bool {
+        let latMin = region.center.latitude - region.span.latitudeDelta/2
+        let latMax = region.center.latitude + region.span.latitudeDelta/2
+        let lonMin = region.center.longitude - region.span.longitudeDelta/2
+        let lonMax = region.center.longitude + region.span.longitudeDelta/2
+        return coordinate.latitude >= latMin && coordinate.latitude <= latMax && coordinate.longitude >= lonMin && coordinate.longitude <= lonMax
+    }
+
+    var body: some View {
+        GeometryReader { geo in
+            if let lastPredictionPin = lastPredictionPin {
+                if isCoordinate(lastPredictionPin.coordinate, in: region) {
+                    let point = point(for: lastPredictionPin.coordinate, in: geo.size, region: region)
+                    Circle()
+                        .fill(Color.blue)
+                        .frame(width: 16, height: 16)
+                        .position(x: point.x, y: point.y)
+                        .shadow(radius: 4)
+                }
+            }
+        }
+        .allowsHitTesting(false)
+    }
+}
+
+private struct AveragePinOverlay: View {
+    let avgCoord: CLLocationCoordinate2D
+    let region: MKCoordinateRegion
+
+    private func point(for coordinate: CLLocationCoordinate2D, in size: CGSize, region: MKCoordinateRegion) -> CGPoint {
+        let span = region.span
+        let center = region.center
+        let x = (coordinate.longitude - (center.longitude - span.longitudeDelta/2)) / span.longitudeDelta * size.width
+        let y = (1 - (coordinate.latitude - (center.latitude - span.latitudeDelta/2)) / span.latitudeDelta) * size.height
+        return CGPoint(x: x, y: y)
+    }
+
+    var body: some View {
+        GeometryReader { geo in
+            let latMin = region.center.latitude - region.span.latitudeDelta/2
+            let latMax = region.center.latitude + region.span.latitudeDelta/2
+            let lonMin = region.center.longitude - region.span.longitudeDelta/2
+            let lonMax = region.center.longitude + region.span.longitudeDelta/2
+            if avgCoord.latitude >= latMin && avgCoord.latitude <= latMax &&
+                avgCoord.longitude >= lonMin && avgCoord.longitude <= lonMax {
+                let point = point(for: avgCoord, in: geo.size, region: region)
+                Image(systemName: "location.circle.fill")
+                    .font(.system(size: 28))
+                    .foregroundColor(.orange)
+                    .shadow(radius: 4)
+                    .position(x: point.x, y: point.y)
+                    .accessibilityLabel("Average position marker in Final Approach Mode")
+            }
+        }
+        .allowsHitTesting(false)
+    }
+}
+
+private struct MainPinOverlay: View {
+    let annotationItems: [MapView.MapPin]
+    let region: MKCoordinateRegion
+    let mainPinColor: Color
+    let isInFinalApproachMode: Bool
+    let averageCoord: CLLocationCoordinate2D?
+    let onTap: () -> Void
+
+    private func point(for coordinate: CLLocationCoordinate2D, in size: CGSize, region: MKCoordinateRegion) -> CGPoint {
+        let span = region.span
+        let center = region.center
+        let x = (coordinate.longitude - (center.longitude - span.longitudeDelta/2)) / span.longitudeDelta * size.width
+        let y = (1 - (coordinate.latitude - (center.latitude - span.latitudeDelta/2)) / span.latitudeDelta) * size.height
+        return CGPoint(x: x, y: y)
+    }
+    
+    private func isCoordinate(_ coordinate: CLLocationCoordinate2D, in region: MKCoordinateRegion) -> Bool {
+        let latMin = region.center.latitude - region.span.latitudeDelta/2
+        let latMax = region.center.latitude + region.span.latitudeDelta/2
+        let lonMin = region.center.longitude - region.span.longitudeDelta/2
+        let lonMax = region.center.longitude + region.span.longitudeDelta/2
+        return coordinate.latitude >= latMin && coordinate.latitude <= latMax && coordinate.longitude >= lonMin && coordinate.longitude <= lonMax
+    }
+
+    private func annotationMainPin(color: Color, onTap: @escaping () -> Void) -> some View {
+        Circle()
+            .fill(color)
+            .frame(width: 32, height: 32)
+            .overlay(Circle().stroke(Color.white, lineWidth: 2))
+            .shadow(radius: 4)
+            .onTapGesture { onTap() }
+    }
+    
+    private func annotationAveragePin() -> some View {
+        Circle()
+            .fill(Color.orange)
+            .frame(width: 28, height: 28)
+            .overlay(Circle().stroke(Color.white, lineWidth: 2))
+            .shadow(radius: 4)
+    }
+
+    var body: some View {
+        GeometryReader { geo in
+            if let mainPin = annotationItems.first(where: { $0.type == .main }) {
+                if isCoordinate(mainPin.coordinate, in: region) {
+                    let point = point(for: mainPin.coordinate, in: geo.size, region: region)
+                    annotationMainPin(color: mainPinColor, onTap: onTap)
+                        .position(x: point.x, y: point.y)
+                }
+            }
+            if isInFinalApproachMode, let avgCoord = averageCoord {
+                if isCoordinate(avgCoord, in: region) {
+                    let point = point(for: avgCoord, in: geo.size, region: region)
+                    annotationAveragePin()
+                        .position(x: point.x, y: point.y)
+                }
+            }
+        }
+        .allowsHitTesting(true)
+    }
+}
+
+
 struct MapView: View {
     @ObservedObject var ble = BLEManager.shared
     @ObservedObject var locationManager: LocationManager
@@ -100,48 +329,53 @@ struct MapView: View {
     @State private var recentTelemetryCoordinates: [CLLocationCoordinate2D] = []
     @State private var deviceHeading: CLHeading? = nil
     @State private var lastBalloonUpdateTime: Date? = nil
-
-    private var burstAltitude: Double { 35000 }
-    private var burstPin: MapPin? {
-        // Find the first predictionTrack point with altitude >= burstAltitude
-        // If not possible, use the midpoint as fallback
-        guard predictionTrack.count > 1 else { return nil }
-        let kmlFirstAltitudeIndex = predictionTrack.firstIndex { coord in
-            // Overload latitude field for altitude for this example, or adapt to your track's data structure if coordinate stores altitude
-            // For standard CLLocationCoordinate2D, altitude is not present. This will need to be adapted if altitudes are available.
-            false // Placeholder; see note below
-        } ?? (predictionTrack.count / 2)
-        // Just pick the midpoint if you cannot get altitude
-        let burstCoord = predictionTrack[min(kmlFirstAltitudeIndex, predictionTrack.count - 1)]
-        return MapPin(coordinate: burstCoord, type: .burst)
+    
+    private enum TransportType: Hashable, CaseIterable {
+        case car
+        case bike
+        
+        var toMKDirectionsTransportType: MKDirectionsTransportType {
+            switch self {
+            case .car:
+                return .automobile
+            case .bike:
+                return .walking // Using walking as bike alternative
+            }
+        }
+        
+        var displayName: String {
+            switch self {
+            case .car:
+                return "Car"
+            case .bike:
+                return "Bike"
+            }
+        }
     }
     
-    private let headingManager = CLLocationManager()
+    @State private var selectedTransportType: TransportType = .car
 
+    private let headingManager = CLLocationManager()
+    
     var body: some View {
         GeometryReader { geometry in
             VStack(spacing: 0) {
+                routeTypePicker
                 ZStack {
-                    Map(coordinateRegion: $region)
-                        .edgesIgnoringSafeArea(.top)
-                    balloonTrackOverlayView
-                    predictionTrackOverlayView
-                    burstPinOverlay
-                    drivingRouteOverlay
-                    lastPredictionPinOverlay
-                    mainPinOverlay
-                    averagePinOverlay
-                    userLocationOverlay
-                    // TODO: Later add map rotation logic here based on deviceHeading for compass integration
+                    mapComponent
+                    overlaysStack
                 }
-                .frame(width: geometry.size.width, height: geometry.size.height)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                // Removed SondeDataView rendering here as per instructions
             }
             .frame(width: geometry.size.width, height: geometry.size.height)
         }
         .onAppear {
+            // Prediction logic refactored to use PredictionLogic.shared.fetchPrediction instead of callTawhiriAPI
             apiTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { _ in
-                callTawhiriAPI()
+                fetchPredictionAndUpdate()
             }
+            fetchPredictionAndUpdate()
             headingManager.delegate = HeadingDelegate { heading in
                 self.deviceHeading = heading
                 // Could trigger UI updates or map rotation here in future
@@ -214,55 +448,90 @@ struct MapView: View {
                 calculateAppleRoute(from: start, to: landing)
             }
         }
+        .onChange(of: selectedTransportType) { _ in
+            if let current = ble.latestTelemetry, (current.latitude != 0 || current.longitude != 0), let landing = predictionTrack.last {
+                let start = CLLocationCoordinate2D(latitude: current.latitude, longitude: current.longitude)
+                calculateAppleRoute(from: start, to: landing)
+            }
+        }
         .onChange(of: locationManager.location) { _ in
             // No specific action needed here, userLocationOverlay reads locationManager.location live
         }
     }
     
-    private var burstPinOverlay: some View {
-        GeometryReader { geo in
-            if let burstPin = burstPin {
-                let latMin = region.center.latitude - region.span.latitudeDelta/2
-                let latMax = region.center.latitude + region.span.latitudeDelta/2
-                let lonMin = region.center.longitude - region.span.longitudeDelta/2
-                let lonMax = region.center.longitude + region.span.longitudeDelta/2
-                if burstPin.coordinate.latitude >= latMin && burstPin.coordinate.latitude <= latMax &&
-                    burstPin.coordinate.longitude >= lonMin && burstPin.coordinate.longitude <= lonMax {
-                    let point = point(for: burstPin.coordinate, in: geo.size, region: region)
-                    Image(systemName: "burst.fill")
-                        .font(.system(size: 30))
-                        .foregroundColor(.yellow)
-                        .shadow(radius: 4)
-                        .position(x: point.x, y: point.y)
-                }
+    private var routeTypePicker: some View {
+        Picker("Route type", selection: $selectedTransportType) {
+            ForEach(TransportType.allCases, id: \.self) { type in
+                Text(type.displayName).tag(type)
             }
         }
-        .allowsHitTesting(false)
+        .pickerStyle(.segmented)
+        .padding(.horizontal)
     }
     
-    private var averagePinOverlay: some View {
-        GeometryReader { geo in
+    private var mapComponent: some View {
+        Map(coordinateRegion: $region)
+    }
+    
+    private var overlaysStack: some View {
+        ZStack {
+            balloonTrackOverlayView
+            predictionTrackOverlayView
+            drivingRouteOverlayView
+            lastPredictionPinOverlayView
+            mainPinOverlayView
+            averagePinOverlayView
+            userLocationOverlayView
+        }
+    }
+    
+    private func fetchPredictionAndUpdate() {
+        guard let telemetry = ble.latestTelemetry else { return }
+        PredictionLogic.shared.fetchPrediction(telemetry: telemetry) { coordinates, landingTime in
+            DispatchQueue.main.async {
+                self.predictionTrack = coordinates
+                self.landingTime = landingTime
+                self.predictionInfo.landingTime = landingTime
+            }
+        }
+    }
+    
+    private var balloonTrackOverlayView: some View {
+        BalloonTrackOverlay(coordinates: balloonTrack, region: region)
+            .opacity(balloonTrack.count > 1 ? 1 : 0)
+            .allowsHitTesting(false)
+    }
+    
+    private var predictionTrackOverlayView: some View {
+        PredictionTrackOverlay(predictionTrack: predictionTrack, region: region)
+    }
+    
+    private var drivingRouteOverlayView: some View {
+        DrivingRouteOverlay(drivingRoute: drivingRoute, region: region)
+    }
+    
+    private var lastPredictionPinOverlayView: some View {
+        LastPredictionPinOverlay(lastPredictionPin: lastPredictionPin, region: region)
+    }
+    
+    private var averagePinOverlayView: some View {
+        Group {
             if isInFinalApproachMode, let avgCoord = averageRecentCoordinates() {
-                let latMin = region.center.latitude - region.span.latitudeDelta/2
-                let latMax = region.center.latitude + region.span.latitudeDelta/2
-                let lonMin = region.center.longitude - region.span.longitudeDelta/2
-                let lonMax = region.center.longitude + region.span.longitudeDelta/2
-                if avgCoord.latitude >= latMin && avgCoord.latitude <= latMax &&
-                    avgCoord.longitude >= lonMin && avgCoord.longitude <= lonMax {
-                    let point = point(for: avgCoord, in: geo.size, region: region)
-                    Image(systemName: "location.circle.fill")
-                        .font(.system(size: 28))
-                        .foregroundColor(.orange)
-                        .shadow(radius: 4)
-                        .position(x: point.x, y: point.y)
-                        .accessibilityLabel("Average position marker in Final Approach Mode")
-                }
+                AveragePinOverlay(avgCoord: avgCoord, region: region)
             }
         }
-        .allowsHitTesting(false)
     }
     
-    private var userLocationOverlay: some View {
+    private var mainPinOverlayView: some View {
+        MainPinOverlay(annotationItems: annotationItems,
+                       region: region,
+                       mainPinColor: mainPinColor,
+                       isInFinalApproachMode: isInFinalApproachMode,
+                       averageCoord: averageRecentCoordinates(),
+                       onTap: { fetchPredictionAndUpdate() })
+    }
+    
+    private var userLocationOverlayView: some View {
         Group {
             if let userCoord = locationManager.location?.coordinate {
                 UserLocationOverlay(coordinate: userCoord, region: region)
@@ -331,7 +600,7 @@ struct MapView: View {
         let request = MKDirections.Request()
         request.source = MKMapItem(placemark: startPlacemark)
         request.destination = MKMapItem(placemark: endPlacemark)
-        request.transportType = .automobile
+        request.transportType = selectedTransportType.toMKDirectionsTransportType
 
         let directions = MKDirections(request: request)
         directions.calculate { response, error in
@@ -348,26 +617,6 @@ struct MapView: View {
                 }
             }
         }
-    }
-
-    private var drivingRouteOverlay: some View {
-        GeometryReader { geo in
-            if let polyline = drivingRoute {
-                Path { path in
-                    let points = polyline.points()
-                    guard polyline.pointCount > 1 else { return }
-                    let firstCoord = points[0].coordinate
-                    path.move(to: point(for: firstCoord, in: geo.size, region: region))
-                    for i in 1..<polyline.pointCount {
-                        let coord = points[i].coordinate
-                        path.addLine(to: point(for: coord, in: geo.size, region: region))
-                    }
-                }
-                .stroke(Color.purple, style: StrokeStyle(lineWidth: 6, lineCap: .round, lineJoin: .round))
-                .opacity(0.7)
-            }
-        }
-        .allowsHitTesting(false)
     }
 
     /// Main Pin View
@@ -401,75 +650,6 @@ struct MapView: View {
         }
     }
 
-    private var balloonTrackOverlayView: some View {
-        BalloonTrackOverlay(coordinates: balloonTrack, region: region)
-            .opacity(balloonTrack.count > 1 ? 1 : 0)
-            .allowsHitTesting(false)
-    }
-
-    private var predictionTrackOverlayView: some View {
-        GeometryReader { geo in
-            Path { path in
-                guard predictionTrack.count > 1 else { return }
-
-                // Draw path segments only where both points are inside the region
-                var didStart = false
-                for i in 0..<(predictionTrack.count - 1) {
-                    let startCoord = predictionTrack[i]
-                    let endCoord = predictionTrack[i + 1]
-                    if isCoordinate(startCoord, in: region) && isCoordinate(endCoord, in: region) {
-                        if !didStart {
-                            path.move(to: point(for: startCoord, in: geo.size, region: region))
-                            didStart = true
-                        }
-                        path.addLine(to: point(for: endCoord, in: geo.size, region: region))
-                    } else {
-                        didStart = false
-                    }
-                }
-            }
-            .stroke(Color.blue, style: StrokeStyle(lineWidth: 4, lineCap: .round, lineJoin: .round))
-        }
-        .opacity(predictionTrack.count > 1 ? 1 : 0)
-        .allowsHitTesting(false)
-    }
-
-    private var lastPredictionPinOverlay: some View {
-        GeometryReader { geo in
-            if let lastPredictionPin = lastPredictionPin {
-                if isCoordinate(lastPredictionPin.coordinate, in: region) {
-                    let point = point(for: lastPredictionPin.coordinate, in: geo.size, region: region)
-                    Circle()
-                        .fill(Color.blue)
-                        .frame(width: 16, height: 16)
-                        .position(x: point.x, y: point.y)
-                        .shadow(radius: 4)
-                }
-            }
-        }
-        .allowsHitTesting(false)
-    }
-
-    private var mainPinOverlay: some View {
-        GeometryReader { geo in
-            if let mainPin = annotationItems.first(where: { $0.type == .main }) {
-                if isCoordinate(mainPin.coordinate, in: region) {
-                    let point = point(for: mainPin.coordinate, in: geo.size, region: region)
-                    annotationMainPin(color: mainPinColor, onTap: { callTawhiriAPI() })
-                        .position(x: point.x, y: point.y)
-                }
-            }
-            if isInFinalApproachMode, let avgCoord = averageRecentCoordinates() {
-                if isCoordinate(avgCoord, in: region) {
-                    let point = point(for: avgCoord, in: geo.size, region: region)
-                    annotationAveragePin()
-                        .position(x: point.x, y: point.y)
-                }
-            }
-        }
-        .allowsHitTesting(true)
-    }
-    
     private var mainPinColor: Color {
         if let lastUpdate = lastBalloonUpdateTime {
             if Date().timeIntervalSince(lastUpdate) < 3 {
@@ -506,10 +686,6 @@ struct MapView: View {
             }
         }
         // Do not add main pin if telemetry is nil or coordinates are zero
-        if let burstPin = burstPin {
-            pins.append(burstPin)
-        }
-        // average pin is handled separately in overlays
         return pins
     }
     
@@ -548,184 +724,6 @@ struct MapView: View {
     }
 }
 
-extension MapView {
-    private func tawhiriURL(from telemetry: Telemetry?, format: String = "kml") -> URL? {
-        guard telemetry != nil else { return nil }
-        let ascentRate = Double(PredictionSettings.shared.ascentRate) ?? 5.0
-        let descentRate = Double(PredictionSettings.shared.descentRate) ?? 5.0
-        let burstAltitude: Double = {
-            if let vSpeed = telemetry?.verticalSpeed, let alt = telemetry?.altitude {
-                if vSpeed < 0 {
-                    return alt + 10
-                } else {
-                    return Double(PredictionSettings.shared.burstAltitude) ?? 35000
-                }
-            } else {
-                return Double(PredictionSettings.shared.burstAltitude) ?? 35000
-            }
-        }()
-        let latitude = telemetry?.latitude ?? 47.47649639804274
-        let longitude = telemetry?.longitude ?? 7.759382678078039
-        let altitude = (telemetry?.altitude != 0 ? telemetry?.altitude : nil) ?? 3000
-        let isoFormatter = ISO8601DateFormatter()
-        let launchDatetime = isoFormatter.string(from: Date())
-        var components = URLComponents(string: "https://api.v2.sondehub.org/tawhiri")!
-        components.queryItems = [
-            URLQueryItem(name: "profile", value: "standard_profile"),
-            URLQueryItem(name: "launch_datetime", value: launchDatetime),
-            URLQueryItem(name: "launch_latitude", value: "\(latitude)"),
-            URLQueryItem(name: "launch_longitude", value: "\(longitude)"),
-            URLQueryItem(name: "launch_altitude", value: String(format: "%.1f", altitude)),
-            URLQueryItem(name: "ascent_rate", value: "\(ascentRate)"),
-            URLQueryItem(name: "burst_altitude", value: "\(burstAltitude)"),
-            URLQueryItem(name: "descent_rate", value: "\(descentRate)"),
-            URLQueryItem(name: "format", value: format)
-        ]
-        return components.url
-    }
-
-    private func callTawhiriAPI() {
-        if let url = tawhiriURL(from: ble.latestTelemetry) {
-            let task = URLSession.shared.dataTask(with: url) { data, response, error in
-                if let error = error {
-                    // Removed API call failed print
-                } else {
-                    // Removed API call succeeded print
-                    guard let data = data else {
-                        return
-                    }
-                    let xmlParser = XMLParser(data: data)
-                    let parserDelegate = KMLCoordinatesParser()
-                    xmlParser.delegate = parserDelegate
-                    if xmlParser.parse() {
-                        let points = parserDelegate.parsedCoordinates
-                        if points.count >= 2 {
-                            // Remove duplicates by latitude and longitude before assignment
-                            var seen = Set<CLLocationCoordinate2D>()
-                            let filteredPoints = points.filter { coord in
-                                if seen.contains(coord) {
-                                    return false
-                                } else {
-                                    seen.insert(coord)
-                                    return true
-                                }
-                            }
-                            DispatchQueue.main.async {
-                                self.predictionTrack = filteredPoints
-                                if !self.predictionTrack.isEmpty {
-                                    // Removed debug prints
-                                }
-                                if let landingTimeStr = parserDelegate.landingTimeString {
-                                    var sanitizedLandingTimeStr = landingTimeStr
-                                    if sanitizedLandingTimeStr.hasSuffix(".") {
-                                        sanitizedLandingTimeStr.removeLast()
-                                    }
-                                    let isoFormatter = ISO8601DateFormatter()
-                                    isoFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-                                    if let date = isoFormatter.date(from: sanitizedLandingTimeStr) {
-                                        self.landingTime = date
-                                        self.predictionInfo.landingTime = date
-                                    } else {
-                                        self.landingTime = nil
-                                        self.predictionInfo.landingTime = nil
-                                    }
-                                } else {
-                                    self.landingTime = nil
-                                    self.predictionInfo.landingTime = nil
-                                }
-                            }
-                        } else {
-                            // Parsed coordinates count less than 2, ignoring prediction track update.
-                        }
-                    } else {
-                        // Failed to parse KML data.
-                        if let raw = String(data: data, encoding: .utf8) {
-                            // Removed raw KML print
-                        } else {
-                            // Raw KML data not UTF-8 decodable.
-                        }
-                    }
-                }
-            }
-            task.resume()
-        } else {
-            // No telemetry data available to generate Tawhiri URL.
-        }
-    }
-}
-
-private nonisolated class KMLCoordinatesParser: NSObject, XMLParserDelegate {
-    private let coordinatesTag = "coordinates"
-    private var currentElement = ""
-    private var foundCharacters = ""
-    var parsedCoordinates: [CLLocationCoordinate2D] = []
-    
-    var landingTimeString: String? = nil
-    
-    private var kmlRawLines: [String] = []
-    private var accumulatingCharacters: String = ""
-
-    func parser(_ parser: XMLParser, didStartElement elementName: String, namespaceURI: String?, qualifiedName qName: String?, attributes attributeDict: [String : String] = [:]) {
-        currentElement = elementName
-        if elementName == coordinatesTag {
-            foundCharacters = ""
-        }
-    }
-    
-    func parser(_ parser: XMLParser, foundCharacters string: String) {
-        if currentElement == coordinatesTag {
-            foundCharacters += string
-        }
-        // Accumulate all characters for the entire document to find landing time later
-        accumulatingCharacters += string
-    }
-    
-    func parser(_ parser: XMLParser, didEndElement elementName: String, namespaceURI: String?, qualifiedName qName: String?) {
-        if elementName == coordinatesTag {
-            let trimmed = foundCharacters.trimmingCharacters(in: .whitespacesAndNewlines)
-            let coordinateStrings = trimmed.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }
-            var coords: [CLLocationCoordinate2D] = []
-            for coordString in coordinateStrings {
-                // Coordinates format: longitude,latitude[,altitude]
-                let parts = coordString.components(separatedBy: ",")
-                if parts.count >= 2,
-                   let lon = Double(parts[0]),
-                   let lat = Double(parts[1]) {
-                    coords.append(CLLocationCoordinate2D(latitude: lat, longitude: lon))
-                } else {
-                    // Invalid coordinate format
-                }
-            }
-            parsedCoordinates.append(contentsOf: coords)
-            foundCharacters = ""
-            currentElement = ""
-        }
-    }
-    
-    func parserDidEndDocument(_ parser: XMLParser) {
-        // Removed debug prints
-        // Search in the accumulated characters for a line containing "Balloon landing at"
-        // and extract the ISO8601 timestamp after the last comma and " at "
-        let lines = accumulatingCharacters.components(separatedBy: .newlines)
-        for line in lines {
-            if line.contains("Balloon landing at") {
-                // Example line: "... Balloon landing at <something>, <timestamp> ..."
-                // We try to extract after the last comma, then after "at "
-                if let lastCommaRange = line.range(of: ",", options: .backwards) {
-                    let afterComma = line[lastCommaRange.upperBound...].trimmingCharacters(in: .whitespaces)
-                    if let atRange = afterComma.range(of: "at ") {
-                        let timestampStart = atRange.upperBound
-                        let timestampStr = afterComma[timestampStart...].trimmingCharacters(in: .whitespacesAndNewlines)
-                        landingTimeString = String(timestampStr)
-                        break
-                    }
-                }
-            }
-        }
-    }
-}
-
-// Delegate for heading updates
 private class HeadingDelegate: NSObject, CLLocationManagerDelegate {
     private let onUpdate: (CLHeading) -> Void
     
