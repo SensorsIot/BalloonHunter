@@ -58,84 +58,69 @@ struct ContentView: View {
             .environmentObject(predictionInfo)
     }
 
+    // Compact Sonde data panel per user instructions
     private func telemetrySection(_ geometry: GeometryProxy) -> some View {
         VStack(spacing: 0) {
             Spacer().frame(height: geometry.size.height * 0.8)
             Group {
                 if let telemetry = ble.latestTelemetry {
-                    GroupBox(label: Text("Sonde Data").font(.headline)) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            HStack { Text("Type:"); Spacer(); Text("\(telemetry.probeType)").bold() }
-                            HStack { Text("Freq:"); Spacer(); Text(String(format: "%.3f MHz", telemetry.frequency)).bold() }
-                            HStack { Text("Lat/Lon:"); Spacer(); Text("\(telemetry.latitude), \(telemetry.longitude)").bold() }
-                            HStack { Text("Alt:"); Spacer(); Text("\(Int(telemetry.altitude)) m").bold() }
-                            HStack { Text("Batt:"); Spacer(); Text("\(telemetry.batteryPercentage)%").bold() }
-                            HStack { Text("Signal:"); Spacer(); Text("\(Int(telemetry.signalStrength)) dB").bold() }
-                            HStack { Text("FW:"); Spacer(); Text(telemetry.firmwareVersion).font(.caption) }
-                            HStack { Text("V-Speed:"); Spacer(); Text("\(telemetry.verticalSpeed, specifier: "%.1f") m/s").bold() }
-
-                            if let landingTime = predictionInfo.landingTime {
-                                let now = Date()
-                                let diffMinutes = Int(now.distance(to: landingTime) / 60)
-                                if landingTime > now {
-                                    HStack {
-                                        Text("Landing in")
-                                        Spacer()
-                                        Text("\(diffMinutes) min").bold()
-                                    }
-                                } else {
-                                    HStack {
-                                        Text("Landed")
-                                        Spacer()
-                                        Text("\(abs(diffMinutes)) min ago").bold()
-                                    }
-                                }
-                            } else {
-                                EmptyView()
-                            }
-                            
-                            // Refactored arrivalTime logic
-                            HStack {
-                                Text("Arrival:")
-                                Spacer()
-                                if let arrivalTime = predictionInfo.arrivalTime {
-                                    let now = Date()
-                                    let arrivalDate: Date? = {
-                                        if let date = arrivalTime as? Date {
-                                            return date
-                                        } else if let timestamp = arrivalTime as? Double {
-                                            return Date(timeIntervalSince1970: timestamp)
-                                        } else {
-                                            return nil
-                                        }
-                                    }()
-                                    if let arrivalDate = arrivalDate {
-                                        let diffSeconds = arrivalDate.timeIntervalSince(now)
-                                        if diffSeconds >= 0 {
-                                            Text("\(Int(diffSeconds/60)) min").bold()
-                                        } else {
-                                            Text("Route unavailable").foregroundColor(.secondary)
-                                        }
-                                    } else {
-                                        Text("Route unavailable").foregroundColor(.secondary)
-                                    }
-                                } else {
-                                    Text("Route unavailable").foregroundColor(.secondary)
-                                }
-                            }
-                            
+                    VStack(alignment: .leading, spacing: 6) {
+                        // Top bar: loudspeaker top right
+                        HStack {
+                            Spacer()
                             Button(action: {
                                 isMuted.toggle()
                                 BLEManager.shared.sendCommand("mute=\(isMuted ? 1 : 0)")
                             }) {
                                 Image(systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                                    .foregroundColor(.primary)
-                                    .frame(maxWidth: .infinity, alignment: .center)
+                                    .resizable()
+                                    .scaledToFit()
+                                    .frame(width: 28, height: 28)
+                                    .contentShape(Rectangle())
                             }
-                            .padding(.top, 8)
+                            .frame(width: 44, height: 44)
+                        }
+                        // Data panel follows as before, but with increased font size
+                        // First line: Sonde type, number, frequency
+                        HStack(spacing: 4) {
+                            Text("\(telemetry.probeType) #\(telemetry.name),")
+                            Text(String(format: "%.3f MHz", telemetry.frequency))
+                        }
+                        
+                        // Second line: Altitude and vertical speed
+                        HStack(spacing: 8) {
+                            Text("Altitude: \(Int(telemetry.altitude)) m,")
+                            Text("V-Speed: \(String(format: "%.1f", telemetry.verticalSpeed)) m/s")
+                        }
+                        
+                        // Third line: Signal and battery
+                        HStack(spacing: 8) {
+                            Text("Signal: \(Int(telemetry.signalStrength)) dB,")
+                            Text("Battery: \(telemetry.batteryPercentage)%")
+                        }
+                        
+                        // Fourth line: Landing and arrival times
+                        let formatter: DateFormatter = {
+                            let f = DateFormatter()
+                            f.timeStyle = .short
+                            return f
+                        }()
+                        
+                        HStack(spacing: 8) {
+                            if let landingTime = predictionInfo.landingTime {
+                                Text("Landing: \(formatter.string(from: landingTime))")
+                            } else {
+                                Text("Landing: --")
+                            }
+                            if let arrival = predictionInfo.arrivalTime {
+                                Text("Arrival: \(formatter.string(from: arrival))")
+                            } else {
+                                Text("Arrival: --")
+                            }
                         }
                     }
-                    .padding()
+                    .font(.system(size: 18, weight: .medium, design: .monospaced))
+                    .padding(10)
                     .background(Color(.systemBackground).opacity(0.9))
                     .cornerRadius(12)
                     .shadow(radius: 6)

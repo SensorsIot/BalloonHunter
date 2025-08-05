@@ -252,8 +252,10 @@ class BLEManager: NSObject, ObservableObject {
     }
 
     override init() {
+        print("[BLEManager] Initializing BLEManager singleton")
         super.init()
         central = CBCentralManager(delegate: self, queue: nil)
+        print("[BLEManager] Created CBCentralManager, waiting for state update...")
 
         Task { [weak self] in
             guard let self = self else { return }
@@ -284,7 +286,7 @@ class BLEManager: NSObject, ObservableObject {
     }
 
     func connect() {
-        print("[BLE DEBUG] Scanning for BLE devices...")
+        print("[BLEManager] connect() called. Scanning for BLE devices...")
         central.scanForPeripherals(withServices: nil, options: nil)
     }
 
@@ -308,7 +310,9 @@ class BLEManager: NSObject, ObservableObject {
 // MARK: - CBCentralManagerDelegate
 extension BLEManager: CBCentralManagerDelegate {
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
+        print("[BLEManager] centralManagerDidUpdateState: \(central.state.rawValue)")
         if central.state == .poweredOn {
+            print("[BLEManager] BLE is powered on. Attempting to scan for peripherals.")
             connect()
         }
     }
@@ -317,6 +321,7 @@ extension BLEManager: CBCentralManagerDelegate {
                         didDiscover peripheral: CBPeripheral,
                         advertisementData: [String : Any],
                         rssi RSSI: NSNumber) {
+        print("[BLEManager] didDiscover peripheral: \(peripheral.name ?? "<no name>")")
         if let name = peripheral.name {
             print("[BLE DEBUG] Found BLE device: \(name)")
             if name.contains("Sondy") || name.contains("MySondy") {
@@ -331,6 +336,7 @@ extension BLEManager: CBCentralManagerDelegate {
 
     func centralManager(_ central: CBCentralManager,
                         didConnect peripheral: CBPeripheral) {
+        print("[BLEManager] didConnect called for peripheral: \(peripheral.name ?? "<no name>")")
         if let name = peripheral.name {
             print("[BLE DEBUG] Connected to \(name)")
         }
@@ -350,6 +356,7 @@ extension BLEManager: CBCentralManagerDelegate {
     func centralManager(_ central: CBCentralManager,
                         didDisconnectPeripheral peripheral: CBPeripheral,
                         error: Error?) {
+        print("[BLEManager] didDisconnectPeripheral called for peripheral: \(peripheral.name ?? "<no name>")")
         if let name = peripheral.name {
             print("[BLE DEBUG] Disconnected from \(name) (will reconnect)")
         }
@@ -655,3 +662,4 @@ extension UserDefaults {
         }
     }
 }
+

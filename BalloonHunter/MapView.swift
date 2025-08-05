@@ -1,6 +1,7 @@
 import SwiftUI
 import MapKit
 import CoreLocation
+import Combine // 1. Import Combine at the top if not already imported.
 
 extension CLLocationCoordinate2D: @retroactive Equatable, @retroactive Hashable {
     public static func == (lhs: CLLocationCoordinate2D, rhs: CLLocationCoordinate2D) -> Bool {
@@ -77,9 +78,42 @@ private struct UserLocationOverlay: View {
             if coordinate.latitude >= latMin && coordinate.latitude <= latMax &&
                 coordinate.longitude >= lonMin && coordinate.longitude <= lonMax {
                 let point = point(for: coordinate, in: geo.size)
-                Image(systemName: "location.fill")
-                    .font(.system(size: 28))
+                Image(systemName: "person.fill")
+                    .font(.system(size: 30)) // Changed to person.fill and increased size for visibility
                     .foregroundColor(.blue)
+                    .shadow(radius: 4)
+                    .position(x: point.x, y: point.y)
+            }
+        }
+        .allowsHitTesting(false)
+    }
+}
+
+// New UserHumanOverlay displays a human marker at the user's coordinate if visible in region
+private struct UserHumanOverlay: View {
+    let coordinate: CLLocationCoordinate2D
+    let region: MKCoordinateRegion
+
+    private func point(for coordinate: CLLocationCoordinate2D, in size: CGSize) -> CGPoint {
+        let span = region.span
+        let center = region.center
+        let x = (coordinate.longitude - (center.longitude - span.longitudeDelta/2)) / span.longitudeDelta * size.width
+        let y = (1 - (coordinate.latitude - (center.latitude - span.latitudeDelta/2)) / span.latitudeDelta) * size.height
+        return CGPoint(x: x, y: y)
+    }
+
+    var body: some View {
+        GeometryReader { geo in
+            let latMin = region.center.latitude - region.span.latitudeDelta/2
+            let latMax = region.center.latitude + region.span.latitudeDelta/2
+            let lonMin = region.center.longitude - region.span.longitudeDelta/2
+            let lonMax = region.center.longitude + region.span.longitudeDelta/2
+            if coordinate.latitude >= latMin && coordinate.latitude <= latMax &&
+                coordinate.longitude >= lonMin && coordinate.longitude <= lonMax {
+                let point = point(for: coordinate, in: geo.size)
+                Image(systemName: "person.fill")
+                    .font(.system(size: 30)) // Increased size as per instructions
+                    .foregroundColor(.blue) // Changed to blue for visibility
                     .shadow(radius: 4)
                     .position(x: point.x, y: point.y)
             }
@@ -142,24 +176,18 @@ private struct PredictionTrackOverlay: View {
                         .position(x: point.x, y: point.y)
                 }
             }
-            .onAppear {
-                print("[DEBUG] PredictionTrackOverlay appeared, burstCoord = \(String(describing: burstCoordinate)), region = \(region)")
-            }
-            .onChange(of: burstCoordinate) { newCoord in
-                print("[DEBUG] PredictionTrackOverlay burstCoordinate changed: \(String(describing: newCoord)), region = \(region)")
-            }
-            .onChange(of: region) { newRegion in
-                print("[DEBUG] PredictionTrackOverlay region changed: \(newRegion), burstCoord = \(String(describing: burstCoordinate))")
-            }
         }
+        // Hidden only if predictionTrack.count <= 1 (no valid prediction to show)
         .opacity(predictionTrack.count > 1 ? 1 : 0)
         .allowsHitTesting(false)
     }
 }
 
-private struct DrivingRouteOverlay: View {
-    let drivingRoute: MKPolyline?
+// Modified RouteOverlay to display a single route polyline with configurable color
+private struct RouteOverlay: View {
+    let routePolyline: MKPolyline?
     let region: MKCoordinateRegion
+    let routeColor: Color
 
     private func point(for coordinate: CLLocationCoordinate2D, in size: CGSize, region: MKCoordinateRegion) -> CGPoint {
         let span = region.span
@@ -171,21 +199,24 @@ private struct DrivingRouteOverlay: View {
 
     var body: some View {
         GeometryReader { geo in
-            if let polyline = drivingRoute {
-                Path { path in
-                    let points = polyline.points()
-                    guard polyline.pointCount > 1 else { return }
-                    let firstCoord = points[0].coordinate
-                    path.move(to: point(for: firstCoord, in: geo.size, region: region))
-                    for i in 1..<polyline.pointCount {
-                        let coord = points[i].coordinate
-                        path.addLine(to: point(for: coord, in: geo.size, region: region))
+            ZStack {
+                if let polyline = routePolyline {
+                    Path { path in
+                        let points = polyline.points()
+                        guard polyline.pointCount > 1 else { return }
+                        let firstCoord = points[0].coordinate
+                        path.move(to: point(for: firstCoord, in: geo.size, region: region))
+                        for i in 1..<polyline.pointCount {
+                            let coord = points[i].coordinate
+                            path.addLine(to: point(for: coord, in: geo.size, region: region))
+                        }
                     }
+                    .stroke(routeColor, style: StrokeStyle(lineWidth: 6, lineCap: .round, lineJoin: .round))
+                    .opacity(0.7)
                 }
-                .stroke(Color.purple, style: StrokeStyle(lineWidth: 6, lineCap: .round, lineJoin: .round))
-                .opacity(0.7)
             }
         }
+        // Hidden only if routePolyline is nil (no route to show)
         .allowsHitTesting(false)
     }
 }
@@ -223,6 +254,7 @@ private struct LastPredictionPinOverlay: View {
                 }
             }
         }
+        // Hidden if lastPredictionPin is nil or coordinate is outside region
         .allowsHitTesting(false)
     }
 }
@@ -256,6 +288,7 @@ private struct AveragePinOverlay: View {
                     .accessibilityLabel("Average position marker in Final Approach Mode")
             }
         }
+        // Hidden if avgCoord is outside region
         .allowsHitTesting(false)
     }
 }
@@ -318,6 +351,7 @@ private struct MainPinOverlay: View {
                 }
             }
         }
+        // Always shown if mainPin or avgCoord is visible in region
         .allowsHitTesting(true)
     }
 }
@@ -337,7 +371,16 @@ struct MapView: View {
     @State private var apiTimer: Timer? = nil
     @State private var landingTime: Date? = nil
 
-    @State private var drivingRoute: MKPolyline? = nil
+    // Reintroduced selectedTransportType for route selection (car or bike)
+    enum TransportType: String, CaseIterable, Identifiable {
+        case car = "Car"
+        case bike = "Bike"
+        var id: String { rawValue }
+    }
+    @State private var selectedTransportType: TransportType = .car
+
+    // Only keep one route polyline for the selected mode
+    @State private var routePolyline: MKPolyline? = nil
     
     // NEW STATE VARIABLES
     @State private var isInFinalApproachMode: Bool = false
@@ -345,41 +388,39 @@ struct MapView: View {
     @State private var deviceHeading: CLHeading? = nil
     @State private var lastBalloonUpdateTime: Date? = nil
     @State private var burstCoordinate: CLLocationCoordinate2D? = nil
+    
+    // 2. Add locationAuthorizationStatus state variable to track location permission status
+    @State private var locationAuthorizationStatus: CLAuthorizationStatus = .notDetermined
 
     // Added timerTick to trigger periodic UI updates
     @State private var timerTick: Int = 0
     
-    private enum TransportType: Hashable, CaseIterable {
-        case car
-        case bike
-        
-        var toMKDirectionsTransportType: MKDirectionsTransportType {
-            switch self {
-            case .car:
-                return .automobile
-            case .bike:
-                return .walking // Using walking as bike alternative
-            }
-        }
-        
-        var displayName: String {
-            switch self {
-            case .car:
-                return "Car"
-            case .bike:
-                return "Bike"
-            }
-        }
-    }
-    
-    @State private var selectedTransportType: TransportType = .car
-
     private let headingManager = CLLocationManager()
     
     var body: some View {
         GeometryReader { geometry in
             VStack(spacing: 0) {
-                routeTypePicker
+                // 5. Show a warning banner if location permission is denied or restricted
+                if isLocationPermissionDenied {
+                    Text("Location permission not granted. Please enable it in Settings.")
+                        .foregroundColor(.white)
+                        .font(.headline)
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                        .background(Color.red)
+                        .multilineTextAlignment(.center)
+                }
+                
+                // Reintroduced Picker UI for route selection
+                Picker("Transport Type", selection: $selectedTransportType) {
+                    ForEach(TransportType.allCases) { type in
+                        Text(type.rawValue).tag(type)
+                    }
+                }
+                .pickerStyle(SegmentedPickerStyle())
+                .padding(.horizontal)
+                .padding(.top, 8)
+
                 ZStack {
                     mapComponent
                     overlaysStack
@@ -390,6 +431,9 @@ struct MapView: View {
             .frame(width: geometry.size.width, height: geometry.size.height)
         }
         .onAppear {
+            // 3. Update locationAuthorizationStatus on appear
+            locationAuthorizationStatus = CLLocationManager().authorizationStatus
+            
             // Prediction logic refactored to use PredictionLogic.shared.fetchPrediction instead of callTawhiriAPI
             apiTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { _ in
                 fetchPredictionAndUpdate()
@@ -406,6 +450,9 @@ struct MapView: View {
             Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { _ in
                 timerTick += 1
             }
+            
+            // Calculate route on appear if possible
+            calculateRouteFromUserToLanding()
         }
         .onDisappear {
             apiTimer?.invalidate()
@@ -470,31 +517,59 @@ struct MapView: View {
                 */
             }
         }
-        .onChange(of: predictionTrack) { track in
-            if let current = ble.latestTelemetry, (current.latitude != 0 || current.longitude != 0), let landing = track.last {
-                let start = CLLocationCoordinate2D(latitude: current.latitude, longitude: current.longitude)
-                calculateAppleRoute(from: start, to: landing)
-            }
+        // 4. Update locationAuthorizationStatus when location changes
+        .onChange(of: locationManager.location) { newLocation in
+            // Update authorization status but DO NOT clear or reset any overlay data or state here to avoid hiding overlays unnecessarily
+            locationAuthorizationStatus = CLLocationManager().authorizationStatus
+            calculateRouteFromUserToLanding()
+        }
+        // On change of predictionTrack, user location, or selectedTransportType, calculate route for selected transport mode
+        .onChange(of: predictionTrack) { _ in
+            calculateRouteFromUserToLanding()
         }
         .onChange(of: selectedTransportType) { _ in
-            if let current = ble.latestTelemetry, (current.latitude != 0 || current.longitude != 0), let landing = predictionTrack.last {
-                let start = CLLocationCoordinate2D(latitude: current.latitude, longitude: current.longitude)
-                calculateAppleRoute(from: start, to: landing)
-            }
+            calculateRouteFromUserToLanding()
         }
-        .onChange(of: locationManager.location) { _ in
-            // No specific action needed here, userLocationOverlay reads locationManager.location live
-        }
+    
     }
     
-    private var routeTypePicker: some View {
-        Picker("Route type", selection: $selectedTransportType) {
-            ForEach(TransportType.allCases, id: \.self) { type in
-                Text(type.displayName).tag(type)
+    // 6. Helper computed property to determine if location permission is denied or restricted
+    private var isLocationPermissionDenied: Bool {
+        locationAuthorizationStatus == .denied || locationAuthorizationStatus == .restricted
+    }
+
+    // Calculates route from user's current location to predicted landing location for selected transport type
+    private func calculateRouteFromUserToLanding() {
+        guard let userLocation = locationManager.location?.coordinate,
+              let landingLocation = predictionTrack.last else {
+            // Clear route if data missing
+            routePolyline = nil
+            return
+        }
+
+        let request = MKDirections.Request()
+        request.source = MKMapItem(placemark: MKPlacemark(coordinate: userLocation))
+        request.destination = MKMapItem(placemark: MKPlacemark(coordinate: landingLocation))
+        switch selectedTransportType {
+        case .car:
+            request.transportType = .automobile
+        case .bike:
+            request.transportType = .cycling
+        }
+
+        let directions = MKDirections(request: request)
+        directions.calculate { response, error in
+            if let route = response?.routes.first {
+                DispatchQueue.main.async {
+                    self.routePolyline = route.polyline
+                    self.predictionInfo.arrivalTime = Date().addingTimeInterval(route.expectedTravelTime)
+                }
+            } else {
+                DispatchQueue.main.async {
+                    self.routePolyline = nil
+                }
             }
         }
-        .pickerStyle(.segmented)
-        .padding(.horizontal)
     }
     
     private var mapComponent: some View {
@@ -503,13 +578,24 @@ struct MapView: View {
     
     private var overlaysStack: some View {
         ZStack {
+            // BalloonTrackOverlay shown only if balloonTrack has more than 1 coordinate
             balloonTrackOverlayView
+            // PredictionTrackOverlay shown only if predictionTrack count > 1
             predictionTrackOverlayView
-            drivingRouteOverlayView
+            // RouteOverlay shown only if routePolyline is not nil, color depends on selected transport type
+            routeOverlayView
+            // LastPredictionPinOverlay shown only if lastPredictionPin exists and coordinate is inside region
             lastPredictionPinOverlayView
+            // MainPinOverlay shown if mainPin is present or averageCoord in final approach mode
             mainPinOverlayView
+            // AveragePinOverlay shown only in final approach mode with valid average coordinate
             averagePinOverlayView
-            userLocationOverlayView
+            // UserHumanOverlay shows blue person at user coordinate if available and visible in region
+            // Only human icon is shown for the user location as per instructions
+            userHumanOverlayView
+            // UserLocationOverlay removed or replaced with human icon, so removed here
+            
+            // DebugUserLocationOverlay removed as per instructions
         }
     }
     
@@ -521,38 +607,36 @@ struct MapView: View {
                 self.landingTime = landingTime
                 self.predictionInfo.landingTime = landingTime
                 self.burstCoordinate = burstCoord
-
-                print("[DEBUG] fetchPredictionAndUpdate: burstCoord = \(String(describing: burstCoord)), region center = \(self.region.center), region span = \(self.region.span)")
-                if let burstCoord = burstCoord {
-                    let latMin = self.region.center.latitude - self.region.span.latitudeDelta/2
-                    let latMax = self.region.center.latitude + self.region.span.latitudeDelta/2
-                    let lonMin = self.region.center.longitude - self.region.span.longitudeDelta/2
-                    let lonMax = self.region.center.longitude + self.region.span.longitudeDelta/2
-                    let inside = burstCoord.latitude >= latMin && burstCoord.latitude <= latMax && burstCoord.longitude >= lonMin && burstCoord.longitude <= lonMax
-                    print("[DEBUG] burstCoord in region? \(inside)")
-                }
             }
         }
     }
     
+    // BalloonTrackOverlay shown only if balloonTrack.count > 1
     private var balloonTrackOverlayView: some View {
         BalloonTrackOverlay(coordinates: balloonTrack, region: region)
             .opacity(balloonTrack.count > 1 ? 1 : 0)
             .allowsHitTesting(false)
     }
     
+    // PredictionTrackOverlay shown only if predictionTrack.count > 1, else hidden
     private var predictionTrackOverlayView: some View {
         PredictionTrackOverlay(predictionTrack: predictionTrack, region: region, burstCoordinate: burstCoordinate)
     }
     
-    private var drivingRouteOverlayView: some View {
-        DrivingRouteOverlay(drivingRoute: drivingRoute, region: region)
+    // RouteOverlay shown only if routePolyline is not nil
+    private var routeOverlayView: some View {
+        RouteOverlay(
+            routePolyline: routePolyline,
+            region: region,
+            routeColor: selectedTransportType == .car ? .purple : .green)
     }
     
+    // LastPredictionPinOverlay shown only if lastPredictionPin is not nil and coordinate visible in region
     private var lastPredictionPinOverlayView: some View {
         LastPredictionPinOverlay(lastPredictionPin: lastPredictionPin, region: region)
     }
     
+    // AveragePinOverlay shown only if in final approach mode and average coordinate available and visible in region
     private var averagePinOverlayView: some View {
         Group {
             if isInFinalApproachMode, let avgCoord = averageRecentCoordinates() {
@@ -561,6 +645,7 @@ struct MapView: View {
         }
     }
     
+    // MainPinOverlay always shown if main pin is present or average coord in final approach mode
     private var mainPinOverlayView: some View {
         MainPinOverlay(annotationItems: annotationItems,
                        region: region,
@@ -570,14 +655,18 @@ struct MapView: View {
                        onTap: { fetchPredictionAndUpdate() })
     }
     
-    private var userLocationOverlayView: some View {
+    // UserHumanOverlay shown only if user coordinate available and visible in region
+    // Only human icon is shown for the user location as per instructions
+    private var userHumanOverlayView: some View {
         Group {
             if let userCoord = locationManager.location?.coordinate {
-                UserLocationOverlay(coordinate: userCoord, region: region)
+                UserHumanOverlay(coordinate: userCoord, region: region)
             }
         }
     }
-
+    
+    // Removed UserLocationOverlay view as only human icon should be shown
+    
     private func adjustRegionForFinalApproach() {
         // Adjust the map region to contain both balloonTrack.last and averageRecentCoordinates with some padding
         guard let balloonCoord = balloonTrack.last, let avgCoord = averageRecentCoordinates() else { return }
@@ -631,50 +720,6 @@ struct MapView: View {
         let haversine = sin(deltaLat/2) * sin(deltaLat/2) + cos(lat1) * cos(lat2) * sin(deltaLon/2) * sin(deltaLon/2)
         let c = 2 * atan2(sqrt(haversine), sqrt(1 - haversine))
         return R * c
-    }
-
-    private func calculateAppleRoute(from start: CLLocationCoordinate2D, to end: CLLocationCoordinate2D) {
-        let startPlacemark = MKPlacemark(coordinate: start)
-        let endPlacemark = MKPlacemark(coordinate: end)
-        let request = MKDirections.Request()
-        request.source = MKMapItem(placemark: startPlacemark)
-        request.destination = MKMapItem(placemark: endPlacemark)
-        request.transportType = selectedTransportType.toMKDirectionsTransportType
-
-        let directions = MKDirections(request: request)
-        directions.calculate { response, error in
-            if let route = response?.routes.first {
-                DispatchQueue.main.async {
-                    self.drivingRoute = route.polyline
-                    self.predictionInfo.arrivalTime = route.expectedTravelTime
-                }
-            } else {
-                // Removed route error print
-                DispatchQueue.main.async {
-                    self.drivingRoute = nil
-                    self.predictionInfo.arrivalTime = nil
-                }
-            }
-        }
-    }
-
-    /// Main Pin View
-    private func annotationMainPin(color: Color, onTap: @escaping () -> Void) -> some View {
-        Circle()
-            .fill(color)
-            .frame(width: 32, height: 32)
-            .overlay(Circle().stroke(Color.white, lineWidth: 2))
-            .shadow(radius: 4)
-            .onTapGesture { onTap() }
-    }
-    
-    /// Average marker View (orange)
-    private func annotationAveragePin() -> some View {
-        Circle()
-            .fill(Color.orange)
-            .frame(width: 28, height: 28)
-            .overlay(Circle().stroke(Color.white, lineWidth: 2))
-            .shadow(radius: 4)
     }
 
     private func timeDifferenceString(from landingTime: Date) -> String {
@@ -763,6 +808,11 @@ struct MapView: View {
             .cornerRadius(12)
             .shadow(radius: 6)
         }
+    }
+    
+    // Helper function to debug print user location - REMOVED print statements as per instructions
+    private func debugPrintUserLocation(_ location: CLLocation?) {
+        // No debug prints here now
     }
 }
 
