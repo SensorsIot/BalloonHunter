@@ -329,6 +329,9 @@ struct MapView: View {
     @State private var recentTelemetryCoordinates: [CLLocationCoordinate2D] = []
     @State private var deviceHeading: CLHeading? = nil
     @State private var lastBalloonUpdateTime: Date? = nil
+
+    // Added timerTick to trigger periodic UI updates
+    @State private var timerTick: Int = 0
     
     private enum TransportType: Hashable, CaseIterable {
         case car
@@ -382,13 +385,21 @@ struct MapView: View {
             }
             headingManager.headingFilter = 5 // degrees
             headingManager.startUpdatingHeading()
+
+            // Added repeating timer for timerTick
+            Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { _ in
+                timerTick += 1
+            }
         }
         .onDisappear {
             apiTimer?.invalidate()
             apiTimer = nil
             headingManager.stopUpdatingHeading()
+            // No explicit invalidation of timerTick timer; no strong reference kept so it won't leak
         }
         .onChange(of: ble.latestTelemetry) { telemetry in
+            print("[MapView DEBUG] ble.latestTelemetry changed: lat=\(telemetry?.latitude ?? 0), lon=\(telemetry?.longitude ?? 0), validSignalReceived=\(ble.validSignalReceived)")
+
             if let telemetry = telemetry {
                 if telemetry.latitude != 0 || telemetry.longitude != 0 {
                     let coord = CLLocationCoordinate2D(latitude: telemetry.latitude, longitude: telemetry.longitude)
@@ -398,9 +409,13 @@ struct MapView: View {
                             region = MKCoordinateRegion(center: coord, span: MKCoordinateSpan(latitudeDelta: 0.2, longitudeDelta: 0.2))
                         }
                     }
-                    // Update lastBalloonUpdateTime when valid telemetry position update occurs
+                }
+                // Only update timestamp if a fresh/valid signal is received from the balloon and lat/lon are non-zero
+                if ble.validSignalReceived, telemetry.latitude != 0, telemetry.longitude != 0 {
+                    print("[MapView DEBUG] Setting lastBalloonUpdateTime to now. validSignalReceived=\(ble.validSignalReceived), lat=\(telemetry.latitude), lon=\(telemetry.longitude)")
                     lastBalloonUpdateTime = Date()
                 }
+                
                 // Append to recentTelemetryCoordinates (max 100)
                 if telemetry.latitude != 0 || telemetry.longitude != 0 {
                     let newCoord = CLLocationCoordinate2D(latitude: telemetry.latitude, longitude: telemetry.longitude)
@@ -651,13 +666,19 @@ struct MapView: View {
     }
 
     private var mainPinColor: Color {
+        let _ = timerTick  // Reference timerTick to trigger UI updates on changes
+        // Color now depends only on valid signal update timestamp
         if let lastUpdate = lastBalloonUpdateTime {
-            if Date().timeIntervalSince(lastUpdate) < 3 {
+            let elapsed = Date().timeIntervalSince(lastUpdate)
+            if elapsed < 3 {
+                print("[MapView DEBUG] mainPinColor=green (elapsed=\(elapsed))")
                 return .green
             } else {
+                print("[MapView DEBUG] mainPinColor=red (elapsed=\(elapsed))")
                 return .red
             }
         } else {
+            print("[MapView DEBUG] mainPinColor=red (no last update)")
             return .red
         }
     }
