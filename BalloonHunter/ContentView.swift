@@ -113,7 +113,11 @@ struct ContentView: View {
                                 Text("Landing: --")
                             }
                             if let arrival = predictionInfo.arrivalTime {
-                                Text("Arrival: \(formatter.string(from: arrival))")
+                                if let distance = predictionInfo.routeDistanceMeters {
+                                    Text("Arrival: \(formatter.string(from: arrival)) (\(String(format: "%.1f", distance / 1000)) km)")
+                                } else {
+                                    Text("Arrival: \(formatter.string(from: arrival))")
+                                }
                             } else {
                                 Text("Arrival: --")
                             }

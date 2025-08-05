@@ -394,6 +394,9 @@ struct MapView: View {
 
     // Added timerTick to trigger periodic UI updates
     @State private var timerTick: Int = 0
+
+    // ADDED routeDistance state to store route distance in meters
+    @State private var routeDistance: CLLocationDistance? = nil
     
     private let headingManager = CLLocationManager()
     
@@ -544,6 +547,8 @@ struct MapView: View {
               let landingLocation = predictionTrack.last else {
             // Clear route if data missing
             routePolyline = nil
+            routeDistance = nil
+            predictionInfo.routeDistanceMeters = nil
             return
         }
 
@@ -562,11 +567,15 @@ struct MapView: View {
             if let route = response?.routes.first {
                 DispatchQueue.main.async {
                     self.routePolyline = route.polyline
+                    self.routeDistance = route.distance // Store route distance in meters
                     self.predictionInfo.arrivalTime = Date().addingTimeInterval(route.expectedTravelTime)
+                    self.predictionInfo.routeDistanceMeters = route.distance
                 }
             } else {
                 DispatchQueue.main.async {
                     self.routePolyline = nil
+                    self.routeDistance = nil
+                    self.predictionInfo.routeDistanceMeters = nil
                 }
             }
         }
@@ -831,4 +840,3 @@ private class HeadingDelegate: NSObject, CLLocationManagerDelegate {
 #Preview {
     MapView(locationManager: LocationManager())
 }
-
