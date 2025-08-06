@@ -22,6 +22,28 @@ class Telemetry: Equatable, CustomStringConvertible {
     let buzzerMute: Int
     let firmwareVersion: String
 
+    // MARK: - Moving Average for Vertical Speed
+
+    /// Stores recent vertical speed samples for moving average calculation
+    private static var verticalSpeedHistory: [Double] = []
+
+    /// Maximum number of samples to keep for moving average
+    private static let maxSamples = 10
+
+    /**
+     Adds a new vertical speed sample and returns the updated moving average.
+     This method maintains a fixed-size buffer of the most recent vertical speeds
+     and calculates their average to smooth out vertical speed values.
+     */
+    static func addVerticalSpeedSample(_ value: Double) -> Double {
+        verticalSpeedHistory.append(value)
+        if verticalSpeedHistory.count > maxSamples {
+            verticalSpeedHistory.removeFirst()
+        }
+        let sum = verticalSpeedHistory.reduce(0, +)
+        return sum / Double(verticalSpeedHistory.count)
+    }
+
     // MARK: - Initializer
     init(
         probeType: String,
@@ -57,6 +79,27 @@ class Telemetry: Equatable, CustomStringConvertible {
         self.batteryVoltage = batteryVoltage
         self.buzzerMute = buzzerMute
         self.firmwareVersion = firmwareVersion
+    }
+
+    convenience init(from structTelemetry: TelemetryStruct) {
+        self.init(
+            probeType: structTelemetry.probeType,
+            frequency: structTelemetry.frequency,
+            name: structTelemetry.name,
+            latitude: structTelemetry.latitude,
+            longitude: structTelemetry.longitude,
+            altitude: structTelemetry.altitude,
+            horizontalSpeed: structTelemetry.horizontalSpeed,
+            verticalSpeed: structTelemetry.verticalSpeed,
+            signalStrength: structTelemetry.signalStrength,
+            batteryPercentage: structTelemetry.batteryPercentage,
+            afc: structTelemetry.afc,
+            burstKiller: structTelemetry.burstKiller,
+            burstKillerTime: structTelemetry.burstKillerTime,
+            batteryVoltage: structTelemetry.batteryVoltage,
+            buzzerMute: structTelemetry.buzzerMute,
+            firmwareVersion: structTelemetry.firmwareVersion
+        )
     }
 
     // MARK: - Parsing
@@ -156,3 +199,4 @@ class Telemetry: Equatable, CustomStringConvertible {
         CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
     }
 }
+

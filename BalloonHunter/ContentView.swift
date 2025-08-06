@@ -68,7 +68,17 @@ struct ContentView: View {
                     VStack(alignment: .leading, spacing: 6) {
                         // Top bar: loudspeaker top right
                         HStack {
-                            Spacer()
+                            // BLE connection indicator left of loudspeaker symbol
+                            if ble.isConnected {
+                                Image(systemName: "dot.radiowaves.left.and.right")
+                                    .foregroundColor(.green)
+                                    .accessibilityLabel("BLE Connected")
+                            } else {
+                                Image(systemName: "dot.radiowaves.left.and.right")
+                                    .foregroundColor(.red)
+                                    .accessibilityLabel("BLE Disconnected")
+                            }
+                            Spacer(minLength: 8)
                             Button(action: {
                                 isMuted.toggle()
                                 BLEManager.shared.sendCommand("mute=\(isMuted ? 1 : 0)")

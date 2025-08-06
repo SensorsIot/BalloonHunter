@@ -78,7 +78,7 @@ struct SondeSettings: Codable, Equatable, CustomStringConvertible {
 }
 
 // MARK: - Telemetry Model
-struct Telemetry: Equatable {
+struct TelemetryStruct: Equatable {
     let probeType: String
     let frequency: Double
     let name: String
@@ -96,7 +96,7 @@ struct Telemetry: Equatable {
     let buzzerMute: Int
     let firmwareVersion: String
 
-    static func parseLongFormat(from components: [Substring]) -> Telemetry? {
+    static func parseLongFormat(from components: [Substring]) -> TelemetryStruct? {
         guard components.count >= 21,
               let frequency = Double(components[2]),
               let latitude = Double(components[4]),
@@ -112,7 +112,7 @@ struct Telemetry: Equatable {
               let buzzerMute = Int(components[18]) else {
             return nil
         }
-        return Telemetry(
+        return TelemetryStruct(
             probeType: String(components[1]),
             frequency: frequency,
             name: String(components[3]),
@@ -132,7 +132,7 @@ struct Telemetry: Equatable {
         )
     }
 
-    static func parseShortFormat(from components: [Substring]) -> Telemetry? {
+    static func parseShortFormat(from components: [Substring]) -> TelemetryStruct? {
         guard components.count >= 8 else { return nil }
         let probeType = String(components[1])
         let frequency = Double(components[2]) ?? 0
@@ -142,7 +142,7 @@ struct Telemetry: Equatable {
         let burstKiller = (components[6] == "1")
         let firmwareVersion = String(components[7])
 
-        return Telemetry(
+        return TelemetryStruct(
             probeType: probeType,
             frequency: frequency,
             name: "-",
@@ -161,15 +161,32 @@ struct Telemetry: Equatable {
             firmwareVersion: firmwareVersion
         )
     }
+    
+    // MARK: - Vertical Speed Smoothing
+
+    private static var verticalSpeedHistory: [Double] = []
+    private static let maxVerticalSpeedSamples = 10
+
+    /// Adds a vertical speed sample and returns the moving average vertical speed.
+    /// This static method centralizes the smoothing logic for vertical speed.
+    static func addVerticalSpeedSample(_ speed: Double) -> Double {
+        verticalSpeedHistory.append(speed)
+        if verticalSpeedHistory.count > maxVerticalSpeedSamples {
+            verticalSpeedHistory.removeFirst()
+        }
+        let sum = verticalSpeedHistory.reduce(0.0, +)
+        return sum / Double(verticalSpeedHistory.count)
+    }
 }
 
 // MARK: - TelemetryBuffer Actor
 actor TelemetryBuffer {
-    private var bufferedTelemetry: Telemetry?
+    private var bufferedTelemetry: TelemetryStruct?
     private var bufferedSignalStrength: Double?
     private var bufferedValidSignal: Bool?
     private var bufferedReceivedText: String = ""
     private var bufferedIsConnected: Bool? = nil
+    private var bufferedMessageType: String? = nil
 
     private var continuation: AsyncStream<Void>.Continuation? = nil
 
@@ -183,10 +200,11 @@ actor TelemetryBuffer {
         continuation?.yield()
     }
 
-    func update(telemetry: Telemetry?, signalStrength: Double?, validSignal: Bool?) {
+    func update(telemetry: TelemetryStruct?, signalStrength: Double?, validSignal: Bool?, messageType: String? = nil) {
         self.bufferedTelemetry = telemetry
         self.bufferedSignalStrength = signalStrength
         self.bufferedValidSignal = validSignal
+        self.bufferedMessageType = messageType
         notify()
     }
     
@@ -200,15 +218,16 @@ actor TelemetryBuffer {
         notify()
     }
 
-    func flush() -> (Telemetry?, Double?, Bool?, String, Bool?) {
+    func flush() -> (TelemetryStruct?, Double?, Bool?, String, Bool?, String?) {
         defer {
             bufferedTelemetry = nil
             bufferedSignalStrength = nil
             bufferedValidSignal = nil
             bufferedReceivedText = ""
             bufferedIsConnected = nil
+            bufferedMessageType = nil
         }
-        return (bufferedTelemetry, bufferedSignalStrength, bufferedValidSignal, bufferedReceivedText, bufferedIsConnected)
+        return (bufferedTelemetry, bufferedSignalStrength, bufferedValidSignal, bufferedReceivedText, bufferedIsConnected, bufferedMessageType)
     }
 }
 
@@ -221,10 +240,14 @@ class BLEManager: NSObject, ObservableObject {
     private var uartCharacteristics: [CBCharacteristic] = []
     
     private var didSendSettingsRequest = false
+    private var didSendStartupQuestion = false
 
+    // Removed verticalSpeedHistory, maxVerticalSpeedSamples, verticalSpeedMovingAverage.
+    // Vertical speed smoothing now centralized in TelemetryStruct.
+    
     @Published var isConnected = false
     @Published var receivedText = ""
-    @Published var latestTelemetry: Telemetry? = nil
+    @Published var latestTelemetry: TelemetryStruct? = nil
     @Published var signalStrength: Double? = nil
     @Published var validSignalReceived: Bool = false
     @Published var sondeSettings: SondeSettings = UserDefaults.standard.loadSondeSettings() ?? SondeSettings()
@@ -257,16 +280,21 @@ class BLEManager: NSObject, ObservableObject {
         central = CBCentralManager(delegate: self, queue: nil)
         print("[BLEManager] Created CBCentralManager, waiting for state update...")
 
+        if !didSendStartupQuestion {
+            sendCommand("?") // Send ? command at startup to request settings and fill fields via type 3 message
+            didSendStartupQuestion = true
+        }
+
         Task { [weak self] in
             guard let self = self else { return }
             for await _ in self.telemetryBuffer.updatesStream() {
-                let (telemetry, signalStrength, validSignal, receivedText, isConnected) = await self.telemetryBuffer.flush()
+                let (telemetry, signalStrength, validSignal, receivedText, isConnected, messageType) = await self.telemetryBuffer.flush()
                 let uiUpdateStart = Date()
                 await MainActor.run {
                     if let t = telemetry {
-                        // print("[BLEManager DEBUG] Before setting latestTelemetry to lat: \(t.latitude), lon: \(t.longitude)")
+                        // verticalSpeed is now always the moving average from TelemetryStruct smoothing logic
+                        print("[DEBUG] Received Telemetry Position (type=\(messageType ?? "?")): lat=\(t.latitude), lon=\(t.longitude)")
                         self.latestTelemetry = t
-                        // print("[BLEManager DEBUG] After setting latestTelemetry to lat: \(t.latitude), lon: \(t.longitude)")
                         // Updating frequency and probeType here is silent (no prints)
                         self.sondeSettings.frequency = t.frequency
                         self.sondeSettings.probeType = Int(t.probeType.filter("0123456789".contains)) ?? self.sondeSettings.probeType
@@ -447,15 +475,11 @@ extension BLEManager: CBPeripheralDelegate {
 
             switch messageType {
             case "0":
-                // Regardless of parse, if first /0 message and didSendSettingsRequest == false, send "?"
-                if !didSendSettingsRequest {
-                    print("[BLE DEBUG] First /0 message received. Sending '?' command to request settings.")
-                    didSendSettingsRequest = true
-                    sendCommand("?")
-                }
-                if let telemetry = Telemetry.parseLongFormat(from: components) {
-                    Task { @MainActor in
-                        self.latestTelemetry = telemetry
+                // Parse and update settings and UserDefaults, but do NOT update telemetry (position) for type 0.
+                if let telemetry = TelemetryStruct.parseLongFormat(from: components) {
+                    // Filter out invalid telemetry with zero latitude AND zero longitude to prevent bogus messages
+                    if telemetry.latitude == 0.0 && telemetry.longitude == 0.0 {
+                        return
                     }
 
                     BLEManager.storedFrequency = telemetry.frequency
@@ -492,56 +516,164 @@ extension BLEManager: CBPeripheralDelegate {
                             }
                             UserDefaults.standard.saveSondeSettings(self.sondeSettings)
                         }
-                        await self.telemetryBuffer.update(telemetry: telemetry, signalStrength: telemetry.signalStrength, validSignal: true)
                     }
                 }
-            case "1", "2", "3":
-                if let telemetry = Telemetry.parseLongFormat(from: components) {
-                    Task { @MainActor in
-                        self.latestTelemetry = telemetry
+            case "1":
+                // ONLY for type "1" messages do we update telemetry (position) and UI.
+                if let telemetry = TelemetryStruct.parseLongFormat(from: components) {
+                    // Filter out invalid telemetry with zero latitude AND zero longitude to prevent bogus messages
+                    if telemetry.latitude == 0.0 && telemetry.longitude == 0.0 {
+                        return
                     }
-
-                    if messageType != "3" {
-                        BLEManager.storedFrequency = telemetry.frequency
-                        BLEManager.storedType = telemetry.probeType
-                    } else {
-                        BLEManager.storedFrequency = telemetry.frequency
-                        BLEManager.storedType = telemetry.probeType
-                    }
+                    BLEManager.storedFrequency = telemetry.frequency
+                    BLEManager.storedType = telemetry.probeType
 
                     Task { [weak self] in
                         guard let self = self else { return }
                         await MainActor.run {
-                            // For message type "3", update settings according to the provided index map
-                            if messageType == "3" {
-                                // Indices taken from the type 3 BLE message format specification:
-                                // 0: type (skip)
-                                // 1: probeType
-                                // 2: frequency
-                                // 3: oledSDA
-                                // 4: oledSCL
-                                // 5: oledRST
-                                // 6: ledPin
-                                // 7: rs41Bandwidth
-                                // 8: m20Bandwidth
-                                // 9: m10Bandwidth
-                                // 10: pilotBandwidth
-                                // 11: dfmBandwidth
-                                // 12: callSign
-                                // 13: frequencyCorrection
-                                // 14: batPin
-                                // 15: batMin
-                                // 16: batMax
-                                // 17: batType
-                                // 18: lcdType
-                                // 19: nameType
-                                // 20: buzPin
-                                // 21: firmwareVersion (if present)
-                                // 22: reserved/end marker
+                            // For message type "1", update sondeSettings with extended fields if present
+                            let s = self.sondeSettings
+                            let comp = components
 
-                                let comp = components
+                            if comp.count >= 21 {
+                                self.sondeSettings.oledSDA = String(comp[20])
+                                self.sondeSettings.oledSCL = (comp.count > 21) ? String(comp[21]) : s.oledSCL
+                                self.sondeSettings.oledRST = (comp.count > 22) ? String(comp[22]) : s.oledRST
+                                self.sondeSettings.ledPin = (comp.count > 23) ? String(comp[23]) : s.ledPin
+                                self.sondeSettings.buzPin = (comp.count > 24) ? String(comp[24]) : s.buzPin
+                                self.sondeSettings.batPin = (comp.count > 25) ? String(comp[25]) : s.batPin
+                                self.sondeSettings.rs41Bandwidth = (comp.count > 26) ? Int(comp[26]) ?? s.rs41Bandwidth : s.rs41Bandwidth
+                                self.sondeSettings.m20Bandwidth = (comp.count > 27) ? Int(comp[27]) ?? s.m20Bandwidth : s.m20Bandwidth
+                                self.sondeSettings.m10Bandwidth = (comp.count > 28) ? Int(comp[28]) ?? s.m10Bandwidth : s.m10Bandwidth
+                                self.sondeSettings.pilotBandwidth = (comp.count > 29) ? Int(comp[29]) ?? s.pilotBandwidth : s.pilotBandwidth
+                                self.sondeSettings.dfmBandwidth = (comp.count > 30) ? Int(comp[30]) ?? s.dfmBandwidth : s.dfmBandwidth
+                                self.sondeSettings.callSign = (comp.count > 31) ? String(comp[31]) : s.callSign
+                                self.sondeSettings.frequencyCorrection = (comp.count > 32) ? String(comp[32]) : s.frequencyCorrection
+                                self.sondeSettings.batMin = (comp.count > 33) ? String(comp[33]) : s.batMin
+                                self.sondeSettings.batMax = (comp.count > 34) ? String(comp[34]) : s.batMax
+                                self.sondeSettings.batType = (comp.count > 35) ? Int(comp[35]) ?? s.batType : s.batType
+                                self.sondeSettings.lcdType = (comp.count > 36) ? Int(comp[36]) ?? s.lcdType : s.lcdType
+                                self.sondeSettings.nameType = (comp.count > 37) ? Int(comp[37]) ?? s.nameType : s.nameType
+                                self.sondeSettings.frequency = telemetry.frequency
+                                self.sondeSettings.probeType = Int(telemetry.probeType.filter("0123456789".contains)) ?? s.probeType
+                            }
+                            UserDefaults.standard.saveSondeSettings(self.sondeSettings)
 
-                                // Safely assign with checks for component count and conversions
+                            // Vertical speed smoothing now centralized in TelemetryStruct:
+                            let smoothedVS = TelemetryStruct.addVerticalSpeedSample(telemetry.verticalSpeed)
+                            // Removed assignment to verticalSpeedMovingAverage property (no longer exists)
+                        }
+
+                        // Create a new telemetry struct replacing verticalSpeed with the moving average
+                        let smoothedVerticalSpeed = TelemetryStruct.addVerticalSpeedSample(telemetry.verticalSpeed)
+                        let smoothedTelemetry = TelemetryStruct(
+                            probeType: telemetry.probeType,
+                            frequency: telemetry.frequency,
+                            name: telemetry.name,
+                            latitude: telemetry.latitude,
+                            longitude: telemetry.longitude,
+                            altitude: telemetry.altitude,
+                            horizontalSpeed: telemetry.horizontalSpeed,
+                            verticalSpeed: smoothedVerticalSpeed, // smoothed vertical speed from TelemetryStruct
+                            signalStrength: telemetry.signalStrength,
+                            batteryPercentage: telemetry.batteryPercentage,
+                            afc: telemetry.afc,
+                            burstKiller: telemetry.burstKiller,
+                            burstKillerTime: telemetry.burstKillerTime,
+                            batteryVoltage: telemetry.batteryVoltage,
+                            buzzerMute: telemetry.buzzerMute,
+                            firmwareVersion: telemetry.firmwareVersion
+                        )
+
+                        await self.telemetryBuffer.update(telemetry: smoothedTelemetry, signalStrength: telemetry.signalStrength, validSignal: true, messageType: messageType)
+                    }
+                }
+            case "2":
+                // Parse and update settings and UserDefaults, but do NOT update telemetry (position) for type 2.
+                if let telemetry = TelemetryStruct.parseLongFormat(from: components) {
+                    // Filter out invalid telemetry with zero latitude AND zero longitude to prevent bogus messages
+                    if telemetry.latitude == 0.0 && telemetry.longitude == 0.0 {
+                        return
+                    }
+
+                    BLEManager.storedFrequency = telemetry.frequency
+                    BLEManager.storedType = telemetry.probeType
+
+                    Task { [weak self] in
+                        guard let self = self else { return }
+                        await MainActor.run {
+                            let s = self.sondeSettings
+                            let comp = components
+
+                            // Check component count for safety
+                            if comp.count >= 21 {
+                                self.sondeSettings.oledSDA = String(comp[20])
+                                self.sondeSettings.oledSCL = (comp.count > 21) ? String(comp[21]) : s.oledSCL
+                                self.sondeSettings.oledRST = (comp.count > 22) ? String(comp[22]) : s.oledRST
+                                self.sondeSettings.ledPin = (comp.count > 23) ? String(comp[23]) : s.ledPin
+                                self.sondeSettings.buzPin = (comp.count > 24) ? String(comp[24]) : s.buzPin
+                                self.sondeSettings.batPin = (comp.count > 25) ? String(comp[25]) : s.batPin
+                                self.sondeSettings.rs41Bandwidth = (comp.count > 26) ? Int(comp[26]) ?? s.rs41Bandwidth : s.rs41Bandwidth
+                                self.sondeSettings.m20Bandwidth = (comp.count > 27) ? Int(comp[27]) ?? s.m20Bandwidth : s.m20Bandwidth
+                                self.sondeSettings.m10Bandwidth = (comp.count > 28) ? Int(comp[28]) ?? s.m10Bandwidth : s.m10Bandwidth
+                                self.sondeSettings.pilotBandwidth = (comp.count > 29) ? Int(comp[29]) ?? s.pilotBandwidth : s.pilotBandwidth
+                                self.sondeSettings.dfmBandwidth = (comp.count > 30) ? Int(comp[30]) ?? s.dfmBandwidth : s.dfmBandwidth
+                                self.sondeSettings.callSign = (comp.count > 31) ? String(comp[31]) : s.callSign
+                                self.sondeSettings.frequencyCorrection = (comp.count > 32) ? String(comp[32]) : s.frequencyCorrection
+                                self.sondeSettings.batMin = (comp.count > 33) ? String(comp[33]) : s.batMin
+                                self.sondeSettings.batMax = (comp.count > 34) ? String(comp[34]) : s.batMax
+                                self.sondeSettings.batType = (comp.count > 35) ? Int(comp[35]) ?? s.batType : s.batType
+                                self.sondeSettings.lcdType = (comp.count > 36) ? Int(comp[36]) ?? s.lcdType : s.lcdType
+                                self.sondeSettings.nameType = (comp.count > 37) ? Int(comp[37]) ?? s.nameType : s.nameType
+                                self.sondeSettings.frequency = telemetry.frequency
+                                self.sondeSettings.probeType = Int(telemetry.probeType.filter("0123456789".contains)) ?? s.probeType
+                            }
+                            UserDefaults.standard.saveSondeSettings(self.sondeSettings)
+                        }
+                    }
+                }
+            case "3":
+                // Parse and update settings for type 3, but do NOT update telemetry (position) for type 3.
+                if let telemetry = TelemetryStruct.parseLongFormat(from: components) {
+                    // Filter out invalid telemetry with zero latitude AND zero longitude to prevent bogus messages
+                    if telemetry.latitude == 0.0 && telemetry.longitude == 0.0 {
+                        return
+                    }
+                    BLEManager.storedFrequency = telemetry.frequency
+                    BLEManager.storedType = telemetry.probeType
+
+                    Task { [weak self] in
+                        guard let self = self else { return }
+                        await MainActor.run {
+                            // Indices taken from the type 3 BLE message format specification:
+                            // 0: type (skip)
+                            // 1: probeType
+                            // 2: frequency
+                            // 3: oledSDA
+                            // 4: oledSCL
+                            // 5: oledRST
+                            // 6: ledPin
+                            // 7: rs41Bandwidth
+                            // 8: m20Bandwidth
+                            // 9: m10Bandwidth
+                            // 10: pilotBandwidth
+                            // 11: dfmBandwidth
+                            // 12: callSign
+                            // 13: frequencyCorrection
+                            // 14: batPin
+                            // 15: batMin
+                            // 16: batMax
+                            // 17: batType
+                            // 18: lcdType
+                            // 19: nameType
+                            // 20: buzPin
+                            // 21: firmwareVersion (if present)
+                            // 22: reserved/end marker
+
+                            let comp = components
+
+                            // Safely assign with checks for component count and conversions
+                            if comp.count > 20 {
                                 self.sondeSettings.probeType = Int(comp[1].filter("0123456789".contains)) ?? self.sondeSettings.probeType
                                 self.sondeSettings.frequency = Double(comp[2]) ?? self.sondeSettings.frequency
                                 self.sondeSettings.oledSDA = String(comp[3])
@@ -565,54 +697,24 @@ extension BLEManager: CBPeripheralDelegate {
                                 // firmwareVersion at index 21 may be present, but sondeSettings doesn't hold it
                                 // So we don't update sondeSettings for firmwareVersion here
                                 UserDefaults.standard.saveSondeSettings(self.sondeSettings)
-                            } else {
-                                // For message types 1 and 2, keep previous handling:
-                                let s = self.sondeSettings
-                                let comp = components
-
-                                // Check component count for safety
-                                if comp.count >= 21 {
-                                    self.sondeSettings.oledSDA = String(comp[20])
-                                    self.sondeSettings.oledSCL = (comp.count > 21) ? String(comp[21]) : s.oledSCL
-                                    self.sondeSettings.oledRST = (comp.count > 22) ? String(comp[22]) : s.oledRST
-                                    self.sondeSettings.ledPin = (comp.count > 23) ? String(comp[23]) : s.ledPin
-                                    self.sondeSettings.buzPin = (comp.count > 24) ? String(comp[24]) : s.buzPin
-                                    self.sondeSettings.batPin = (comp.count > 25) ? String(comp[25]) : s.batPin
-                                    self.sondeSettings.rs41Bandwidth = (comp.count > 26) ? Int(comp[26]) ?? s.rs41Bandwidth : s.rs41Bandwidth
-                                    self.sondeSettings.m20Bandwidth = (comp.count > 27) ? Int(comp[27]) ?? s.m20Bandwidth : s.m20Bandwidth
-                                    self.sondeSettings.m10Bandwidth = (comp.count > 28) ? Int(comp[28]) ?? s.m10Bandwidth : s.m10Bandwidth
-                                    self.sondeSettings.pilotBandwidth = (comp.count > 29) ? Int(comp[29]) ?? s.pilotBandwidth : s.pilotBandwidth
-                                    self.sondeSettings.dfmBandwidth = (comp.count > 30) ? Int(comp[30]) ?? s.dfmBandwidth : s.dfmBandwidth
-                                    self.sondeSettings.callSign = (comp.count > 31) ? String(comp[31]) : s.callSign
-                                    self.sondeSettings.frequencyCorrection = (comp.count > 32) ? String(comp[32]) : s.frequencyCorrection
-                                    self.sondeSettings.batMin = (comp.count > 33) ? String(comp[33]) : s.batMin
-                                    self.sondeSettings.batMax = (comp.count > 34) ? String(comp[34]) : s.batMax
-                                    self.sondeSettings.batType = (comp.count > 35) ? Int(comp[35]) ?? s.batType : s.batType
-                                    self.sondeSettings.lcdType = (comp.count > 36) ? Int(comp[36]) ?? s.lcdType : s.lcdType
-                                    self.sondeSettings.nameType = (comp.count > 37) ? Int(comp[37]) ?? s.nameType : s.nameType
-                                    self.sondeSettings.frequency = telemetry.frequency
-                                    self.sondeSettings.probeType = Int(telemetry.probeType.filter("0123456789".contains)) ?? s.probeType
-                                }
-                                UserDefaults.standard.saveSondeSettings(self.sondeSettings)
-                                // print("[BLE DEBUG] Received 1/2 message: \(trimmed)") // commented out as instructed
                             }
-
-                            if messageType == "3" {
-                                // print("[BLE DEBUG] Received 3/ message: \(trimmed)")
-                                
-                                // Debug print for live comparison/debugging of type 3 responses
-                                SettingsView().debugPrintType3Settings(self.sondeSettings)
-                            }
+                            // Debug print for live comparison/debugging of type 3 responses
+                            SettingsView().debugPrintType3Settings(self.sondeSettings)
                         }
-                        await self.telemetryBuffer.update(telemetry: telemetry, signalStrength: telemetry.signalStrength, validSignal: true)
                     }
                 }
             default:
-                if var telemetry = Telemetry.parseShortFormat(from: components) {
+                // For other messages, parse short format telemetry but do NOT update UI position telemetry.
+                if var telemetry = TelemetryStruct.parseShortFormat(from: components) {
                     Task { [weak self] in
                         guard let self = self else { return }
                         if let prev = self.latestTelemetry {
-                            telemetry = Telemetry(
+                            // Filter out updates where both previous and current latitude and longitude are zero,
+                            // to avoid bogus telemetry updates.
+                            if prev.latitude == 0.0 && prev.longitude == 0.0 && telemetry.latitude == 0.0 && telemetry.longitude == 0.0 {
+                                return
+                            }
+                            telemetry = TelemetryStruct(
                                 probeType: telemetry.probeType,
                                 frequency: telemetry.frequency,
                                 name: telemetry.name,
@@ -631,7 +733,8 @@ extension BLEManager: CBPeripheralDelegate {
                                 firmwareVersion: telemetry.firmwareVersion
                             )
                         }
-                        await self.telemetryBuffer.update(telemetry: telemetry, signalStrength: telemetry.signalStrength, validSignal: false)
+                        // Do NOT assign self.latestTelemetry or print telemetry position here.
+                        await self.telemetryBuffer.update(telemetry: telemetry, signalStrength: telemetry.signalStrength, validSignal: false, messageType: nil)
                     }
                 }
             }

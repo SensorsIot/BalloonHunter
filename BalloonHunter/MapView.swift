@@ -391,12 +391,21 @@ struct MapView: View {
     
     // 2. Add locationAuthorizationStatus state variable to track location permission status
     @State private var locationAuthorizationStatus: CLAuthorizationStatus = .notDetermined
-
+    
     // Added timerTick to trigger periodic UI updates
     @State private var timerTick: Int = 0
-
+    
     // ADDED routeDistance state to store route distance in meters
     @State private var routeDistance: CLLocationDistance? = nil
+    
+    // Added didCenterOnHunter to track if we've centered on user location at startup if no balloon telemetry
+    @State private var didCenterOnHunter: Bool = false
+    
+    // Added firstPositionHandled to avoid duplicate fetch/prediction updates on first balloon position
+    @State private var firstPositionHandled: Bool = false
+
+    // Added didZoomToFitInitialTracks to zoom once after both tracks available
+    @State private var didZoomToFitInitialTracks: Bool = false
     
     private let headingManager = CLLocationManager()
     
@@ -451,6 +460,18 @@ struct MapView: View {
             }
             headingManager.headingFilter = 5 // degrees
             headingManager.startUpdatingHeading()
+            
+            // Center map on hunter location at startup if no balloon telemetry is available
+            if (ble.latestTelemetry == nil || (ble.latestTelemetry?.latitude == 0 && ble.latestTelemetry?.longitude == 0)),
+               let userCoord = locationManager.location?.coordinate,
+               !didCenterOnHunter {
+                // Only set region and didCenterOnHunter if the region actually changes (avoid blocking updates)
+                let newRegion = MKCoordinateRegion(center: userCoord, span: MKCoordinateSpan(latitudeDelta: 0.2, longitudeDelta: 0.2))
+                if region != newRegion {
+                    region = newRegion
+                    didCenterOnHunter = true
+                }
+            }
 
             // Added repeating timer for timerTick
             Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { _ in
@@ -467,13 +488,48 @@ struct MapView: View {
             // No explicit invalidation of timerTick timer; no strong reference kept so it won't leak
         }
         .onChange(of: ble.latestTelemetry) { telemetry in
+            // IMPORTANT FIX:
+            // Do NOT allow didCenterOnHunter or firstPositionHandled to block balloonTrack appending or overlays updating.
+            // Always append to balloonTrack if telemetry coordinates are valid and different from last.
             if let telemetry = telemetry {
                 if telemetry.latitude != 0 || telemetry.longitude != 0 {
                     let coord = CLLocationCoordinate2D(latitude: telemetry.latitude, longitude: telemetry.longitude)
                     if balloonTrack.isEmpty || balloonTrack.last != coord {
                         balloonTrack.append(coord)
+                        
+                        // Zoom to fit all overlays (balloon and prediction tracks) on first telemetry.
                         if balloonTrack.count == 1 {
-                            region = MKCoordinateRegion(center: coord, span: MKCoordinateSpan(latitudeDelta: 0.2, longitudeDelta: 0.2))
+                            var allCoords = balloonTrack
+                            if !predictionTrack.isEmpty {
+                                allCoords.append(contentsOf: predictionTrack)
+                            }
+                            if !allCoords.isEmpty {
+                                let latitudes = allCoords.map { $0.latitude }
+                                let longitudes = allCoords.map { $0.longitude }
+                                if let minLat = latitudes.min(),
+                                   let maxLat = latitudes.max(),
+                                   let minLon = longitudes.min(),
+                                   let maxLon = longitudes.max() {
+                                    let latSpan = max(0.01, (maxLat - minLat) * 1.1)
+                                    let lonSpan = max(0.01, (maxLon - minLon) * 1.1)
+                                    let center = CLLocationCoordinate2D(latitude: (minLat + maxLat) / 2,
+                                                                        longitude: (minLon + maxLon) / 2)
+                                    region = MKCoordinateRegion(center: center,
+                                                                span: MKCoordinateSpan(latitudeDelta: latSpan, longitudeDelta: lonSpan))
+                                } else {
+                                    region = MKCoordinateRegion(center: coord, span: MKCoordinateSpan(latitudeDelta: 0.2, longitudeDelta: 0.2))
+                                }
+                            } else {
+                                region = MKCoordinateRegion(center: coord, span: MKCoordinateSpan(latitudeDelta: 0.2, longitudeDelta: 0.2))
+                            }
+                        }
+                        
+                        // On first received balloon position, trigger prediction and route calculation
+                        // This flag prevents duplicate fetches but does NOT block the balloonTrack updating.
+                        if !firstPositionHandled {
+                            firstPositionHandled = true
+                            fetchPredictionAndUpdate()
+                            calculateRouteFromUserToLanding()
                         }
                     }
                 }
@@ -531,12 +587,59 @@ struct MapView: View {
         }
         // On change of predictionTrack, user location, or selectedTransportType, calculate route for selected transport mode
         .onChange(of: predictionTrack) { _ in
+            // Only zoom once at startup, after first telemetry and prediction/route are available.
+            if !didZoomToFitInitialTracks && balloonTrack.count > 0 && predictionTrack.count > 0 {
+                // Ensure zoom region includes the hunter position as well as all overlays.
+                var allCoords = balloonTrack + predictionTrack
+                if let hunterLoc = locationManager.location?.coordinate {
+                    allCoords.append(hunterLoc)
+                }
+                let latitudes = allCoords.map { $0.latitude }
+                let longitudes = allCoords.map { $0.longitude }
+                if let minLat = latitudes.min(),
+                   let maxLat = latitudes.max(),
+                   let minLon = longitudes.min(),
+                   let maxLon = longitudes.max() {
+                    let latSpan = max(0.01, (maxLat - minLat) * 1.1)
+                    let lonSpan = max(0.01, (maxLon - minLon) * 1.1)
+                    let center = CLLocationCoordinate2D(latitude: (minLat + maxLat) / 2,
+                                                        longitude: (minLon + maxLon) / 2)
+                    withAnimation {
+                        region = MKCoordinateRegion(center: center, span: MKCoordinateSpan(latitudeDelta: latSpan, longitudeDelta: lonSpan))
+                    }
+                    didZoomToFitInitialTracks = true
+                }
+            }
             calculateRouteFromUserToLanding()
         }
         .onChange(of: selectedTransportType) { _ in
             calculateRouteFromUserToLanding()
         }
     
+    }
+    
+    // MARK: - Helper to compute region fitting coordinates with padding
+    private func regionThatFitsCoordinates(_ coordinates: [CLLocationCoordinate2D]) -> MKCoordinateRegion? {
+        guard !coordinates.isEmpty else { return nil }
+        
+        let latitudes = coordinates.map { $0.latitude }
+        let longitudes = coordinates.map { $0.longitude }
+        
+        guard let minLat = latitudes.min(),
+              let maxLat = latitudes.max(),
+              let minLon = longitudes.min(),
+              let maxLon = longitudes.max() else {
+            return nil
+        }
+        
+        // Add 10% padding to span
+        let latSpan = max(0.01, (maxLat - minLat) * 1.1)
+        let lonSpan = max(0.01, (maxLon - minLon) * 1.1)
+        
+        let center = CLLocationCoordinate2D(latitude: (minLat + maxLat) / 2,
+                                            longitude: (minLon + maxLon) / 2)
+        
+        return MKCoordinateRegion(center: center, span: MKCoordinateSpan(latitudeDelta: latSpan, longitudeDelta: lonSpan))
     }
     
     // 6. Helper computed property to determine if location permission is denied or restricted
@@ -616,11 +719,13 @@ struct MapView: View {
             
             // DebugUserLocationOverlay removed as per instructions
         }
+        // NOTE: All overlays are always included to ensure they update correctly,
+        // their individual opacity logic controls visibility.
     }
     
     private func fetchPredictionAndUpdate() {
         guard let telemetry = ble.latestTelemetry else { return }
-        PredictionLogic.shared.fetchPrediction(telemetry: telemetry) { coordinates, landingTime, burstCoord in
+        PredictionLogic.shared.fetchPrediction(telemetry: Telemetry(from: telemetry)) { coordinates, landingTime, burstCoord in
             DispatchQueue.main.async {
                 self.predictionTrack = coordinates
                 self.landingTime = landingTime
@@ -632,14 +737,14 @@ struct MapView: View {
     
     // BalloonTrackOverlay shown only if balloonTrack.count > 1
     private var balloonTrackOverlayView: some View {
-        BalloonTrackOverlay(coordinates: balloonTrack, region: region)
+        return BalloonTrackOverlay(coordinates: balloonTrack, region: region)
             .opacity(balloonTrack.count > 1 ? 1 : 0)
             .allowsHitTesting(false)
     }
     
     // PredictionTrackOverlay shown only if predictionTrack.count > 1, else hidden
     private var predictionTrackOverlayView: some View {
-        PredictionTrackOverlay(predictionTrack: predictionTrack, region: region, burstCoordinate: burstCoordinate)
+        return PredictionTrackOverlay(predictionTrack: predictionTrack, region: region, burstCoordinate: burstCoordinate)
     }
     
     // RouteOverlay shown only if routePolyline is not nil
@@ -850,3 +955,4 @@ private class HeadingDelegate: NSObject, CLLocationManagerDelegate {
 #Preview {
     MapView(locationManager: LocationManager())
 }
+
