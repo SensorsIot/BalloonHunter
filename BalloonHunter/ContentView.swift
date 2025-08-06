@@ -14,6 +14,8 @@ struct ContentView: View {
     @State private var sondeTypeIndex: Int = 0
     @State private var isMuted = false
     
+    @State private var showBLEError = false
+    
     enum ActiveSheet: Identifiable {
         case settings, sondeSettings
         var id: Int {
@@ -60,8 +62,7 @@ struct ContentView: View {
 
     // Compact Sonde data panel per user instructions
     private func telemetrySection(_ geometry: GeometryProxy) -> some View {
-        VStack(spacing: 0) {
-            Spacer().frame(height: geometry.size.height * 0.8)
+        VStack(alignment: .leading, spacing: 0) {
             Group {
                 if let telemetry = ble.latestTelemetry {
                     VStack(alignment: .leading, spacing: 6) {
@@ -83,7 +84,7 @@ struct ContentView: View {
                         // Data panel follows as before, but with increased font size
                         // First line: Sonde type, number, frequency
                         HStack(spacing: 4) {
-                            Text("\(telemetry.probeType) #\(telemetry.name),")
+                            Text("\(telemetry.probeType),")
                             Text(String(format: "%.3f MHz", telemetry.frequency))
                         }
                         
@@ -99,13 +100,13 @@ struct ContentView: View {
                             Text("Battery: \(telemetry.batteryPercentage)%")
                         }
                         
-                        // Fourth line: Landing and arrival times
                         let formatter: DateFormatter = {
                             let f = DateFormatter()
                             f.timeStyle = .short
                             return f
                         }()
                         
+                        // Fourth line: Landing and arrival times on one line
                         HStack(spacing: 8) {
                             if let landingTime = predictionInfo.landingTime {
                                 Text("Landing: \(formatter.string(from: landingTime))")
@@ -113,22 +114,29 @@ struct ContentView: View {
                                 Text("Landing: --")
                             }
                             if let arrival = predictionInfo.arrivalTime {
-                                if let distance = predictionInfo.routeDistanceMeters {
-                                    Text("Arrival: \(formatter.string(from: arrival)) (\(String(format: "%.1f", distance / 1000)) km)")
-                                } else {
-                                    Text("Arrival: \(formatter.string(from: arrival))")
-                                }
+                                Text("Arrival: \(formatter.string(from: arrival))")
                             } else {
                                 Text("Arrival: --")
                             }
                         }
+                        
+                        // Fifth line: distance and remaining flight time, always shown
+                        HStack(spacing: 8) {
+                            Text("Distance: \(predictionInfo.routeDistanceMeters != nil ? String(format: "%.1f", predictionInfo.routeDistanceMeters! / 1000) : "--") km")
+                            if let landing = predictionInfo.landingTime {
+                                let minutes = Int(landing.timeIntervalSince(Date()) / 60)
+                                Text("Remaining: \(minutes > 0 ? "\(minutes) min" : "now")")
+                            } else {
+                                Text("Remaining: --")
+                            }
+                        }
                     }
                     .font(.system(size: 18, weight: .medium, design: .monospaced))
-                    .padding(10)
+                    .padding(8)
+                    .padding(.bottom, 20)
                     .background(Color(.systemBackground).opacity(0.9))
                     .cornerRadius(12)
                     .shadow(radius: 6)
-                    .frame(maxWidth: .infinity, alignment: .top)
                 } else {
                     VStack {
                         Text("No telemetry received yet.")
@@ -138,9 +146,8 @@ struct ContentView: View {
                     .frame(maxWidth: .infinity, alignment: .top)
                 }
             }
-            .background(Color(.systemGroupedBackground))
-            .frame(height: geometry.size.height * 0.2)
         }
+        .background(Color(.systemGroupedBackground))
     }
 
     var body: some View {
@@ -149,6 +156,8 @@ struct ContentView: View {
                 VStack(spacing: 0) {
                     mapSection
                         .frame(height: geometry.size.height * 0.8)
+                    telemetrySection(geometry)
+                        .frame(height: geometry.size.height * 0.2)
                 }
                 .overlay(
                     VStack {
@@ -180,8 +189,6 @@ struct ContentView: View {
                     .padding([.top, .leading], 16)
                     , alignment: .topLeading
                 )
-
-                telemetrySection(geometry)
             }
             
             if showMenu {
@@ -193,6 +200,10 @@ struct ContentView: View {
                         VStack(spacing: 36) {
                             Spacer().frame(height: 48)
                             Button(action: {
+                                if !BLEManager.shared.isConnected {
+                                    showBLEError = true
+                                    return
+                                }
                                 BLEManager.shared.sendCommand("?")
                                 pendingSondeSettingsRequest = true
                                 showMenu = false
@@ -202,19 +213,35 @@ struct ContentView: View {
                                     .foregroundColor(.white)
                                     .padding(8)
                             }
-                            Button(action: { /* Layers action */ }) {
+                            Button(action: {
+                                if !BLEManager.shared.isConnected {
+                                    showBLEError = true
+                                    return
+                                }
+                                /* Layers action */
+                            }) {
                                 Image(systemName: "square.3.layers.3d.down.left")
                                     .font(.system(size: 32))
                                     .foregroundColor(.white)
                                     .padding(8)
                             }
-                            Button(action: { /* Car action */ }) {
+                            Button(action: {
+                                if !BLEManager.shared.isConnected {
+                                    showBLEError = true
+                                    return
+                                }
+                                /* Car action */
+                            }) {
                                 Image(systemName: "car.fill")
                                     .font(.system(size: 32))
                                     .foregroundColor(.white)
                                     .padding(8)
                             }
                             Button(action: {
+                                if !BLEManager.shared.isConnected {
+                                    showBLEError = true
+                                    return
+                                }
                                 print("[WRENCH DEBUG] Wrench button pressed. Sending '?' command.")
                                 BLEManager.shared.sendCommand("?")
                                 let s = BLEManager.shared.sondeSettings
@@ -228,7 +255,13 @@ struct ContentView: View {
                                     .foregroundColor(.white)
                                     .padding(8)
                             }
-                            Button(action: { /* Info/help action */ }) {
+                            Button(action: {
+                                if !BLEManager.shared.isConnected {
+                                    showBLEError = true
+                                    return
+                                }
+                                /* Info/help action */
+                            }) {
                                 Image(systemName: "questionmark.circle.fill")
                                     .font(.system(size: 32))
                                     .foregroundColor(.white)
@@ -278,6 +311,11 @@ struct ContentView: View {
         .navigationTitle("Sonde Tracker")
         .sheet(item: $activeSheet) { sheet in
             sheetView(for: sheet)
+        }
+        .alert("No RadiosondyGo Connected", isPresented: $showBLEError) {
+            Button("OK", role: .cancel) { showBLEError = false }
+        } message: {
+            Text("Please connect to a RadiosondyGo device before accessing Sonde settings or device options.")
         }
     }
 }

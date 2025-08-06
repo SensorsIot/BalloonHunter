@@ -111,7 +111,7 @@ private struct UserHumanOverlay: View {
             if coordinate.latitude >= latMin && coordinate.latitude <= latMax &&
                 coordinate.longitude >= lonMin && coordinate.longitude <= lonMax {
                 let point = point(for: coordinate, in: geo.size)
-                Image(systemName: "person.fill")
+                Image(systemName: "figure.run")
                     .font(.system(size: 30)) // Increased size as per instructions
                     .foregroundColor(.blue) // Changed to blue for visibility
                     .shadow(radius: 4)
@@ -402,34 +402,37 @@ struct MapView: View {
     
     var body: some View {
         GeometryReader { geometry in
+            // Adjust this value if your top banner + picker are taller than 100 points
+            let topControlsHeight: CGFloat = 100
+            
             VStack(spacing: 0) {
-                // 5. Show a warning banner if location permission is denied or restricted
-                if isLocationPermissionDenied {
-                    Text("Location permission not granted. Please enable it in Settings.")
-                        .foregroundColor(.white)
-                        .font(.headline)
-                        .frame(maxWidth: .infinity)
-                        .padding()
-                        .background(Color.red)
-                        .multilineTextAlignment(.center)
-                }
-                
-                // Reintroduced Picker UI for route selection
-                Picker("Transport Type", selection: $selectedTransportType) {
-                    ForEach(TransportType.allCases) { type in
-                        Text(type.rawValue).tag(type)
+                VStack(spacing: 0) {
+                    if isLocationPermissionDenied {
+                        Text("Location permission not granted. Please enable it in Settings.")
+                            .foregroundColor(.white)
+                            .font(.headline)
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background(Color.red)
+                            .multilineTextAlignment(.center)
                     }
+                    Picker("Transport Type", selection: $selectedTransportType) {
+                        ForEach(TransportType.allCases) { type in
+                            Text(type.rawValue).tag(type)
+                        }
+                    }
+                    .pickerStyle(SegmentedPickerStyle())
+                    .padding(.horizontal)
+                    .padding(.top, 8)
                 }
-                .pickerStyle(SegmentedPickerStyle())
-                .padding(.horizontal)
-                .padding(.top, 8)
-
-                ZStack {
-                    mapComponent
-                    overlaysStack
+                GeometryReader { mapGeo in
+                    ZStack {
+                        mapComponent
+                        overlaysStack
+                    }
+                    .frame(width: mapGeo.size.width, height: geometry.size.height - topControlsHeight)
+                    .clipped()
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                // Removed SondeDataView rendering here as per instructions
             }
             .frame(width: geometry.size.width, height: geometry.size.height)
         }
@@ -568,7 +571,14 @@ struct MapView: View {
                 DispatchQueue.main.async {
                     self.routePolyline = route.polyline
                     self.routeDistance = route.distance // Store route distance in meters
-                    self.predictionInfo.arrivalTime = Date().addingTimeInterval(route.expectedTravelTime)
+                    let adjustedTravelTime: TimeInterval
+                    switch selectedTransportType {
+                    case .car:
+                        adjustedTravelTime = route.expectedTravelTime
+                    case .bike:
+                        adjustedTravelTime = route.expectedTravelTime * 0.7
+                    }
+                    self.predictionInfo.arrivalTime = Date().addingTimeInterval(adjustedTravelTime)
                     self.predictionInfo.routeDistanceMeters = route.distance
                 }
             } else {
