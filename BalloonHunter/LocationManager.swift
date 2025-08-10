@@ -1,23 +1,29 @@
+// LocationManager.swift
+// Provides observable user location using CoreLocation
 
 import Foundation
 import CoreLocation
 import Combine
 
-class LocationManager: NSObject, ObservableObject {
-    @Published var location: CLLocation?
-    private let manager = CLLocationManager()
+public class LocationManager: NSObject, ObservableObject {
+    @Published public var location: CLLocation? = nil
+    private let locationManager = CLLocationManager()
 
-    override init() {
+    public override init() {
         super.init()
-        manager.delegate = self
-        manager.requestWhenInUseAuthorization()
-        manager.startUpdatingLocation()
+        locationManager.delegate = self
+        locationManager.desiredAccuracy = kCLLocationAccuracyBest
+        locationManager.requestWhenInUseAuthorization()
+        locationManager.startUpdatingLocation()
     }
 }
 
 extension LocationManager: CLLocationManagerDelegate {
-    func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
-        guard let loc = locations.last else { return }
-        location = loc
+    public func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
+        location = locations.last
+    }
+
+    public func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
+        print("LocationManager error: \(error.localizedDescription)")
     }
 }
