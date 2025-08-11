@@ -2,58 +2,13 @@ import SwiftUI
 import CoreLocation
 import MapKit
 
-private extension MapView {
-    @ViewBuilder
-    var predictedPathOverlay: some View {
-        MapPolylineOverlay(
-            coordinates: predictedPath,
-            color: .blue,
-            lineWidth: 3
-        )
-    }
-    @ViewBuilder
-    var balloonHistoryOverlay: some View {
-        MapPolylineOverlay(
-            coordinates: balloonHistory,
-            color: .red,
-            lineWidth: 2
-        )
-    }
-    @ViewBuilder
-    var hunterRouteOverlay: some View {
-        MapPolylineOverlay(
-            coordinates: hunterRoute,
-            color: .purple,
-            lineWidth: 3,
-            dash: [6, 5]
-        )
-    }
-    @ViewBuilder
-    var burstMarkerOverlay: some View {
-        Group {
-            if showBurstMarker, let burstCoord = burstCoord {
-                MapMarkerOverlay(coordinate: burstCoord, systemImage: "sparkles", color: .yellow)
-            }
-        }
-    }
-    
-    func annotationView(for annotation: MapAnnotationItem) -> some View {
-        annotation.annotationView
-            .onTapGesture {
-                if annotation.kind == .balloon {
-                    onBalloonTapped()
-                }
-            }
-    }
-}
-
 public struct MapView: View {
     @ObservedObject var viewModel: MainViewModel
     @ObservedObject var locationService: CurrentLocationService
     
     @State private var transportMode: RouteMode = .car
     @State private var isBuzzerOn: Bool = false
-    @State private var mapRegion: MKCoordinateRegion = MKCoordinateRegion()
+    @State private var cameraPosition: MapCameraPosition = .automatic
     @State private var showBurstMarker: Bool = true
     @State private var mapAnnotations: [MapAnnotationItem] = []
     
@@ -88,19 +43,34 @@ public struct MapView: View {
                     .zIndex(1)
                     
                     // Map occupies 80% of height
-                    Map(
-                        coordinateRegion: $mapRegion,
-                        interactionModes: .all,
-                        annotationItems: mapAnnotations
-                    ) { annotation in
-                        MapAnnotation(coordinate: annotation.coordinate) {
-                            annotationView(for: annotation)
+                    Map(position: $cameraPosition, interactionModes: .all) {
+                        // Annotations for user and balloon
+                        ForEach(mapAnnotations) { annotation in
+                            Annotation("", coordinate: annotation.coordinate) {
+                                annotationView(for: annotation)
+                            }
+                            .annotationTitles(.hidden)
+                        }
+                        
+                        // Polylines for paths
+                        if !predictedPath.isEmpty {
+                            MapPolyline(coordinates: predictedPath)
+                                .stroke(.blue, lineWidth: 3)
+                        }
+                        if !balloonHistory.isEmpty {
+                            MapPolyline(coordinates: balloonHistory)
+                                .stroke(.red, lineWidth: 2)
+                        }
+                        if !hunterRoute.isEmpty {
+                            MapPolyline(coordinates: hunterRoute)
+                                .stroke(.purple, style: StrokeStyle(lineWidth: 3, dash: [6, 5]))
+                        }
+                        
+                        // Marker for burst location
+                        if showBurstMarker, let burstCoord = burstCoord {
+                            Annotation("", coordinate: burstCoord) { MapMarkerOverlay(coordinate: burstCoord, systemImage: "sparkles", color: .yellow) }.annotationTitles(.hidden)
                         }
                     }
-                    .overlay(predictedPathOverlay)
-                    .overlay(balloonHistoryOverlay)
-                    .overlay(hunterRouteOverlay)
-                    .overlay(burstMarkerOverlay)
                     .frame(height: geo.size.height * 0.8)
                 }
                 // Data panel - bottom 20%
@@ -119,57 +89,73 @@ public struct MapView: View {
                 }
             }
             .edgesIgnoringSafeArea(.all)
-            .onAppear {
-                // Start timers for periodic predictions and route updates using PredictionService
-                PredictionService.shared.startPredictionTimer { info in
-                    predictionInfo.landingTime = info.landingTime
-                    predictionInfo.arrivalTime = info.arrivalTime
-                    predictionInfo.routeDistanceMeters = info.routeDistanceMeters
-                    predictionInfo.burstCoordinate = info.burstCoordinate
-                    predictionInfo.predictedPath = info.predictedPath
-                    predictionInfo.hunterRoute = info.hunterRoute
-                }
-                PredictionService.shared.startRouteTimer { info in
-                    predictionInfo.landingTime = info.landingTime
-                    predictionInfo.arrivalTime = info.arrivalTime
-                    predictionInfo.routeDistanceMeters = info.routeDistanceMeters
-                    predictionInfo.burstCoordinate = info.burstCoordinate
-                    predictionInfo.predictedPath = info.predictedPath
-                    predictionInfo.hunterRoute = info.hunterRoute
-                }
-                // Center map initially and set span
-                mapRegion = MapView.defaultRegion
-                if let balloonLoc = balloonCoordinate {
-                    mapRegion.center = balloonLoc
-                } else if let userLoc = userCoordinate {
-                    mapRegion.center = userLoc
-                }
-                // Update annotations using AnnotationService
-                mapAnnotations = AnnotationService.calculateAnnotations(
-                    userCoordinate: userCoordinate,
-                    balloonCoordinate: balloonCoordinate,
-                    latestTelemetry: panelTelemetry,
-                    viewModel: viewModel
-                ) as [MapAnnotationItem]
+            .onAppear(perform: setupView)
+            .onChange(of: viewModel.latestTelemetry) {
+                updateAnnotations()
             }
-            .onChange(of: viewModel.latestTelemetry) { _ in
-                // Update annotations using AnnotationService
-                mapAnnotations = AnnotationService.calculateAnnotations(
-                    userCoordinate: userCoordinate,
-                    balloonCoordinate: balloonCoordinate,
-                    latestTelemetry: panelTelemetry,
-                    viewModel: viewModel
-                ) as [MapAnnotationItem]
+            .onChange(of: userLocationKey) {
+                updateAnnotations()
             }
-            .onChange(of: userLocationKey) { _ in
-                // Update annotations using AnnotationService
-                mapAnnotations = AnnotationService.calculateAnnotations(
-                    userCoordinate: userCoordinate,
-                    balloonCoordinate: balloonCoordinate,
-                    latestTelemetry: panelTelemetry,
-                    viewModel: viewModel
-                ) as [MapAnnotationItem]
+            .onReceive(locationService.$heading) { newHeading in
+                guard let heading = newHeading else { return }
+                updateCameraHeading(with: heading)
             }
+        }
+    }
+    
+    private func setupView() {
+        // Start timers for periodic predictions and route updates
+        PredictionService.shared.startPredictionTimer { info in
+            predictionInfo.landingTime = info.landingTime
+            predictionInfo.arrivalTime = info.arrivalTime
+            predictionInfo.routeDistanceMeters = info.routeDistanceMeters
+            predictionInfo.burstCoordinate = info.burstCoordinate
+            predictionInfo.predictedPath = info.predictedPath
+            predictionInfo.hunterRoute = info.hunterRoute
+        }
+        PredictionService.shared.startRouteTimer { info in
+            predictionInfo.landingTime = info.landingTime
+            predictionInfo.arrivalTime = info.arrivalTime
+            predictionInfo.routeDistanceMeters = info.routeDistanceMeters
+            predictionInfo.burstCoordinate = info.burstCoordinate
+            predictionInfo.predictedPath = info.predictedPath
+            predictionInfo.hunterRoute = info.hunterRoute
+        }
+        
+        // Center map initially
+        var centerCoordinate = MapView.defaultRegion.center
+        if let balloonLoc = balloonCoordinate {
+            centerCoordinate = balloonLoc
+        } else if let userLoc = userCoordinate {
+            centerCoordinate = userLoc
+        }
+        cameraPosition = .camera(MapCamera(centerCoordinate: centerCoordinate, distance: 5000, heading: 0, pitch: 0))
+        
+        updateAnnotations()
+    }
+    
+    private func annotationView(for annotation: MapAnnotationItem) -> some View {
+        annotation.annotationView
+            .onTapGesture {
+                if annotation.kind == .balloon {
+                    onBalloonTapped()
+                }
+            }
+    }
+    
+    private func updateAnnotations() {
+        mapAnnotations = AnnotationService.calculateAnnotations(
+            userCoordinate: userCoordinate,
+            balloonCoordinate: balloonCoordinate,
+            latestTelemetry: panelTelemetry,
+            viewModel: viewModel
+        )
+    }
+    
+    private func updateCameraHeading(with newHeading: CLHeading) {
+        if var currentCamera = cameraPosition.camera {
+            currentCamera.heading = newHeading.trueHeading
+            cameraPosition = .camera(currentCamera)
         }
     }
     
@@ -214,11 +200,5 @@ public struct MapView: View {
             center: CLLocationCoordinate2D(latitude: 47.5, longitude: 8.0),
             span: MKCoordinateSpan(latitudeDelta: 0.08, longitudeDelta: 0.08)
         )
-    }
-    
-    private static var initialMapRegion: MKCoordinateRegion {
-        let center = CLLocationCoordinate2D(latitude: 0, longitude: 0)
-        let span = MKCoordinateSpan(latitudeDelta: 1, longitudeDelta: 1)
-        return MKCoordinateRegion(center: center, span: span)
     }
 }
