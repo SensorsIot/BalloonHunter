@@ -1,0 +1,650 @@
+﻿Balloon Hunter App
+This document outlines requirements for an iOS application designed to assist a person in hunting and recovering weather balloons. The app's design is centered around a single-screen, map-based interface that provides all critical information in real-time as to pursue a balloon.
+BLE Communication service
+. Device Discovery and Connection
+   • The service starts right after the app opens
+The service actively scans for nearby Bluetooth Low Energy (BLE) devices.
+   • It will only attempt to connect to devices whose name includes “MySondyGo”.
+   • At any time, the service will maintain a connection to at most one “MySondyGo” device. If a connection is lost, it will attempt to reconnect automatically.
+BLE Service and Characteristic UUIDs (for Reference)
+• UART Service UUID:
+53797269-614D-6972-6B6F-44616C6D6F6E
+• UART RX Characteristic UUID (for receiving data/notifications):
+53797269-614D-6972-6B6F-44616C6D6F62
+• UART TX Characteristic UUID (for sending commands/writing):
+53797269-614D-6972-6B6F-44616C6D6F61
+
+
+2. Receiving Data from the Balloon
+   • When a connection to a “MySondy” device is established, the device begins transmitting data packets using the Serial BLE protocol as described in the RadioSondyGo Functional Specification Document (FSD).
+   • The service is responsible for receiving, buffering, and assembling these packets as they arrive.
+3. Packet Parsing and Data Extraction
+   • The service parses each incoming BLE packet according to the structure and definitions specified in the RadioSondyGo FSD.
+   • Packets representing telemetry data (e.g., the current position, altitude, and movement of the balloon) are extracted and made available to other parts of the app in real time.
+   • Packets that contain device settings (identified as “type 3” messages) are extracted and passed directly to the persistence (storage) service for long-term retention.
+4. Publishing and Notification
+   • The service continuously publishes updates about the connection state (e.g., connected, disconnected, attempting to reconnect), allowing the app’s user interface to reflect the current status.
+   • When the first valid telemetry packet is received from a connected device, the service will notify its consumers that RadioSondyGo is “ready for commands” (i.e., it is online and providing balloon data).
+5. Reliability and Error Handling
+   • If the BLE connection is dropped or interrupted for any reason, the service will attempt to automatically reconnect and resume normal operation.
+   • All parsing errors or malformed packets will be safely handled, with the service maintaining stability and attempting to process subsequent packets.
+6. Integration with Other Services
+   • Telemetry data is published in a manner that allows the application’s map and real-time displays to update instantly as new information about the balloon is received.
+   • Device settings data is routed to a dedicated persistence service, which reliably stores this information for retrieval during future connections or app sessions.
+Current location service
+This service publishes the current position as well as the orientation of the iPhone (particularly its heading to turn a map in the correct orientation)
+Persistence Service
+The service handles three types of data:
+1. Device settings: The service saves settings that are read from and sent to the RadioSondyGo device. These settings are stored as a record in Core data.
+2. Forecast settings: It stores specific forecast parameters—burstAltitude (the altitude where the balloon is expected to burst), ascentRate (how fast the balloon rises), and descentRate (how fast the payload falls back to Earth). These settings are kept so users don't have to re-enter them each time they open the app.
+3. Balloon Track Data: This data, which consists of a historical path of coordinate points for a specific sonde, is managed with a lightweight on-device database Core data and is persisted across app closure
+
+
+At the start of the app
+When the app starts, it listens to BLE signals and connects to the first with the text “MySondy” in its advertised name. After it received and parsed the first message, it sets isReadyForCommands=true. And issues a command to read and store settings variables from MySondyGo. It also reads the prediction parameters from the persistence store, because they survive the app start. The long range tracking is started.
+Long Range Tracking Phase
+This phase initiates before departure and continues until the user is en route to the predicted landing zone. The application will present a comprehensive overview through a single-screen interface featuring a dynamic map and a dedicated data panel. The map will occupy 80% of the screen, with the data panel utilizing the remaining 20%.
+Map View & Overlays
+The primary interface for long-range tracking is a map view with the following functionalities and overlays:
+* Map Interaction: Users will be able to zoom and pan the map independently. All overlays (user position, balloon position and track, route) must remain accurately positioned and correctly cropped within the displayed map area during these interactions.
+* User Position: The iPhone's current GPS position will be continuously displayed on the map, represented by a distinct human figure icon. This position marks the user and will update automatically as the user moves.
+* Balloon Live Position:
+   * The balloon's current real-time position is displayed using a balloon marker. This marker's color will indicate data reception status:
+      * Green: New telemetry data received within the last 3 seconds.
+      * Red: No new data received for more than 3 seconds (marker remains at the last known position).
+   * Track Prediction Overlay:
+      * Predicted Path: The complete predicted flight path from the Sondehub API will be displayed as a line.
+      * Burst Position: A distinct marker indicates the predicted burst location while the balloon is ascending. The burst marker will be hidden once the balloon has burst.
+   * This prediction is triggered:
+      * At startup, when the first valid telemetry data is received
+      * Tapping on the balloon marker
+      * Every 60 second,s by an internal timer
+* Balloon Track History: The historical path of the balloon, from the moment the app was started, is drawn on the map as a thin red line.
+* Hunter’s Route Calculation: Recommended routes from the user's current location to the predicted landing point is be is fetched at Apple Maps and presented in the map as an overlay. The route calculation and presentation is triggered as soon as the predicted landing point moves or every minute when the user moves.
+* A transport mode selector (car or bicycle) will be positioned at the top of the screen above the map.
+Data Panel
+This panel displays the following fields (font sizes adjusted to ensure all data fits within the view without a title):
+* Connected: An icon that indicates if a RadioSondyGo is connected via BLE and data packets are received (green), or not (red)
+* Buzzer Control: A button to mute the buzzer will be located in the top-right corner of this panel, sized appropriately for pressing with a finger. The buzzer can be muted or unmutted by the mute command
+* Sonde Identification: Sonde type, number, and frequency. This line is between the “Connected” sign and “Buzzer control” button
+* Altitude & Speed: Current altitude and vertical speed. Green: Ascending, Red: Descending
+* Signal & Battery: Signal strength of the balloon and its battery status in percentage
+* Time Estimates: Predicted balloon landing time and user arrival time (from Apple Maps service), both displayed in wall clock time for the current time zone. These times are updated with each new prediction or route calculation.
+* Remaining balloon flight time: Time from now to the predicted landing time
+* Route Distance: The distance of the calculated route in kilometers.
+Data Grouping: Data is grouped, with multiple parameters presented on a single line to conserve space.
+Balloon track prediction and route calculation service
+Balloon track prediction
+The Sondehub balloon path prediction API is used to predict the balloon path, the burst point (Balloon Burst), and the landing point. This data is published.
+Key parameters for the prediction API call:
+* Burst Altitude: During ascent, the default is 35000m (can be changed in settings). If a new telemetry message from the MySondyGo device indicates that the verticalSpeed has a negative value, the “balloonDescends” flag is set. When this flag is set, the burstAltitude parameter to be sent to the API is then automatically set to the current altitude plus 10 meters before the next prediction API call is made. The persistent burst altitude in the settings has not changed. For the descent (balloonDescends=true), the burst sign is not shown on the map.
+* Ascending Speed: Can be changed, default 5m/s.
+* Descending Speed: Can be changed, default 5m/s.
+Route calculation
+* The route from the current location (the location of the iPhone) to the predicted landing point is calculated by calling Apple Maps. Two modes of transport are selectable (car or bicycle). The predicted arrival time at the landing point is published.
+Final Approach Phase
+This phase is used when the balloon has landed and the hunter is in close proximity to the balloon. A new behavior of the screen is needed for this phase.
+Triggers for this phase:
+   * The balloon's vertical speed is less than 1m/s and
+   * The hunter (iPhone) is within 1km of the balloon's last known position.
+When the two conditions for this phase are met, the app's UI will visually indicate that 'Final Approach' mode has been activated.
+Visual Indicator for Final Approach:
+When the two conditions for this phase are met, the app's UI will visually indicate that 'Final Approach' mode has been activated. A distinct, colored border will appear around the map view to signal this new state. For example, a standard gray border may change to a bright green. This provides a clear, non-intrusive cue that the map's behavior and orientation have changed.
+Map View & Overlays
+In Final Approach mode, the map's behavior changes to prioritize short-range navigation. The app will:
+   * Display a Stable position for the balloon (balloonLandedPosition): An additional marker will appear on the map, representing the averaged position of the telemetry positions after the balloon is landed (small changes of position and altitude). Only the newest maximal 100 balloon coordinates are used (simple average). This provides a more stable and accurate target for the hunter.
+   * Orient the Map for Directional Cues: The map's orientation will automatically adjust based on the iPhone's compass. The iPhone’s current location will be fixed at the bottom-center of the screen. The map will then rotate so that its direction is synchronized with the direction of the iPhone. The iPhone and the additional marker (balloonLandedPosition) are always visible, and the map has maximal resolution.
+Settings
+The single source of truth for Sonde Settings data is stored on the MySondyGo device and only displayed and changed in the app. Therefore we use the following process:
+We use Core data as the local cache. The process would be as follows:
+   1. When the app first connects to the MySondyGo device, it requests the current settings.
+   2. The device responds with a 
+Type 3 configuration message.
+   3. The app's BLE service parses this message and stores the settings in a 
+single DeviceSettings object within core data .
+   4. This Core data object then serves as the local cache. The app's views display the settings directly from this object.
+   5. If a user modifies a setting, the change is first applied to the Core data object. This provides immediate feedback in the UI.
+   6. A BLE command is then sent to the MySondyGo device to update the single source of truth.
+   7. Upon reconnection, the app repeats the process of reading the settings from the device and updating the Core data object to ensure synchronization
+Change Device Settings
+Device settings can be changed through a settings view. When settings are changed (the save button is pressed), they have to be sent with particular BLE commands to the MySondygo device. After editing, when the save button is pressed, the new settings have to be persisted and, through particular commands, sent to the MySondyGo device.
+Settings view
+This view should use a modern, three-button navigation system in the top-right corner of the map view.
+      * A balloon that opens a window to change the sonde type and frequency.
+      * A wrench that opens a settings window with four tabs: Pins, battery, radio, and others.
+      * A button for “Tune” that opens the Tune view.
+Sonde settings Window (Balloon icon):
+When opened, this window will display the currently configured sonde type and frequency, allowing the user to change them. If no valid data is available (isReadyForCommands is false) a message is displayed instead. A "Save" button specific to this window will be present to trigger the update function for these settings. A BLE message to set the sonde type and its frequency o{f=frequency/tipo=probeType}o according to the MySondyGo specs has to be sent.
+Settings Window (Wrench Icon):
+When this view is triggered, it has to make sure the persisted data is recent by calling the o{?}o command to trigger a type3 message. If a Type 3 message is not received after sending the o{?}o command, the application will proceed using the previously persisted variable content.
+In this view, all settings will be presented in tabs as described below. A Cancel and a Save button will be located at the top of the tabbed view to apply all changes.
+      * Pins Tab: Will correctly include oled_sda (oledSDA), oled_scl (oledSCL), oled_rst (oledRST), led_pout (ledPin), buz_pin (buzPin), and lcd (lcdType).
+      * Battery Tab: Will correctly include battery (batPin), vBatMin (batMin), vBatMax (batMax), and vBatType (batType).
+      * Radio Tab: Will correctly include myCall (callSign), rs41.rxbw (RS41Bandwidth), m20.rxbw (M20Bandwidth), m10.rxbw (M10Bandwidth), pilot.rxbw (PILOTBandwidth), dfm.rxbw (DFMBandwidth).
+      * Prediction Tab: with fields burstAltitude, ascentRate, and descentRate. These variables have to be stored permanently on the iPhone and are not transferred to the mySondyGo device.
+      * Others Tab: Will correctly include lcdOn (lcdStatus), blu (bluetoothStatus), baud (serialSpeed), com (serialPort), and aprsName (aprsName/nameType).
+The save function will construct a BLE command string containing only the settings variables that have been modified by the user. This optimizes communication by reducing the data sent to the MySondyGo device. a pop-up message has to be made if the changes were not accepted by the device (device not ready to take commands)
+Tuning function
+The "TUNE" function in MySondyGo is a calibration process designed to compensate for frequency shifts of the receiver. These shifts can be several kilohertz (KHz) and impact reception quality. The tune view shows a moving average of the AFC values (freqofs) across the last 20 messages received from RadiosondyGo. If we press the “save” button, the actual value is stored using the setFreqCorrection command. The view stays open to check the effect. Only after pressing “cancel” the view is closed.
+
+
+5. Architecture: Model-View-ViewModel (MVVM)
+This section outlines the proposed architecture for the iOS application, leveraging the Model-View-ViewModel (MVVM) design pattern. MVVM promotes a clear separation of concerns, making the codebase more testable, maintainable, and scalable.
+5.1 Overview of MVVM
+MVVM divides an application into three interconnected layers:
+      * Model: Represents the data and business logic. It's independent of the UI.
+      * View: The user interface (UI) elements that display data and capture user input. It's passive and has no business logic.
+      * ViewModel: Acts as an intermediary between the Model and the View. It transforms Model data into a format the View can easily display and handles UI-related logic and state.
+5.2 Core Components & Swift Files
+Based on the MVVM pattern and the previously defined requirements and services, here's a breakdown of the core components and their corresponding Swift files:
+5.2.1 Models (Data & Business Logic)
+Models encapsulate the application's data structures and core business rules. They are typically Swift structs or classes.
+      * SondeTelemetry: Defines the structure for real-time telemetry data received from the RadioSondyGo device (e.g., altitude, verticalSpeed, signalStrength, batteryStatus, sondeType, sondeNumber, frequency).
+      * LocationData: Represents location information for both the iPhone and the balloon (e.g., latitude, longitude, altitude, heading).
+      * PredictionData: Stores the predicted flight path, burst point, and landing point obtained from the Sondehub API.
+      * UserSettings: Manages all user-configurable settings, including device settings (e.g., oledSDA, buzPin, myCall, RS41Bandwidth) and forecast settings (burstAltitude, ascentRate, descentRate). This model will interact with the PersistenceService.
+      * RouteData: Encapsulates calculated route information (e.g., polyline coordinates, distance, predictedArrivalTime).
+      * ConnectionStatus: A simple model to represent the BLE connection state (e.g., isReadyForCommands).
+      * AFCData: Stores the Automatic Frequency Correction (AFC) values for the tuning function.
+5.2.2 Views (User Interface)
+Views are responsible for rendering the UI and forwarding user interactions to their respective View Models. In iOS, these are typically UIViewControllers or SwiftUI Views.
+      * MapViewController (or MapView for SwiftUI): The main single-screen interface displaying the map, user position, balloon position, track history, predicted path, burst position, and landing points. It will also host the transport mode selector and the navigation buttons.
+      * DataPanelViewController (or DataPanel for SwiftUI): A sub-view embedded within the MapViewController that displays the Sonde telemetry data, time estimates, and route distance, along with the buzzer control button.
+      * SondeSettingsView: A sheet for configuring sonde type and frequency.
+      * SystemSettingsView: A tabbed sheet containing PinsSettingsTab, BatterySettingsTab, RadioSettingsTab, PredictionSettingsTab, and OtherSettingsTab. Each tab will be a separate Swift file representing its specific settings UI.
+      * TuneView: A sheet for displaying AFC values and managing the tuning process.
+      * NotificationBannerView: A reusable view component for displaying temporary notifications (e.g., "changes saved," "device not ready").
+5.2.3 View Models (Logic & State Management)
+View Models expose data from the Models to the Views and handle UI-specific logic, user input, and interactions with services. They often use Combine or async/await for data binding.
+      * MapViewModel:
+      * Manages the state and logic for MapViewController.
+      * Observes CurrentLocationService for user position.
+      * Observes BLECommunicationService for SondeTelemetry and ConnectionStatus.
+      * Interacts with BalloonTrackPredictionAndRouteCalculationService to fetch and update prediction and route data.
+      * Provides observable properties for map overlays (user marker, balloon marker, tracks, predicted path, burst/landing markers).
+      * Handles map interaction logic (zoom, pan).
+      * Manages the transport mode selection.
+      * DataPanelViewModel:
+      * Manages the state and logic for DataPanelViewController.
+      * Observes BLECommunicationService for SondeTelemetry and ConnectionStatus.
+      * Observes BalloonTrackPredictionAndRouteCalculationService for RouteData and time estimates.
+      * Provides observable properties for all data panel fields (sonde info, altitude, speed, signal, battery, times, distance).
+      * Handles the buzzer mute functionality (potentially interacting with BLECommunicationService to send a command).
+      * SondeSettingsViewModel:
+      * Manages the state and logic for SondeSettingsView.
+      * Exposes UserSettings properties related to sonde configuration.
+      * Handles saving updated sonde settings, interacting with PersistenceService and BLECommunicationService (to send o{f=frequency/tipo=probeType}o command).
+      * SystemSettingsViewModel:
+      * Manages the overall state for SystemSettingsView and its tabs.
+      * Coordinates data flow between the individual tab View Models and the PersistenceService.
+      * Handles the "Save" and "Cancel" actions for all system settings.
+      * Triggers the o{?}o command via BLECommunicationService to refresh settings data.
+      * PinsSettingsViewModel, BatterySettingsViewModel, RadioSettingsViewModel, PredictionSettingsViewModel, OtherSettingsViewModel:
+      * Each ViewModel manages the specific settings within its respective tab, exposing observable properties for UI binding and handling input validation.
+      * They interact with the UserSettings model and notify SystemSettingsViewModel of changes.
+      * TuneViewModel:
+      * Manages the state and logic for TuneView.
+      * Observes BLECommunicationService for raw AFC data or processes it to provide a moving average.
+      * Handles saving the frequency correction value (interacting with BLECommunicationService to send setFreqCorrection command).
+      * FinalApproachViewModel:
+      * Manages the specific logic for the "Final Approach" phase.
+      * Observes SondeTelemetry and CurrentLocationService to determine phase entry/exit.
+      * Provides observable properties for the visual indicator (map border color).
+      * Calculates and exposes the balloonLandedPosition.
+      * Manages map orientation and zoom level adjustments during this phase.
+5.3 Services Integration
+The services identified in the requirements document will primarily interact with the Models and be consumed by the View Models.
+      * BLECommunicationService:
+      * Handles BLE scanning, connection, data reception, and command sending.
+      * Parses incoming BLE packets into SondeTelemetry models.
+      * Publishes SondeTelemetry and ConnectionStatus updates to relevant View Models (e.g., MapViewModel, DataPanelViewModel).
+      * Provides methods for View Models to send commands (e.g., mute buzzer, set sonde type/frequency, update settings, set frequency correction).
+      * CurrentLocationService:
+      * Manages Core Location framework interactions.
+      * Publishes LocationData updates for the iPhone's position and heading to MapViewModel.
+      * PersistenceService:
+      * Manages storing and retrieving UserSettings (both device settings and forecast settings) to/from local storage (e.g., UserDefaults or a local database).
+      * View Models will interact with this service to load and save settings.
+      * BalloonTrackPredictionAndRouteCalculationService:
+      * Handles API calls to Sondehub for balloon path prediction.
+      * Handles API calls to Apple Maps for route calculation.
+      * Publishes PredictionData and RouteData to MapViewModel and DataPanelViewModel.
+UI definition
+1. Modern Navigation with Settings
+• [ ] Add a single, prominent gearshape icon (gearshape.fill from SF Symbols) in the top-right corner.
+• [ ] Use a transparent or frosted glass button with .thinMaterial and a subtle shadow for this icon.
+• [ ] When tapped, this button should present a sheet (.sheet) with settings and secondary information.
+• [ ] Avoid using older patterns like hamburger menus or slide-out drawers.
+2. Consistent, Native Aesthetic
+• [ ] Build all UI with SwiftUI’s native components.
+• [ ] Use SF Symbols for icons consistently throughout the app.
+• [ ] Adopt the system color scheme by default, enabling support for Dark Mode and Dynamic Type (respecting the user's system preferences).
+• [ ] Avoid custom fonts or colors that clash with system-wide appearance.
+3. Visual Hierarchy and Clarity
+• [ ] Style the settings button with:
+   • Frosted glass background: .background(.thinMaterial)
+   • Subtle shadow for elevation
+   • Rounded corners for a soft, modern look
+• [ ] Ensure the button is easily discoverable but does not block map content.
+System and Environment Information
+There are some technical details and assumptions that need to be clarified.
+      * iOS Compatibility: IOS 18.
+      * Persistence Service Details: The specifications mention that the PersistenceService handles data types and their persistence rules, but don't specify the exact storage mechanism (e.g., Core Data, Core data, or a simple property list).
+      * Error Handling: Malformed packets will be "safely handled". Missing data will be announced with  a pop-up
+      * Permissions: Bluetooth, Location Services.
+File structure
+      * BalloonHunterApp.swift: This is the application's entry point. 
+      * AppModels.swift: Contains core data models (structs and classes) that represent the application's state and data entities. 
+      * AppServices.swift: Houses reusable, non-UI service logic and singleton helpers. This centralizes components like PredictionSettings, PredictionLogic (for external API calls), BLEManager (for Bluetooth communication), PersistenceService (for data storage), LocationManager, and AnnotationService.
+      * MainViewModel.swift: Acts as the central ViewModel for managing global application state, including device connection status, latest telemetry, and user settings. It aggregates data from services and prepares it for SwiftUI views. It also includes startup logic and UserDefaults extensions.
+      * MapView.swift: The primary view that displays the map interface. It orchestrates the display of telemetry, predictions, and user location. It also contains the UI logic for map interactions and data panel integration.
+      * DataPanelView.swift: A dedicated SwiftUI view component responsible for displaying key telemetry and prediction data. It receives its data directly via properties.
+      * Overlay.swift: Contains SwiftUI views specifically designed for map overlays, such as MapMarkerOverlay (for custom markers) and MapPolylineOverlay (for drawing paths like prediction tracks and balloon history). It also defines MapAnnotationItem for standardized map annotation data.
+      * Telemetry.swift: Defines the Telemetry class, which represents the detailed data received from the sonde. It includes parsing logic for different telemetry formats and a TelemetryManager for managing a history of telemetry data.
+      * Settings.swift: A file intended for all settings related SwiftUI views.
+Data Structures (Models) 📊
+The application defines several important data structures to represent its domain:
+      * DeviceSettings: Represents the detailed configuration parameters of the sonde device (e.g., sondeType, frequency, oledSDA, callSign, threshold). It has a static var default for initial values.
+      * AppSettings: A simple ObservableObject singleton that holds the current Settings and provides a mechanism to update them globally.
+      * PredictionInfo: A class intended to hold prediction-related data that can be shared across the app (e.g., landingTime, arrivalTime, routeDistanceMeters).
+      * TelemetryData: A comprehensive class representing a single telemetry data point from the sonde, including latitude, longitude, altitude, signalStrength, batteryPercentage, and firmwareVersion. It includes parsing methods.
+      * TelemetryTransferData: A struct that serves as a lightweight, serializable representation of telemetry data to directly persist telemetry data.
+      * SondeSettingsTransferData: A Codable and Equatable struct used for representing the settings received from or sent to the BLE device.
+      * MapAnnotations: A Identifiable struct used to represent markers on the map. It includes coordinate, kind (e.g., .user, .balloon), and status (e.g., .fresh, .stale), and a @ViewBuilder for its visual representation.
+      * TransportationMode: A simple enum (.car, .bike) to represent the user's preferred mode of transport for route calculations.
+Messages from RadioSondyGo
+Message Types
+Type 0 (No probe received)
+      * Format: 0/probeType/frequency/RSSI/batPercentage/batVoltage/buzmute/softwareVersion/o
+      * Example: 0/RS41/403.500/117.5/100/4274/0/3.10/o
+      * Field Count: 7 fields
+      * Values:
+      * probeType: e.g., RS41
+      * frequency: e.g., 403.500 (MHz)
+      * RSSI: e.g., -90 (dBm)
+      * batPercentage: e.g., 100 (%)
+      * batVoltage: e.g., 4000 (mV)
+      * buzmute: e.g., 0 (0 = off, 1 = on)
+      * softwareVersion: e.g., 3.10
+Type 1 (Probe telemetry)
+      * Format: 1/probeType/frequency/sondeName/latitude/longitude/altitude/HorizontalSpeed/verticalSpeed/RSSI/batPercentage/afcFrequency/burstKillerEnabled/burstKillerTime/batVoltage/buzmute/reserved1/reserved2/reserved3/softwareVersion/o
+      * Example: 1/RS41/403.500/V4210150/47.38/8.54/500/10/2/117.5/100/0/0/0/4274/0/0/0/0/3.10/o (Example values for dynamic fields added for clarity)
+      * Field Count: 20 fields
+      * Variable names:
+      * probeType: e.g., RS41
+      * frequency: e.g., 403.500 (MHz)
+      * sondeName: e.g., V4210150
+      * latitude: (dynamic) e.g., 47.38 (degrees)
+      * longitude: (dynamic) e.g., 8.54 (degrees)
+      * altitude: (dynamic) e.g., 500 (meters)
+      * horizontalSpeed: (dynamic) e.g., 10 (m/s)
+      * verticalSpeed: (dynamic) e.g., 2 (m/s)
+      * RSSI: e.g., -90 (dBm)
+      * batPercentage: e.g., 100 (%)
+      * afcFrequency: e.g., 0
+      * burstKillerEnabled: e.g., 0 (0 = disabled, 1 = enabled)
+      * burstKillerTime: e.g., 0 (seconds)
+      * batVoltage: e.g., 4000 (mV)
+      * buzmute: e.g., 0 (0 = off, 1 = on)
+      * reserved1: e.g., 0
+      * reserved2: e.g., 0
+      * reserved3: e.g., 0
+      * softwareVersion: e.g., 3.10
+Type 2 (Name only, coordinates are not available)
+      * Corrected Format: 2/probeType/frequency/sondeName/RSSI/batPercentage/afcFrequency/batVoltage/buzmute/softwareVersion/o
+      * Example: 2/RS41/403.500/V4210150/117.5/100/0/4274/0/3.10/o
+      * Field Count: 10 fields
+      * Variable names:
+      * probeType: e.g., RS41
+      * frequency: e.g., 403.500 (MHz)
+      * sondeName: e.g., V4210150
+      * RSSI: e.g., -90 (dBm)
+      * batPercentage: e.g., 100 (%)
+      * afcFrequency: e.g., 0
+      * batVoltage: e.g., 4000 (mV)
+      * buzmute: e.g., 0 (0 = off, 1 = on)
+      * softwareVersion: e.g., 3.10
+Type 3 (Configuration)
+      * Format: 3/probeType/frequency/oledSDA/oledSCL/oledRST/ledPin/RS41Bandwidth/M20Bandwidth/M10Bandwidth/PILOTBandwidth/DFMBandwidth/callSign/frequencyCorrection/batPin/batMin/batMax/batType/lcdType/nameType/buzPin/softwareVersion/o
+      * Example: 3/RS41/404.600/21/22/16/25/1/7/7/7/6/MYCALL/0/35/2950/4180/1/0/0/0/3.10/o
+      * Field Count: 21 fields
+      * Variable names:
+      * probeType: e.g., RS41
+      * frequency: e.g., 404.600 (MHz)
+      * oledSDA: e.g., 21 (GPIO pin number)
+      * oledSCL: e.g., 22 (GPIO pin number)
+      * oledRST: e.g., 16 (GPIO pin number)
+      * ledPin: e.g., 25 (GPIO pin number)
+      * RS41Bandwidth: e.g., 1 (kHz)
+      * M20Bandwidth: e.g., 7 (kHz)
+      * M10Bandwidth: e.g., 7 (kHz)
+      * PILOTBandwidth: e.g., 7 (kHz)
+      * DFMBandwidth: e.g., 6 (kHz)
+      * callSign: e.g., MYCALL
+      * frequencyCorrection: e.g., 0 (Hz)
+      * batPin: e.g., 35 (GPIO pin number)
+      * batMin: e.g., 2950 (mV)
+      * batMax: e.g., 4180 (mV)
+      * batType: e.g., 1 (0:Linear, 1:Sigmoidal, 2:Asigmoidal)
+      * lcdType: e.g., 0 (0:SSD1306_128X64, 1:SH1106_128X64)
+      * nameType: e.g., 0
+      * buzPin: e.g., 0 (GPIO pin number)
+      * softwareVersion: e.g., 3.10
+Data types:
+Type 0 Packet: Device Basic Info and Status
+      * 0: packet type (String) - "0" 
+      * 1: probeType (String) 
+      * 2: frequency (Double) 
+      * 3: RSSI (Double) 
+      * 4: batPercentage (Int) 
+      * 5: batVoltage (Int) 
+      * 6: buzmute (Bool, 0 = off, 1 = on) 
+      * 7: softwareVersion (String) 
+________________
+
+
+Type 1 Packet: Probe Telemetry
+      * 0: packet type (Int) - "1" 
+      * 1: probeType (String) 
+      * 2: frequency (Double) 
+      * 3: sondeName (String) 
+      * 4: latitude (Double) 
+      * 5: longitude (Double) 
+      * 6: altitude (Double) 
+      * 7: horizontalSpeed (Double) 
+      * 8: verticalSpeed (Double) 
+      * 9: RSSI (Double) 
+      * 10: batPercentage (Int) 
+      * 11: afcFrequency (Int) 
+      * 12: burstKillerEnabled (Bool, 0 = disabled, 1 = enabled) 
+      * 13: burstKillerTime (Int) 
+      * 14: batVoltage (Int) 
+      * 15: buzmute (Bool, 0 = off, 1 = on) 
+      * 16: reserved1 (Int) 
+      * 17: reserved2 (Int) 
+      * 18: reserved3 (Int) 
+      * 19: softwareVersion (String) 
+________________
+
+
+Type 2 Packet: Name Only
+      * 0: packet type (Int) - "2" 
+      * 1: probeType (String) 
+      * 2: frequency (Double) 
+      * 3: sondeName (String) 
+      * 4: RSSI (Double) 
+      * 5: batPercentage (Int) 
+      * 6: afcFrequency (Int) 
+      * 7: batVoltage (Int) 
+      * 8: buzmute (Bool, 0 = off, 1 = on) 
+      * 9: softwareVersion (String) 
+________________
+
+
+Type 3 Packet: Configuration
+      * 0: packet type (Int) - "3" 
+      * 1: probeType (String) 
+      * 2: frequency (Double) 
+      * 3: oledSDA (Int) 
+      * 4: oledSCL (Int) 
+      * 5: oledRST (Int) 
+      * 6: ledPin (Int) 
+      * 7: RS41Bandwidth (Int) 
+      * 8: M20Bandwidth (Int) 
+      * 9: M10Bandwidth (Int) 
+      * 10: PILOTBandwidth (Int) 
+      * 11: DFMBandwidth (Int) 
+      * 12: callSign (String) 
+      * 13: frequencyCorrection (Int) 
+      * 14: batPin (Int) 
+      * 15: batMin (Int) 
+      * 16: batMax (Int) 
+      * 17: batType (Int) 
+      * 18: lcdType (Int) 
+      * 19: nameType (Int) 
+      * 20: buzPin (Int) 
+      * 21: softwareVersion (String) 
+
+
+RadioSondyGo Simplified API
+All commands sent to the RadioSondyGo device must be enclosed within o{...}o delimiters. You can send multiple settings in one command string, separated by /, or send them individually.
+1. Settings Command
+This command is used to configure various aspects of the RadioSondyGo device. All settings are stored for future use.
+Syntax:
+o{setting1=value1/setting2=value2/...}o
+Examples:
+      * o{lcd=0/blu=0}o (Sets LCD driver to SSD1306 and turns Bluetooth off)
+      * o{f=404.600/tipo=1}o (Sets frequency to 404.600 MHz and probe type to RS41)
+      * o{myCall=MYCALL}o (Sets the call sign displayed to MYCALL)
+Available Settings:
+Variable Name
+	Description
+	Default Value
+	Reboot Required
+	lcd
+	Sets the LCD driver: 0 for SSD1306_128X64, 1 for SH1106_128X64.
+	0
+	Yes
+	lcdOn
+	Turns the LCD on or off: 0 for Off, 1 for On.
+	1
+	Yes
+	oled_sda
+	Sets the SDA OLED Pin.
+	21
+	Yes
+	oled_scl
+	Sets the SCL OLED Pin.
+	22
+	Yes
+	oled_rst
+	Sets the RST OLED Pin.
+	16
+	Yes
+	led_pout
+	Sets the onboard LED Pin; 0 switches it off.
+	25
+	Yes
+	buz_pin
+	Sets the buzzer Pin: 0 for no buzzer installed, otherwise specify the pin (e.g., 4).
+	0
+	Yes
+	myCall
+	Sets the call shown on the display (max 8 characters). Set empty to hide (e.g., o{myCall=}o).
+	MYCALL
+	No
+	blu
+	Turns BLE (Bluetooth Low Energy) on or off: 0 for off, 1 for on.
+	1
+	Yes
+	baud
+	Sets the Serial Baud Rate: 0 (4800), 1 (9600), 2 (19200), 3 (38400), 4 (57600), 5 (115200).
+	1
+	Yes
+	com
+	Sets the Serial Port: 0 for tx pin 1 – rx pin 3 – USB, 1 for tx pin 12 – rx pin 2 (3.3V logic).
+	0
+	Yes
+	rs41.rxbw
+	Sets the RS41 Rx Bandwidth (see bandwidth table below).
+	4
+	No
+	m20.rxbw
+	Sets the M20 Rx Bandwidth (see bandwidth table below).
+	7
+	No
+	m10.rxbw
+	Sets the M10 Rx Bandwidth (see bandwidth table below).
+	7
+	No
+	pilot.rxbw
+	Sets the PILOT Rx Bandwidth (see bandwidth table below).
+	7
+	No
+	dfm.rxbw
+	Sets the DFM Rx Bandwidth (see bandwidth table below).
+	6
+	No
+	aprsName
+	Sets the Serial or APRS name: 0 for Serial, 1 for APRS NAME.
+	0
+	No
+	freqofs
+	Sets the frequency correction.
+	0
+	No
+	battery
+	Sets the battery measurement Pin; 0 means no battery and hides the icon.
+	35
+	Yes
+	vBatMin
+	Sets the low battery value (in mV).
+	2950
+	No
+	vBatMax
+	Sets the battery full value (in mV).
+	4180
+	No
+	vBatType
+	Sets the battery discharge type: 0 for Linear, 1 for Sigmoidal, 2 for Asigmoidal.
+	1
+	No
+	Bandwidth Table:
+Value
+	Bandwidth (kHz)
+	0
+	2.6
+	1
+	3.1
+	2
+	3.9
+	3
+	5.2
+	4
+	6.3
+	5
+	7.8
+	6
+	10.4
+	7
+	12.5
+	8
+	15.6
+	9
+	20.8
+	10
+	25.0
+	11
+	31.3
+	12
+	41.7
+	13
+	50.0
+	14
+	62.5
+	15
+	83.3
+	16
+	100.0
+	17
+	125.0
+	18
+	166.7
+	19
+	200.0
+	2. Frequency Command (sent separately)
+This command sets the receiving frequency and the type of radiosonde probe to listen for.
+Syntax:
+o{f=frequency/tipo=probeType}o
+Example:
+      * o{f=404.35/tipo=1}o (Sets frequency to 404.35 MHz and probe type to RS41)
+Available Sonde Types for commands (tipo):
+      * 1: RS41
+      * 2: M20
+      * 3: M10
+      * 4: PILOT
+      * 5: DFM
+3. Mute Command
+This command controls the device's buzzer.
+Syntax:
+o{mute=setMute}o
+Variable:
+      * setMute: 0 for off, 1 for on.
+Example:
+      * o{mute=0}o (Turns the buzzer off)
+4. Request Status Command
+This command requests the current status and configuration of the RadioSondyGo device.
+Syntax:
+o{?}o
+Appendix:
+Sample response of the Sondehub API:
+<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+<Document>
+<name>Flight Path</name>
+<description>Flight Data for start time 2025-08-05T06:40:13Z, at site: 46.9046,7.3112, standard flight profile.</description>
+<Style id="yellowPoly">
+<LineStyle>
+<color>7f00ffff</color>
+<width>4</width>
+</LineStyle>
+<PolyStyle>
+<color>7f00ff00</color>
+</PolyStyle>
+</Style>
+<Placemark>
+<name>Flight path</name>
+<description>Ascent rate: 5.0, descent rate: 5.0, with burst at 35001.0m.</description>
+<styleUrl>#yellowPoly</styleUrl>
+<LineString>
+<extrude>1</extrude>
+<tesselate>1</tesselate>
+<altitudeMode>absolute</altitudeMode>
+<coordinates>
+7.31120,46.90460,847.0
+7.31356,46.90561,1147.0
+7.31710,46.90654,1447.0
+7.32157,46.90740,1747.0
+7.32686,46.90838,2047.0
+7.33283,46.90958,2347.0
+7.33930,46.91106,2647.0
+......
+7.84781,47.00683,4166.2
+7.85786,47.00851,3800.8
+7.86746,47.01072,3442.2
+7.87675,47.01312,3090.2
+7.88572,47.01525,2744.5
+7.89398,47.01692,2404.7
+7.90109,47.01820,2070.7
+7.90665,47.01912,1742.3
+7.91087,47.01977,1419.1
+7.91419,47.02022,1101.0
+7.91531,47.02032,951.8
+
+
+</coordinates>
+</LineString></Placemark>
+
+
+<Placemark>
+<name>Balloon Launch</name>
+<description>Balloon launch at 46.90460,7.31120, at 2025-08-05T06:40:13Z.</description>
+<Point><altitudeMode>absolute</altitudeMode><coordinates>7.31120,46.90460,847.0</coordinates></Point>
+</Placemark>
+
+
+<Placemark>
+<name>Balloon Burst</name>
+<description>Balloon burst at 46.97372,7.52491, at 2025-08-05T08:34:04.09375Z.</description>
+<Point><altitudeMode>absolute</altitudeMode><coordinates>7.52491,46.97372,35002.5</coordinates></Point>
+</Placemark>
+
+
+<Placemark>
+<name>Balloon Landing</name>
+<description>Balloon landing at 47.02032,7.91531, at 2025-08-05T09:18:32.6875Z.</description>
+<Point><altitudeMode>absolute</altitudeMode><coordinates>7.91531,47.02032,951.8</coordinates></Point>
+</Placemark>
+
+
+</Document></kml>

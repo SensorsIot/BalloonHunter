@@ -2,6 +2,7 @@ import SwiftUI
 import MapKit
 
 // MARK: - MapMarkerOverlay
+/// A marker view displaying a system image with specified color and style.
 public struct MapMarkerOverlay: View {
     public let coordinate: CLLocationCoordinate2D
     public let systemImage: String
@@ -12,12 +13,24 @@ public struct MapMarkerOverlay: View {
         self.color = color
     }
     public var body: some View {
-        MapAnnotation(coordinate: coordinate) {
-            Image(systemName: systemImage)
-                .font(.title)
-                .foregroundColor(color)
-                .shadow(radius: 3)
-        }
+        Image(systemName: systemImage)
+            .font(.title)
+            .foregroundColor(color)
+            .shadow(radius: 3)
+    }
+}
+
+// MARK: - MapPolyline (Internal Helper)
+fileprivate struct MapPolyline: View {
+    let coordinates: [CLLocationCoordinate2D]
+    let color: Color
+    let lineWidth: CGFloat
+    let dash: [CGFloat]
+
+    var body: some View {
+        // Due to the unavailability or complexity of MapKit.MapPolyline for earlier OS versions,
+        // this is a placeholder view. Implement MapPolyline for map context (see MapKit documentation for MapContent usage).
+        EmptyView()
     }
 }
 

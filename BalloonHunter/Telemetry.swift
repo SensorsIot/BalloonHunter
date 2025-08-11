@@ -1,8 +1,9 @@
 // Telemetry.swift
-// Central class for all telemetry-related functionality (parsing, validation, helpers)
+// Central class for all telemetry-related functionality
 
 import Foundation
 import CoreLocation
+import Combine
 
 class Telemetry: Equatable, CustomStringConvertible {
     let probeType: String
@@ -22,19 +23,10 @@ class Telemetry: Equatable, CustomStringConvertible {
     let buzzerMute: Int
     let firmwareVersion: String
 
-    // MARK: - Moving Average for Vertical Speed
-
-    /// Stores recent vertical speed samples for moving average calculation
+    // Moving Average for Vertical Speed
     private static var verticalSpeedHistory: [Double] = []
-
-    /// Maximum number of samples to keep for moving average
     private static let maxSamples = 10
 
-    /**
-     Adds a new vertical speed sample and returns the updated moving average.
-     This method maintains a fixed-size buffer of the most recent vertical speeds
-     and calculates their average to smooth out vertical speed values.
-     */
     static func addVerticalSpeedSample(_ value: Double) -> Double {
         verticalSpeedHistory.append(value)
         if verticalSpeedHistory.count > maxSamples {
@@ -44,7 +36,6 @@ class Telemetry: Equatable, CustomStringConvertible {
         return sum / Double(verticalSpeedHistory.count)
     }
 
-    // MARK: - Initializer
     init(
         probeType: String,
         frequency: Double,
@@ -102,7 +93,6 @@ class Telemetry: Equatable, CustomStringConvertible {
         )
     }
 
-    // MARK: - Parsing
     static func parseLongFormat(from components: [Substring]) -> Telemetry? {
         guard components.count >= 21,
             let frequency = Double(components[2]),
@@ -169,7 +159,6 @@ class Telemetry: Equatable, CustomStringConvertible {
         )
     }
 
-    // MARK: - Equatable
     static func ==(lhs: Telemetry, rhs: Telemetry) -> Bool {
         return lhs.probeType == rhs.probeType &&
             lhs.frequency == rhs.frequency &&
@@ -189,14 +178,39 @@ class Telemetry: Equatable, CustomStringConvertible {
             lhs.firmwareVersion == rhs.firmwareVersion
     }
 
-    // MARK: - Description
     var description: String {
         "Type: \(probeType), Freq: \(frequency), Name: \(name), Lat: \(latitude), Lon: \(longitude), Alt: \(altitude), HSpeed: \(horizontalSpeed), VSpeed: \(verticalSpeed), Signal: \(signalStrength), Batt: \(batteryPercentage)%, AFC: \(afc), BurstKiller: \(burstKiller), BurstKillerTime: \(burstKillerTime), BattVolt: \(batteryVoltage), BuzzerMute: \(buzzerMute), FW: \(firmwareVersion)"
     }
 
-    // MARK: - Utility
     var coordinate: CLLocationCoordinate2D {
         CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
+    }
+}
+
+final class TelemetryManager: ObservableObject {
+    static let shared = TelemetryManager()
+    
+    @Published private(set) var latestTelemetry: Telemetry?
+    @Published private(set) var telemetryHistory: [Telemetry] = []
+    @Published private(set) var validSignalReceived: Bool = false
+    
+    private let maxHistoryLength = 100
+    
+    private init() {}
+
+    func receiveTelemetry(_ telemetry: Telemetry, validSignal: Bool = false) {
+        latestTelemetry = telemetry
+        if telemetryHistory.last != telemetry {
+            telemetryHistory.append(telemetry)
+            if telemetryHistory.count > maxHistoryLength {
+                telemetryHistory.removeFirst(telemetryHistory.count - maxHistoryLength)
+            }
+        }
+        self.validSignalReceived = validSignal
+    }
+
+    func clearHistory() {
+        telemetryHistory.removeAll()
     }
 }
 

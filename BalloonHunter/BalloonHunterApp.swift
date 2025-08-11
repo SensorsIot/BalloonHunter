@@ -9,9 +9,15 @@ import SwiftUI
 
 @main
 struct BalloonHunterApp: App {
+    @StateObject private var mainViewModel = MainViewModel()
+    // Explicitly specify module to resolve ambiguity
+    @StateObject private var predictionInfo = PredictionInfo()
+    
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            let locationManager = LocationManager()
+            MapView(viewModel: mainViewModel, locationManager: locationManager)
+                .environmentObject(predictionInfo)
         }
     }
 }

@@ -4,12 +4,12 @@ import CoreLocation
 public struct DataPanelView: View {
     public let isBleConnected: Bool
     @Binding public var isBuzzerOn: Bool
-    public let telemetry: Telemetry?
+    public let telemetry: TelemetryStruct?
     public let landingTime: Date?
     public let arrivalTime: Date?
     public let routeDistance: CLLocationDistance?
     
-    public init(isBleConnected: Bool, isBuzzerOn: Binding<Bool>, telemetry: Telemetry?, landingTime: Date?, arrivalTime: Date?, routeDistance: CLLocationDistance?) {
+    public init(isBleConnected: Bool, isBuzzerOn: Binding<Bool>, telemetry: TelemetryStruct?, landingTime: Date?, arrivalTime: Date?, routeDistance: CLLocationDistance?) {
         self.isBleConnected = isBleConnected
         self._isBuzzerOn = isBuzzerOn
         self.telemetry = telemetry

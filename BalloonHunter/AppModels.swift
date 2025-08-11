@@ -1,88 +1,65 @@
 // AppModels.swift
-// Contains all model structs, enums, and lightweight ObservableObjects used throughout the app.
+// Core models and state/data representations for the BalloonHunter app
 
 import Foundation
-import Combine
+import CoreLocation
 
-// MARK: - Settings model (was Settings.swift)
-
-struct Settings {
-    var sondeType: Int
-    var frequency: Double
-    var oledSDA: Int
-    var oledSCL: Int
-    var oledRST: Int
-    var ledPin: Int
-    var buzPin: Int
-    var lcdType: Int
-    var batPin: Int
-    var batMin: Int
-    var batMax: Int
-    var batType: Int
-    var callSign: String
-    var rs41Bandwidth: Int
-    var m20Bandwidth: Int
-    var m10Bandwidth: Int
-    var pilotBandwidth: Int
-    var dfmBandwidth: Int
-    var frequencyCorrection: String
-    var lcdStatus: Int
-    var bluetoothStatus: Int
-    var serialSpeed: Int
-    var serialPort: Int
-    var aprsName: Int
-    var threshold: Double = 0.5
-    var isEnabled: Bool = true
-    var darkMode: Bool = false
-    var deviceName: String = ""
-
-    static var `default`: Settings {
-        Settings(
-            sondeType: 1,
-            frequency: 404.600,
-            oledSDA: 21,
-            oledSCL: 22,
-            oledRST: 16,
-            ledPin: 25,
-            buzPin: 0,
-            lcdType: 0,
-            batPin: 35,
-            batMin: 2950,
-            batMax: 4180,
-            batType: 1,
-            callSign: "MYCALL",
-            rs41Bandwidth: 4,
-            m20Bandwidth: 7,
-            m10Bandwidth: 7,
-            pilotBandwidth: 7,
-            dfmBandwidth: 6,
-            frequencyCorrection: "0",
-            lcdStatus: 1,
-            bluetoothStatus: 1,
-            serialSpeed: 1,
-            serialPort: 0,
-            aprsName: 0,
-            threshold: 0.5,
-            isEnabled: true,
-            darkMode: false,
-            deviceName: ""
-        )
+// MARK: - TelemetryStruct (for lightweight/decoded telemetry)
+public struct TelemetryStruct: Equatable {
+    public var probeType: String = ""
+    public var frequency: Double = 0.0
+    public var name: String = ""
+    public var latitude: Double = 0.0
+    public var longitude: Double = 0.0
+    public var altitude: Double = 0.0
+    public var horizontalSpeed: Double = 0.0
+    public var verticalSpeed: Double = 0.0
+    public var signalStrength: Double = 0.0
+    public var batteryPercentage: Int = 0
+    public var afc: Int = 0
+    public var burstKiller: Bool = false
+    public var burstKillerTime: Int = 0
+    public var batteryVoltage: Int = 0
+    public var buzzerMute: Int = 0
+    public var firmwareVersion: String = ""
+    public var coordinate: CLLocationCoordinate2D {
+        CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
     }
 }
 
-final class AppSettings: ObservableObject {
-    static let shared = AppSettings()
-    @Published var settings: Settings = Settings.default
-    private init() {}
-    func update(_ newSettings: Settings) {
-        settings = newSettings
-    }
+import CoreData
+
+// MARK: - Core Data Entities
+
+@objc(DeviceSettingsRecord)
+public class DeviceSettingsRecord: NSManagedObject {
+    @NSManaged public var id: UUID
+    @NSManaged public var deviceMode: Int16
+    @NSManaged public var sampleRateHz: Double
+    @NSManaged public var dateSaved: Date
 }
 
-// MARK: - PredictionInfo model (was PredictionInfo.swift)
+@objc(ForecastSettings)
+public class ForecastSettings: NSManagedObject {
+    @NSManaged public var id: UUID
+    @NSManaged public var burstAltitude: Double
+    @NSManaged public var ascentRate: Double
+    @NSManaged public var descentRate: Double
+    @NSManaged public var dateSaved: Date
+}
 
-class PredictionInfo: ObservableObject {
-    @Published var landingTime: Date? = nil
-    @Published var arrivalTime: Date? = nil
-    @Published var routeDistanceMeters: Double? = nil
+@objc(BalloonTrackPoint)
+public class BalloonTrackPoint: NSManagedObject {
+    @NSManaged public var latitude: Double
+    @NSManaged public var longitude: Double
+    @NSManaged public var altitude: Double
+    @NSManaged public var timestamp: Date
+    @NSManaged public var track: BalloonTrack?
+}
+
+@objc(BalloonTrack)
+public class BalloonTrack: NSManagedObject {
+    @NSManaged public var sondeName: String
+    @NSManaged public var dateUpdated: Date
+    @NSManaged public var points: Set<BalloonTrackPoint>
 }
