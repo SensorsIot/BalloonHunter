@@ -51,81 +51,42 @@ public struct DataPanelView: View {
             }
             
             if let t = telemetry {
-                HStack(spacing: 10) {
-                    Group {
-                        Text("Alt:")
-                            .foregroundColor(.secondary)
-                        Text("\(Int(t.altitude)) m")
-                            .bold()
-                    }
-                    Group {
-                        Text("VS:")
-                            .foregroundColor(.secondary)
-                        Text(String(format: "%+.1f m/s", t.verticalSpeed))
-                            .bold()
-                            .foregroundColor(t.verticalSpeed > 0 ? .green : (t.verticalSpeed < 0 ? .red : .primary))
-                    }
-                    Spacer()
+                InfoRowView(label: "Alt:") {
+                    Text("\(Int(t.altitude)) m")
+                        .bold()
                 }
-                .font(.caption2)
-                .padding(.horizontal, 8)
+                InfoRowView(label: "VS:") {
+                    Text(String(format: "%+.1f m/s", t.verticalSpeed))
+                        .bold()
+                        .foregroundColor(t.verticalSpeed > 0 ? .green : (t.verticalSpeed < 0 ? .red : .primary))
+                }
+                InfoRowView(label: "Signal:") {
+                    Text("\(Int(t.rssi)) dB")
+                }
+                InfoRowView(label: "Bat:") {
+                    Text("\(t.batPercentage)%")
+                }
             }
             
-            if let t = telemetry {
-                HStack(spacing: 10) {
-                    Group {
-                        Text("Signal:")
-                            .foregroundColor(.secondary)
-                        Text("\(Int(t.rssi)) dB")
-                    }
-                    Group {
-                        Text("Bat:")
-                            .foregroundColor(.secondary)
-                        Text("\(t.batPercentage)%")
-                    }
-                    Spacer()
+            if let landing = landingTime {
+                InfoRowView(label: "Landing:") {
+                    Text(landing, style: .time)
                 }
-                .font(.caption2)
-                .padding(.horizontal, 8)
             }
             
-            HStack(spacing: 10) {
-                if let landing = landingTime {
-                    Group {
-                        Text("Landing:")
-                            .foregroundColor(.secondary)
-                        Text(landing, style: .time)
-                    }
+            if let arrival = arrivalTime {
+                InfoRowView(label: "Arrival:") {
+                    Text(arrival, style: .time)
                 }
-                if let arrival = arrivalTime {
-                    Group {
-                        Text("Arrival:")
-                            .foregroundColor(.secondary)
-                        Text(arrival, style: .time)
-                    }
-                }
-                Spacer()
             }
-            .font(.caption2)
-            .padding(.horizontal, 8)
             
-            HStack(spacing: 10) {
-                remainingTimeView()
-                Spacer()
-            }
-            .font(.caption2)
-            .padding(.horizontal, 8)
+            remainingTimeView()
             
-            HStack(spacing: 10) {
-                if let dist = routeDistance {
-                    Text("Route Dist:")
-                        .foregroundColor(.secondary)
+            if let dist = routeDistance {
+                InfoRowView(label: "Route Dist:") {
                     Text(String(format: "%.1f km", dist/1000))
                 }
-                Spacer()
             }
-            .font(.caption2)
-            .padding(.horizontal, 8)
         }
         .font(.footnote)
         .foregroundColor(.primary)
@@ -138,13 +99,10 @@ public struct DataPanelView: View {
     @ViewBuilder
     private func remainingTimeView() -> some View {
         if let landing = landingTime {
-            // This calculation is now valid inside a regular function body
-            let mins = Int((landing.timeIntervalSinceNow)/60)
-            
-            Text("Remaining:")
-                .foregroundColor(.secondary)
-            Text(mins <= 0 ? "now" : "\(mins) min")
+            InfoRowView(label: "Remaining:") {
+                let mins = Int((landing.timeIntervalSinceNow)/60)
+                Text(mins <= 0 ? "now" : "\(mins) min")
+            }
         }
     }
 }
-

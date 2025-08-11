@@ -70,7 +70,9 @@ extension MainViewModel: BLEManagerDelegate {
             )
             
             let newCoordinate = CLLocationCoordinate2D(latitude: telemetry.latitude, longitude: telemetry.longitude)
-            if self.balloonHistory.last != newCoordinate {
+            // Manually check for coordinate equality to avoid extending CLLocationCoordinate2D with Equatable
+            let lastCoordinate = self.balloonHistory.last
+            if lastCoordinate == nil || lastCoordinate?.latitude != newCoordinate.latitude || lastCoordinate?.longitude != newCoordinate.longitude {
                 self.balloonHistory.append(newCoordinate)
             }
         }
