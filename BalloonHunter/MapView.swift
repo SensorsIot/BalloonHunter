@@ -49,7 +49,7 @@ private extension MapView {
 
 public struct MapView: View {
     @ObservedObject var viewModel: MainViewModel
-    @ObservedObject var locationManager: LocationManager
+    @ObservedObject var locationService: CurrentLocationService
     
     @State private var transportMode: RouteMode = .car
     @State private var isBuzzerOn: Bool = false
@@ -176,7 +176,7 @@ public struct MapView: View {
     // MARK: - Computed properties
     
     private var userCoordinate: CLLocationCoordinate2D? {
-        locationManager.location?.coordinate
+        locationService.location?.coordinate
     }
     private var userLocationKey: String {
         guard let coord = userCoordinate else { return "none" }

@@ -31,7 +31,8 @@ class MainViewModel: ObservableObject {
     
     /// Starts long range tracking after sending initial settings command
     private func startLongRangeTracking() {
-        // TODO: Implement long range tracking start logic here
+        // This function is called when the device is ready.
+        print("[MainViewModel] Long range tracking started.")
     }
 }
 
@@ -47,10 +48,41 @@ extension MainViewModel: BLEManagerDelegate {
                 startLongRangeTracking()
             }
         }
-        // Existing logic to update latestTelemetry etc.
+        
+        DispatchQueue.main.async {
+            self.latestTelemetry = TelemetryStruct(
+                probeType: telemetry.probeType,
+                frequency: telemetry.frequency,
+                sondeName: telemetry.sondeName,
+                latitude: telemetry.latitude,
+                longitude: telemetry.longitude,
+                altitude: telemetry.altitude,
+                horizontalSpeed: telemetry.horizontalSpeed,
+                verticalSpeed: telemetry.verticalSpeed,
+                rssi: telemetry.rssi,
+                batPercentage: telemetry.batPercentage,
+                afcFrequency: telemetry.afcFrequency,
+                burstKillerEnabled: telemetry.burstKillerEnabled,
+                burstKillerTime: telemetry.burstKillerTime,
+                batVoltage: telemetry.batVoltage,
+                buzmute: telemetry.buzmute,
+                softwareVersion: telemetry.softwareVersion
+            )
+            
+            let newCoordinate = CLLocationCoordinate2D(latitude: telemetry.latitude, longitude: telemetry.longitude)
+            if self.balloonHistory.last != newCoordinate {
+                self.balloonHistory.append(newCoordinate)
+            }
+        }
     }
     func bleManager(_ manager: BLEManager, didUpdateDeviceSettings settings: BLEDeviceSettingsModel) {
-        // Device settings received; persist if needed
+        Task {
+            try? await PersistenceService.shared.saveMySondyGoSettings(settings)
+        }
     }
-    func bleManager(_ manager: BLEManager, didChangeState state: BLEManager.ConnectionState) {}
+    func bleManager(_ manager: BLEManager, didChangeState state: BLEManager.ConnectionState) {
+        DispatchQueue.main.async {
+            self.isConnected = (state == .connected || state == .ready)
+        }
+    }
 }

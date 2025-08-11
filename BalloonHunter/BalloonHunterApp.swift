@@ -15,8 +15,9 @@ struct BalloonHunterApp: App {
     
     var body: some Scene {
         WindowGroup {
-            let locationManager = LocationManager()
-            MapView(viewModel: mainViewModel, locationManager: locationManager)
+            // Use CurrentLocationService to get heading information for map orientation
+            let locationService = CurrentLocationService()
+            MapView(viewModel: mainViewModel, locationService: locationService)
                 .environmentObject(predictionInfo)
         }
     }

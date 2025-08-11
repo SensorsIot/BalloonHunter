@@ -330,6 +330,43 @@ public class PersistenceService {
         }
     }
     
+    // MARK: - MySondyGo Settings
+    
+    public func saveMySondyGoSettings(_ settings: BLEDeviceSettingsModel) async throws {
+        try await context.perform {
+            // Fetch existing or create new. This logic assumes a single settings record.
+            let fetchRequest = NSFetchRequest<MySondyGoSettings>(entityName: "MySondyGoSettings")
+            fetchRequest.fetchLimit = 1
+            
+            let entity = (try? self.context.fetch(fetchRequest).first) ?? MySondyGoSettings(context: self.context)
+            
+            entity.probeType = settings.probeType
+            entity.frequency = settings.frequency
+            entity.oledSDA = Int64(settings.oledSDA)
+            entity.oledSCL = Int64(settings.oledSCL)
+            entity.oledRST = Int64(settings.oledRST)
+            entity.ledPin = Int64(settings.ledPin)
+            entity.rs41Bandwidth = Int64(settings.RS41Bandwidth)
+            entity.m20Bandwidth = Int64(settings.M20Bandwidth)
+            entity.m10Bandwidth = Int64(settings.M10Bandwidth)
+            entity.pilotBandwidth = Int64(settings.PILOTBandwidth)
+            entity.dfmBandwidth = Int64(settings.DFMBandwidth)
+            entity.callSign = settings.callSign
+            entity.frequencyCorrection = Int64(settings.frequencyCorrection)
+            entity.batPin = Int64(settings.batPin)
+            entity.batMin = Int64(settings.batMin)
+            entity.batMax = Int64(settings.batMax)
+            entity.batType = Int64(settings.batType)
+            entity.lcdType = Int64(settings.lcdType)
+            entity.nameType = Int64(settings.nameType)
+            entity.buzPin = Int64(settings.buzPin)
+            entity.softwareVersion = settings.softwareVersion
+            entity.dateSaved = Date()
+        }
+        try await saveContext()
+        print("[PersistenceService] Saved MySondyGo settings.")
+    }
+    
     // You may add additional fetch-all/clear methods as needed for compliance.
     
     // MARK: - Helper
@@ -346,3 +383,4 @@ public class PersistenceService {
         }
     }
 }
+

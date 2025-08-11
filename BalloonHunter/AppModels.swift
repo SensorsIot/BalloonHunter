@@ -27,6 +27,13 @@ public struct TelemetryStruct: Equatable {
     }
 }
 
+extension CLLocationCoordinate2D: Equatable {
+    public static func == (lhs: CLLocationCoordinate2D, rhs: CLLocationCoordinate2D) -> Bool {
+        lhs.latitude == rhs.latitude &&
+        lhs.longitude == rhs.longitude
+    }
+}
+
 import CoreData
 
 // MARK: - Core Data Entities
@@ -62,4 +69,30 @@ public class BalloonTrack: NSManagedObject {
     @NSManaged public var sondeName: String
     @NSManaged public var dateUpdated: Date
     @NSManaged public var points: Set<BalloonTrackPoint>
+}
+
+@objc(MySondyGoSettings)
+public class MySondyGoSettings: NSManagedObject {
+    @NSManaged public var probeType: String
+    @NSManaged public var frequency: Double
+    @NSManaged public var oledSDA: Int64
+    @NSManaged public var oledSCL: Int64
+    @NSManaged public var oledRST: Int64
+    @NSManaged public var ledPin: Int64
+    @NSManaged public var rs41Bandwidth: Int64
+    @NSManaged public var m20Bandwidth: Int64
+    @NSManaged public var m10Bandwidth: Int64
+    @NSManaged public var pilotBandwidth: Int64
+    @NSManaged public var dfmBandwidth: Int64
+    @NSManaged public var callSign: String
+    @NSManaged public var frequencyCorrection: Int64
+    @NSManaged public var batPin: Int64
+    @NSManaged public var batMin: Int64
+    @NSManaged public var batMax: Int64
+    @NSManaged public var batType: Int64
+    @NSManaged public var lcdType: Int64
+    @NSManaged public var nameType: Int64
+    @NSManaged public var buzPin: Int64
+    @NSManaged public var softwareVersion: String
+    @NSManaged public var dateSaved: Date
 }
