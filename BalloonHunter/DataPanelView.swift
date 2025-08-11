@@ -40,7 +40,7 @@ public struct DataPanelView: View {
                 HStack(spacing: 6) {
                     Text("\(t.probeType)")
                         .bold()
-                    Text("#\(t.name)")
+                    Text("#\(t.sondeName)")
                         .foregroundColor(.secondary)
                     Text(String(format: "@ %.3f MHz", t.frequency))
                         .foregroundColor(.blue)
@@ -61,10 +61,9 @@ public struct DataPanelView: View {
                     Group {
                         Text("VS:")
                             .foregroundColor(.secondary)
-                        let vSpeed = t.verticalSpeed
-                        Text(String(format: "%+.1f m/s", vSpeed))
+                        Text(String(format: "%+.1f m/s", t.verticalSpeed))
                             .bold()
-                            .foregroundColor(vSpeed > 0 ? .green : (vSpeed < 0 ? .red : .primary))
+                            .foregroundColor(t.verticalSpeed > 0 ? .green : (t.verticalSpeed < 0 ? .red : .primary))
                     }
                     Spacer()
                 }
@@ -77,12 +76,12 @@ public struct DataPanelView: View {
                     Group {
                         Text("Signal:")
                             .foregroundColor(.secondary)
-                        Text("\(Int(t.signalStrength)) dB")
+                        Text("\(Int(t.rssi)) dB")
                     }
                     Group {
                         Text("Bat:")
                             .foregroundColor(.secondary)
-                        Text("\(t.batteryPercentage)%")
+                        Text("\(t.batPercentage)%")
                     }
                     Spacer()
                 }
@@ -111,12 +110,7 @@ public struct DataPanelView: View {
             .padding(.horizontal, 8)
             
             HStack(spacing: 10) {
-                if let landing = landingTime {
-                    let mins = Int((landing.timeIntervalSinceNow)/60)
-                    Text("Remaining:")
-                        .foregroundColor(.secondary)
-                    Text(mins <= 0 ? "now" : "\(mins) min")
-                }
+                remainingTimeView()
                 Spacer()
             }
             .font(.caption2)
@@ -140,4 +134,17 @@ public struct DataPanelView: View {
         .padding(.horizontal, 8)
         .shadow(radius: 4)
     }
+    
+    @ViewBuilder
+    private func remainingTimeView() -> some View {
+        if let landing = landingTime {
+            // This calculation is now valid inside a regular function body
+            let mins = Int((landing.timeIntervalSinceNow)/60)
+            
+            Text("Remaining:")
+                .foregroundColor(.secondary)
+            Text(mins <= 0 ? "now" : "\(mins) min")
+        }
+    }
 }
+

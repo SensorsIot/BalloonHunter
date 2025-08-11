@@ -76,20 +76,20 @@ class Telemetry: Equatable, CustomStringConvertible {
         self.init(
             probeType: structTelemetry.probeType,
             frequency: structTelemetry.frequency,
-            name: structTelemetry.name,
+            name: structTelemetry.sondeName,
             latitude: structTelemetry.latitude,
             longitude: structTelemetry.longitude,
             altitude: structTelemetry.altitude,
             horizontalSpeed: structTelemetry.horizontalSpeed,
             verticalSpeed: structTelemetry.verticalSpeed,
-            signalStrength: structTelemetry.signalStrength,
-            batteryPercentage: structTelemetry.batteryPercentage,
-            afc: structTelemetry.afc,
-            burstKiller: structTelemetry.burstKiller,
+            signalStrength: structTelemetry.rssi,
+            batteryPercentage: structTelemetry.batPercentage,
+            afc: structTelemetry.afcFrequency,
+            burstKiller: structTelemetry.burstKillerEnabled,
             burstKillerTime: structTelemetry.burstKillerTime,
-            batteryVoltage: structTelemetry.batteryVoltage,
-            buzzerMute: structTelemetry.buzzerMute,
-            firmwareVersion: structTelemetry.firmwareVersion
+            batteryVoltage: structTelemetry.batVoltage,
+            buzzerMute: structTelemetry.buzmute ? 1 : 0,
+            firmwareVersion: structTelemetry.softwareVersion
         )
     }
 

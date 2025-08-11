@@ -8,20 +8,20 @@ import CoreLocation
 public struct TelemetryStruct: Equatable {
     public var probeType: String = ""
     public var frequency: Double = 0.0
-    public var name: String = ""
+    public var sondeName: String = ""
     public var latitude: Double = 0.0
     public var longitude: Double = 0.0
     public var altitude: Double = 0.0
     public var horizontalSpeed: Double = 0.0
     public var verticalSpeed: Double = 0.0
-    public var signalStrength: Double = 0.0
-    public var batteryPercentage: Int = 0
-    public var afc: Int = 0
-    public var burstKiller: Bool = false
+    public var rssi: Double = 0.0
+    public var batPercentage: Int = 0
+    public var afcFrequency: Int = 0
+    public var burstKillerEnabled: Bool = false
     public var burstKillerTime: Int = 0
-    public var batteryVoltage: Int = 0
-    public var buzzerMute: Int = 0
-    public var firmwareVersion: String = ""
+    public var batVoltage: Int = 0
+    public var buzmute: Bool = false
+    public var softwareVersion: String = ""
     public var coordinate: CLLocationCoordinate2D {
         CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
     }

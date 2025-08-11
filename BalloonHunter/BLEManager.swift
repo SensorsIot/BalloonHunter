@@ -11,6 +11,153 @@ import Combine
 
 private let bleDebug = true
 
+// MARK: - Supporting Models
+
+/// Telemetry data structure containing key sensor readings
+public struct TelemetryPacket: Equatable {
+    public let probeType: String
+    public let frequency: Double
+    public let sondeName: String
+    public let latitude: Double
+    public let longitude: Double
+    public let altitude: Double
+    public let horizontalSpeed: Double
+    public let verticalSpeed: Double
+    public let rssi: Double
+    public let batPercentage: Int
+    public let afcFrequency: Int
+    public let burstKillerEnabled: Bool
+    public let burstKillerTime: Int
+    public let batVoltage: Int
+    public let buzmute: Bool
+    public let softwareVersion: String
+
+    public init(probeType: String, frequency: Double, sondeName: String, latitude: Double, longitude: Double, altitude: Double, horizontalSpeed: Double, verticalSpeed: Double, rssi: Double, batPercentage: Int, afcFrequency: Int, burstKillerEnabled: Bool, burstKillerTime: Int, batVoltage: Int, buzmute: Bool, softwareVersion: String) {
+        self.probeType = probeType
+        self.frequency = frequency
+        self.sondeName = sondeName
+        self.latitude = latitude
+        self.longitude = longitude
+        self.altitude = altitude
+        self.horizontalSpeed = horizontalSpeed
+        self.verticalSpeed = verticalSpeed
+        self.rssi = rssi
+        self.batPercentage = batPercentage
+        self.afcFrequency = afcFrequency
+        self.burstKillerEnabled = burstKillerEnabled
+        self.burstKillerTime = burstKillerTime
+        self.batVoltage = batVoltage
+        self.buzmute = buzmute
+        self.softwareVersion = softwareVersion
+    }
+}
+
+/// DeviceSettingsModel matching full specification of type 3 message.
+public struct BLEDeviceSettingsModel: Equatable {
+    public let probeType: String
+    public let frequency: Double
+    public let oledSDA: Int
+    public let oledSCL: Int
+    public let oledRST: Int
+    public let ledPin: Int
+    public let RS41Bandwidth: Int
+    public let M20Bandwidth: Int
+    public let M10Bandwidth: Int
+    public let PILOTBandwidth: Int
+    public let DFMBandwidth: Int
+    public let callSign: String
+    public let frequencyCorrection: Int
+    public let batPin: Int
+    public let batMin: Int
+    public let batMax: Int
+    public let batType: Int
+    public let lcdType: Int
+    public let nameType: Int
+    public let buzPin: Int
+    public let softwareVersion: String
+    
+    public init(
+        probeType: String, frequency: Double, oledSDA: Int, oledSCL: Int, oledRST: Int, ledPin: Int, RS41Bandwidth: Int, M20Bandwidth: Int, M10Bandwidth: Int, PILOTBandwidth: Int, DFMBandwidth: Int, callSign: String, frequencyCorrection: Int, batPin: Int, batMin: Int, batMax: Int, batType: Int, lcdType: Int, nameType: Int, buzPin: Int, softwareVersion: String
+    ) {
+        self.probeType = probeType
+        self.frequency = frequency
+        self.oledSDA = oledSDA
+        self.oledSCL = oledSCL
+        self.oledRST = oledRST
+        self.ledPin = ledPin
+        self.RS41Bandwidth = RS41Bandwidth
+        self.M20Bandwidth = M20Bandwidth
+        self.M10Bandwidth = M10Bandwidth
+        self.PILOTBandwidth = PILOTBandwidth
+        self.DFMBandwidth = DFMBandwidth
+        self.callSign = callSign
+        self.frequencyCorrection = frequencyCorrection
+        self.batPin = batPin
+        self.batMin = batMin
+        self.batMax = batMax
+        self.batType = batType
+        self.lcdType = lcdType
+        self.nameType = nameType
+        self.buzPin = buzPin
+        self.softwareVersion = softwareVersion
+    }
+}
+
+/// Type 0 Packet: Device basic info and status
+/// Fields:
+/// 0: "0" (packet type)
+/// 1: probeType (String)
+/// 2: frequency (Double)
+/// 3: RSSI (Double)
+/// 4: batPercentage (Int)
+/// 5: batVoltage (Int)
+/// 6: buzmute (Bool; 1=true, 0=false)
+/// 7: softwareVersion (String)
+public struct Type0Packet: CustomStringConvertible {
+    public let probeType: String
+    public let frequency: Double
+    public let rssi: Double
+    public let batPercentage: Int
+    public let batVoltage: Int
+    public let buzmute: Bool
+    public let softwareVersion: String
+    
+    public var description: String {
+        "Type0Packet(probeType: \(probeType), frequency: \(frequency), rssi: \(rssi), batPercentage: \(batPercentage), batVoltage: \(batVoltage), buzmute: \(buzmute), softwareVersion: \(softwareVersion))"
+    }
+}
+
+/// Type 2 Packet: Signal and status info packet
+/// Fields:
+/// 0: "2" (packet type)
+/// 1: probeType (String)
+/// 2: frequency (Double)
+/// 3: sondeName (String)
+/// 4: RSSI (Double)
+/// 5: batPercentage (Int)
+/// 6: afcFrequency (Int)
+/// 7: batVoltage (Int)
+/// 8: buzmute (Bool; 1=true, 0=false)
+/// 9: softwareVersion (String)
+public struct Type2Packet: CustomStringConvertible {
+    public let probeType: String
+    public let frequency: Double
+    public let sondeName: String
+    public let rssi: Double
+    public let batPercentage: Int
+    public let afcFrequency: Int
+    public let batVoltage: Int
+    public let buzmute: Bool
+    public let softwareVersion: String
+    
+    public var description: String {
+        "Type2Packet(probeType: \(probeType), frequency: \(frequency), sondeName: \(sondeName), rssi: \(rssi), batPercentage: \(batPercentage), afcFrequency: \(afcFrequency), batVoltage: \(batVoltage), buzmute: \(buzmute), softwareVersion: \(softwareVersion))"
+    }
+}
+
+
+// MARK: - Delegate and Manager class
+
 public protocol BLEManagerDelegate: AnyObject {
     func bleManager(_ manager: BLEManager, didUpdateTelemetry telemetry: TelemetryPacket)
     func bleManager(_ manager: BLEManager, didUpdateDeviceSettings settings: BLEDeviceSettingsModel)
@@ -245,12 +392,24 @@ public final class BLEManager: NSObject, ObservableObject {
             if bleDebug {
                 print("[BLE][Parse] Parsed telemetry: \(packet)")
             }
+            // This is the correct logic to update the main telemetry
             let telemetry = TelemetryPacket(
+                probeType: packet.probeType,
+                frequency: packet.frequency,
+                sondeName: packet.sondeName,
+                latitude: packet.latitude,
+                longitude: packet.longitude,
                 altitude: packet.altitude,
-                temperature: packet.temperature,
-                batteryVoltage: packet.batteryVoltage,
-                ascentRate: packet.ascentRate,
-                altitudeRaw: packet.altitudeRaw
+                horizontalSpeed: packet.horizontalSpeed,
+                verticalSpeed: packet.verticalSpeed,
+                rssi: packet.rssi,
+                batPercentage: packet.batPercentage,
+                afcFrequency: packet.afcFrequency,
+                burstKillerEnabled: packet.burstKillerEnabled,
+                burstKillerTime: packet.burstKillerTime,
+                batVoltage: packet.batVoltage,
+                buzmute: packet.buzmute,
+                softwareVersion: packet.softwareVersion
             )
             DispatchQueue.main.async { [weak self] in
                 guard let self = self else { return }
@@ -295,31 +454,6 @@ public final class BLEManager: NSObject, ObservableObject {
         }
     }
     
-    // MARK: - Packet Types
-    
-    /// Type 0 Packet: Device basic info and status
-    /// Fields:
-    /// 0: "0" (packet type)
-    /// 1: probeType (String)
-    /// 2: frequency (Double)
-    /// 3: RSSI (Double)
-    /// 4: batPercentage (Int)
-    /// 5: batVoltage (Int)
-    /// 6: buzmute (Bool; 1=true, 0=false)
-    /// 7: softwareVersion (String)
-    public struct Type0Packet: CustomStringConvertible {
-        public let probeType: String
-        public let frequency: Double
-        public let rssi: Double
-        public let batPercentage: Int
-        public let batVoltage: Int
-        public let buzmute: Bool
-        public let softwareVersion: String
-        
-        public var description: String {
-            "Type0Packet(probeType: \(probeType), frequency: \(frequency), rssi: \(rssi), batPercentage: \(batPercentage), batVoltage: \(batVoltage), buzmute: \(buzmute), softwareVersion: \(softwareVersion))"
-        }
-    }
     
     private func parseType0(_ fields: [String]) -> Type0Packet? {
         guard fields.count >= 8 else {
@@ -377,76 +511,7 @@ public final class BLEManager: NSObject, ObservableObject {
     }
     
     /// Type 1 Packet: Telemetry data packet
-    /// Fields:
-    /// 0: "1" (packet type)
-    /// 1: ascentRate (Float)
-    /// 2: groundSpeed (Double)
-    /// 3: altitudeRaw (UInt32)
-    /// 4: altitudeFiltered (Double)
-    /// 5: latitude (Double)
-    /// 6: altitude (Double)
-    /// 7: temperature (Double)
-    /// 8: humidity (Double)
-    /// 9: pressure (Double)
-    /// 10: windSpeed (Double)
-    /// 11: windDirection (Double)
-    /// 12: gpsSats (Int)
-    /// 13: fixType (Int)
-    /// 14: batteryVoltage (Double)
-    /// 15: buzMute (Bool, from Int)
-    /// 16: burstKillerEnabled (Bool, from Int)
-    /// 17: unknownSetting18 (Int)
-    /// 18: unknownSetting19 (Int)
-    /// 19: unknownSetting20 (Int)
-    public struct Type1Packet: CustomStringConvertible {
-        public let ascentRate: Float
-        public let groundSpeed: Double
-        public let altitudeRaw: UInt32
-        public let altitudeFiltered: Double
-        public let latitude: Double
-        public let altitude: Double
-        public let temperature: Double
-        public let humidity: Double
-        public let pressure: Double
-        public let windSpeed: Double
-        public let windDirection: Double
-        public let gpsSats: Int
-        public let fixType: Int
-        public let batteryVoltage: Double
-        public let buzMute: Bool
-        public let burstKillerEnabled: Bool
-        public let unknownSetting18: Int
-        public let unknownSetting19: Int
-        public let unknownSetting20: Int
-        
-        public var description: String {
-            """
-            Type1Packet(
-                ascentRate: \(ascentRate),
-                groundSpeed: \(groundSpeed),
-                altitudeRaw: \(altitudeRaw),
-                altitudeFiltered: \(altitudeFiltered),
-                latitude: \(latitude),
-                altitude: \(altitude),
-                temperature: \(temperature),
-                humidity: \(humidity),
-                pressure: \(pressure),
-                windSpeed: \(windSpeed),
-                windDirection: \(windDirection),
-                gpsSats: \(gpsSats),
-                fixType: \(fixType),
-                batteryVoltage: \(batteryVoltage),
-                buzMute: \(buzMute),
-                burstKillerEnabled: \(burstKillerEnabled),
-                unknownSetting18: \(unknownSetting18),
-                unknownSetting19: \(unknownSetting19),
-                unknownSetting20: \(unknownSetting20)
-            )
-            """
-        }
-    }
-    
-    private func parseType1(_ fields: [String]) -> Type1Packet? {
+    private func parseType1(_ fields: [String]) -> TelemetryPacket? {
         guard fields.count >= 20 else {
             if bleDebug { print("[BLE][Parse] Type1 packet insufficient fields, got \(fields.count), need at least 20") }
             return nil
@@ -457,22 +522,10 @@ public final class BLEManager: NSObject, ObservableObject {
             if bleDebug { print("[BLE][Parse] Failed to parse Int at index \(idx) from '\(fields[idx])'") }
             return nil
         }
-        func uint32At(_ idx: Int) -> UInt32? {
-            guard idx < fields.count else { return nil }
-            if let val = UInt32(fields[idx]) { return val }
-            if bleDebug { print("[BLE][Parse] Failed to parse UInt32 at index \(idx) from '\(fields[idx])'") }
-            return nil
-        }
         func doubleAt(_ idx: Int) -> Double? {
             guard idx < fields.count else { return nil }
             if let val = Double(fields[idx]) { return val }
             if bleDebug { print("[BLE][Parse] Failed to parse Double at index \(idx) from '\(fields[idx])'") }
-            return nil
-        }
-        func floatAt(_ idx: Int) -> Float? {
-            guard idx < fields.count else { return nil }
-            if let val = Float(fields[idx]) { return val }
-            if bleDebug { print("[BLE][Parse] Failed to parse Float at index \(idx) from '\(fields[idx])'") }
             return nil
         }
         func boolAt(_ idx: Int) -> Bool {
@@ -481,82 +534,61 @@ public final class BLEManager: NSObject, ObservableObject {
             if bleDebug { print("[BLE][Parse] Failed to parse Bool at index \(idx) from '\(fields[idx])'") }
             return false
         }
+        func stringAt(_ idx: Int) -> String {
+            guard idx < fields.count else { return "" }
+            return fields[idx]
+        }
         
-        guard let ascentRate = floatAt(1),
-              let groundSpeed = doubleAt(2),
-              let altitudeRaw = uint32At(3),
-              let altitudeFiltered = doubleAt(4),
-              let latitude = doubleAt(5),
+        let probeType = stringAt(1)
+        guard let frequency = doubleAt(2) else { return nil }
+        let sondeName = stringAt(3)
+        guard let latitude = doubleAt(4),
+              let longitude = doubleAt(5),
               let altitude = doubleAt(6),
-              let temperature = doubleAt(7),
-              let humidity = doubleAt(8),
-              let pressure = doubleAt(9),
-              let windSpeed = doubleAt(10),
-              let windDirection = doubleAt(11),
-              let gpsSats = intAt(12),
-              let fixType = intAt(13),
-              let batteryVoltage = doubleAt(14)
+              let horizontalSpeed = doubleAt(7),
+              let verticalSpeed = doubleAt(8),
+              let rssi = doubleAt(9),
+              let batPercentage = intAt(10),
+              let afcFrequency = intAt(11)
         else {
             return nil
         }
         
-        let buzMute = boolAt(15)
-        let burstKillerEnabled = boolAt(16)
-        let unknownSetting18 = intAt(17) ?? 0
-        let unknownSetting19 = intAt(18) ?? 0
-        let unknownSetting20 = intAt(19) ?? 0
+        let burstKillerEnabled = boolAt(12)
+        guard let burstKillerTime = intAt(13),
+              let batVoltage = intAt(14)
+        else {
+            return nil
+        }
         
-        return Type1Packet(
-            ascentRate: ascentRate,
-            groundSpeed: groundSpeed,
-            altitudeRaw: altitudeRaw,
-            altitudeFiltered: altitudeFiltered,
+        let buzmute = boolAt(15)
+        // No reserved fields are used in TelemetryPacket struct
+        // let reserved1 = intAt(16) ?? 0
+        // let reserved2 = intAt(17) ?? 0
+        // let reserved3 = intAt(18) ?? 0
+        let softwareVersion = stringAt(19)
+        
+        return TelemetryPacket(
+            probeType: probeType,
+            frequency: frequency,
+            sondeName: sondeName,
             latitude: latitude,
+            longitude: longitude,
             altitude: altitude,
-            temperature: temperature,
-            humidity: humidity,
-            pressure: pressure,
-            windSpeed: windSpeed,
-            windDirection: windDirection,
-            gpsSats: gpsSats,
-            fixType: fixType,
-            batteryVoltage: batteryVoltage,
-            buzMute: buzMute,
+            horizontalSpeed: horizontalSpeed,
+            verticalSpeed: verticalSpeed,
+            rssi: rssi,
+            batPercentage: batPercentage,
+            afcFrequency: afcFrequency,
             burstKillerEnabled: burstKillerEnabled,
-            unknownSetting18: unknownSetting18,
-            unknownSetting19: unknownSetting19,
-            unknownSetting20: unknownSetting20
+            burstKillerTime: burstKillerTime,
+            batVoltage: batVoltage,
+            buzmute: buzmute,
+            softwareVersion: softwareVersion
         )
     }
     
     /// Type 2 Packet: Signal and status info packet
-    /// Fields:
-    /// 0: "2" (packet type)
-    /// 1: sondeName (String)
-    /// 2: RSSI (Double)
-    /// 3: batVoltage (Int)
-    /// 4: burstKillerEnabled (Bool, Int=1/0)
-    /// 5: buzmute (Bool, Int=1/0)
-    /// 6: 4_5GHz (Bool, Int=1/0)
-    /// 7: rssiMax (Double)
-    /// 8: rssiMin (Double)
-    /// 9: rssiAvg (Double)
-    public struct Type2Packet: CustomStringConvertible {
-        public let sondeName: String
-        public let rssi: Double
-        public let batVoltage: Int
-        public let burstKillerEnabled: Bool
-        public let buzmute: Bool
-        public let fourPointFiveGHz: Bool
-        public let rssiMax: Double
-        public let rssiMin: Double
-        public let rssiAvg: Double
-        
-        public var description: String {
-            "Type2Packet(sondeName: \(sondeName), rssi: \(rssi), batVoltage: \(batVoltage), burstKillerEnabled: \(burstKillerEnabled), buzmute: \(buzmute), 4_5GHz: \(fourPointFiveGHz), rssiMax: \(rssiMax), rssiMin: \(rssiMin), rssiAvg: \(rssiAvg))"
-        }
-    }
-    
     private func parseType2(_ fields: [String]) -> Type2Packet? {
         guard fields.count >= 10 else {
             if bleDebug { print("[BLE][Parse] Type2 packet insufficient fields, got \(fields.count), need at least 10") }
@@ -586,148 +618,81 @@ public final class BLEManager: NSObject, ObservableObject {
             return fields[idx]
         }
         
-        let sondeName = stringAt(1)
-        guard let rssi = doubleAt(2),
-              let batVoltage = intAt(3)
+        let probeType = stringAt(1)
+        guard let frequency = doubleAt(2) else { return nil }
+        let sondeName = stringAt(3)
+        guard let rssi = doubleAt(4),
+              let batPercentage = intAt(5),
+              let afcFrequency = intAt(6),
+              let batVoltage = intAt(7)
         else {
             return nil
         }
-        let burstKillerEnabled = boolAt(4)
-        let buzmute = boolAt(5)
-        let fourPointFiveGHz = boolAt(6)
-        
-        guard let rssiMax = doubleAt(7),
-              let rssiMin = doubleAt(8),
-              let rssiAvg = doubleAt(9)
-        else {
-            return nil
-        }
+        let buzmute = boolAt(8)
+        let softwareVersion = stringAt(9)
         
         return Type2Packet(
+            probeType: probeType,
+            frequency: frequency,
             sondeName: sondeName,
             rssi: rssi,
+            batPercentage: batPercentage,
+            afcFrequency: afcFrequency,
             batVoltage: batVoltage,
-            burstKillerEnabled: burstKillerEnabled,
             buzmute: buzmute,
-            fourPointFiveGHz: fourPointFiveGHz,
-            rssiMax: rssiMax,
-            rssiMin: rssiMin,
-            rssiAvg: rssiAvg
+            softwareVersion: softwareVersion
         )
     }
     
     /// Type 3 Packet: Device settings packet
-    ///
-    /// Field order and types:
-    /// 0: packet type "3"
-    /// 1: probeType (String)
-    /// 2: frequency (Double)
-    /// 3: oledSDA (UInt8)
-    /// 4: oledSCL (UInt8)
-    /// 5: oledRST (UInt8)
-    /// 6: ledPin (UInt8)
-    /// 7: RS41Bandwidth (UInt8)
-    /// 8: M20Bandwidth (UInt8)
-    /// 9: M10Bandwidth (UInt8)
-    /// 10: PILOTBandwidth (UInt8)
-    /// 11: DFMBandwidth (UInt8)
-    /// 12: callSign (String)
-    /// 13: frequencyCorrection (Int)
-    /// 14: batPin (UInt16)
-    /// 15: batMin (UInt16)
-    /// 16: batMax (UInt16)
-    /// 17: batType (UInt16)
-    /// 18: lcdType (UInt8)
-    /// 19: nameType (UInt8)
-    /// 20: buzPin (UInt8)
-    /// 21: softwareVersion (String)
     private func parseType3(_ fields: [String]) -> BLEDeviceSettingsModel? {
         guard fields.count >= 22 else {
             if bleDebug { print("[BLE][Parse] Device settings packet with insufficient fields (need at least 22): \(fields.count)") }
             return nil
         }
         
-        // Helper to parse UInt8 from Int with range check and debug
-        func uint8At(_ idx: Int) -> UInt8 {
-            guard idx < fields.count else {
-                if bleDebug { print("[BLE][Parse] Missing field for UInt8 at index \(idx)") }
-                return 0
-            }
-            if let val = Int(fields[idx]), val >= 0 && val <= 255 {
-                return UInt8(val)
-            } else {
-                if bleDebug { print("[BLE][Parse] Failed to parse UInt8 at index \(idx) from '\(fields[idx])'") }
-                return 0
-            }
+        func intAt(_ idx: Int) -> Int? {
+            guard idx < fields.count else { return nil }
+            if let val = Int(fields[idx]) { return val }
+            if bleDebug { print("[BLE][Parse] Failed to parse Int at index \(idx) from '\(fields[idx])'") }
+            return nil
         }
-        // Helper to parse UInt16 from Int with range check and debug
-        func uint16At(_ idx: Int) -> UInt16 {
-            guard idx < fields.count else {
-                if bleDebug { print("[BLE][Parse] Missing field for UInt16 at index \(idx)") }
-                return 0
-            }
-            if let val = Int(fields[idx]), val >= 0 && val <= UInt16.max {
-                return UInt16(val)
-            } else {
-                if bleDebug { print("[BLE][Parse] Failed to parse UInt16 at index \(idx) from '\(fields[idx])'") }
-                return 0
-            }
+        func doubleAt(_ idx: Int) -> Double? {
+            guard idx < fields.count else { return nil }
+            if let val = Double(fields[idx]) { return val }
+            if bleDebug { print("[BLE][Parse] Failed to parse Double at index \(idx) from '\(fields[idx])'") }
+            return nil
         }
-        // Helper to parse Int with debug
-        func intAt(_ idx: Int) -> Int {
-            guard idx < fields.count else {
-                if bleDebug { print("[BLE][Parse] Missing field for Int at index \(idx)") }
-                return 0
-            }
-            if let val = Int(fields[idx]) {
-                return val
-            } else {
-                if bleDebug { print("[BLE][Parse] Failed to parse Int at index \(idx) from '\(fields[idx])'") }
-                return 0
-            }
-        }
-        // Helper to parse Double with debug
-        func doubleAt(_ idx: Int) -> Double {
-            guard idx < fields.count else {
-                if bleDebug { print("[BLE][Parse] Missing field for Double at index \(idx)") }
-                return 0.0
-            }
-            if let val = Double(fields[idx]) {
-                return val
-            } else {
-                if bleDebug { print("[BLE][Parse] Failed to parse Double at index \(idx) from '\(fields[idx])'") }
-                return 0.0
-            }
-        }
-        // Helper to parse String safely
         func stringAt(_ idx: Int) -> String {
-            guard idx < fields.count else {
-                if bleDebug { print("[BLE][Parse] Missing string at index \(idx)") }
-                return ""
-            }
+            guard idx < fields.count else { return "" }
             return fields[idx]
         }
         
         let probeType = stringAt(1)
-        let frequency = doubleAt(2)
-        let oledSDA = uint8At(3)
-        let oledSCL = uint8At(4)
-        let oledRST = uint8At(5)
-        let ledPin = uint8At(6)
-        let RS41Bandwidth = uint8At(7)
-        let M20Bandwidth = uint8At(8)
-        let M10Bandwidth = uint8At(9)
-        let PILOTBandwidth = uint8At(10)
-        let DFMBandwidth = uint8At(11)
+        guard let frequency = doubleAt(2),
+              let oledSDA = intAt(3),
+              let oledSCL = intAt(4),
+              let oledRST = intAt(5),
+              let ledPin = intAt(6),
+              let RS41Bandwidth = intAt(7),
+              let M20Bandwidth = intAt(8),
+              let M10Bandwidth = intAt(9),
+              let PILOTBandwidth = intAt(10),
+              let DFMBandwidth = intAt(11)
+        else { return nil }
+        
         let callSign = stringAt(12)
-        let frequencyCorrection = intAt(13)
-        let batPin = uint16At(14)
-        let batMin = uint16At(15)
-        let batMax = uint16At(16)
-        let batType = uint16At(17)
-        let lcdType = uint8At(18)
-        let nameType = uint8At(19)
-        let buzPin = uint8At(20)
+        
+        guard let frequencyCorrection = intAt(13),
+              let batPin = intAt(14),
+              let batMin = intAt(15),
+              let batMax = intAt(16),
+              let batType = intAt(17),
+              let lcdType = intAt(18),
+              let nameType = intAt(19),
+              let buzPin = intAt(20)
+        else { return nil }
+        
         let softwareVersion = stringAt(21)
         
         return BLEDeviceSettingsModel(
@@ -757,13 +722,11 @@ public final class BLEManager: NSObject, ObservableObject {
 }
 
 // MARK: - CBCentralManagerDelegate
-
 extension BLEManager: CBCentralManagerDelegate {
     public func centralManagerDidUpdateState(_ central: CBCentralManager) {
         switch central.state {
         case .poweredOn:
             if bleDebug { print("[BLE] centralManagerDidUpdateState: poweredOn") }
-            // Start scan automatically if not already connecting/connected/scanning/ready
             DispatchQueue.main.async { [weak self] in
                 guard let self = self else { return }
                 if case .disconnected = self.connectionState {
@@ -804,7 +767,6 @@ extension BLEManager: CBCentralManagerDelegate {
         }
         
         guard uartPeripheral == nil else {
-            // Already connected to a device, ignore others
             if bleDebug { print("[BLE] Already connected, ignoring discovered peripheral") }
             return
         }
@@ -853,7 +815,6 @@ extension BLEManager: CBCentralManagerDelegate {
 }
 
 // MARK: - CBPeripheralDelegate
-
 extension BLEManager: CBPeripheralDelegate {
     public func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
         if let error = error {
@@ -933,17 +894,12 @@ extension BLEManager: CBPeripheralDelegate {
     public func peripheral(_ peripheral: CBPeripheral,
                            didUpdateValueFor characteristic: CBCharacteristic,
                            error: Error?) {
-        // Removed debug print: if bleDebug { print("[BLE] didUpdateValueFor called for characteristic \(characteristic.uuid.uuidString)") }
-        
         if let error = error {
             if bleDebug { print("[BLE] Error receiving data: \(error.localizedDescription)") }
-            // Log error but do not disconnect immediately
             return
         }
         
         guard let data = characteristic.value else { return }
-        
-        // Removed debug print: if bleDebug { print("[BLE] Raw incoming data: " + data.map { String(format: "%02X", $0) }.joined(separator: " ")) }
         
         if characteristic.uuid == Self.uartRXCharacteristicUUID {
             handleIncomingData(data)
@@ -951,132 +907,7 @@ extension BLEManager: CBPeripheralDelegate {
     }
 }
 
-// MARK: - Supporting Models
-
-/// Telemetry data structure containing key sensor readings
-public struct TelemetryPacket: Equatable {
-    public let altitude: Double
-    public let temperature: Double
-    public let batteryVoltage: Double
-    public let ascentRate: Float
-    public let altitudeRaw: UInt32
-    
-    public init(altitude: Double, temperature: Double, batteryVoltage: Double, ascentRate: Float, altitudeRaw: UInt32) {
-        self.altitude = altitude
-        self.temperature = temperature
-        self.batteryVoltage = batteryVoltage
-        self.ascentRate = ascentRate
-        self.altitudeRaw = altitudeRaw
-    }
-}
-
-/// Basic device settings structure (simplified)
-public struct BLEDeviceSettings: Equatable {
-    public let deviceMode: UInt8
-    public let sampleRateHz: Double
-    
-    public init(deviceMode: UInt8, sampleRateHz: Double) {
-        self.deviceMode = deviceMode
-        self.sampleRateHz = sampleRateHz
-    }
-}
-
-/// DeviceSettingsModel matching full specification of type 3 message.
-///
-/// Fields:
-/// - probeType: String identifying the probe type
-/// - frequency: Double frequency value (MHz)
-/// - oledSDA: UInt8 OLED SDA pin
-/// - oledSCL: UInt8 OLED SCL pin
-/// - oledRST: UInt8 OLED Reset pin
-/// - ledPin: UInt8 LED pin
-/// - RS41Bandwidth: UInt8 RS41 bandwidth setting
-/// - M20Bandwidth: UInt8 M20 bandwidth setting
-/// - M10Bandwidth: UInt8 M10 bandwidth setting
-/// - PILOTBandwidth: UInt8 PILOT bandwidth setting
-/// - DFMBandwidth: UInt8 DFM bandwidth setting
-/// - callSign: String call sign of device
-/// - frequencyCorrection: Int frequency correction value
-/// - batPin: UInt16 battery pin
-/// - batMin: UInt16 battery minimum voltage
-/// - batMax: UInt16 battery maximum voltage
-/// - batType: UInt16 battery type
-/// - lcdType: UInt8 LCD type
-/// - nameType: UInt8 name type
-/// - buzPin: UInt8 buzzer pin
-/// - softwareVersion: String version of software on device
-public struct BLEDeviceSettingsModel: Equatable {
-    public let probeType: String
-    public let frequency: Double
-    public let oledSDA: UInt8
-    public let oledSCL: UInt8
-    public let oledRST: UInt8
-    public let ledPin: UInt8
-    public let RS41Bandwidth: UInt8
-    public let M20Bandwidth: UInt8
-    public let M10Bandwidth: UInt8
-    public let PILOTBandwidth: UInt8
-    public let DFMBandwidth: UInt8
-    public let callSign: String
-    public let frequencyCorrection: Int
-    public let batPin: UInt16
-    public let batMin: UInt16
-    public let batMax: UInt16
-    public let batType: UInt16
-    public let lcdType: UInt8
-    public let nameType: UInt8
-    public let buzPin: UInt8
-    public let softwareVersion: String
-    
-    public init(
-        probeType: String,
-        frequency: Double,
-        oledSDA: UInt8,
-        oledSCL: UInt8,
-        oledRST: UInt8,
-        ledPin: UInt8,
-        RS41Bandwidth: UInt8,
-        M20Bandwidth: UInt8,
-        M10Bandwidth: UInt8,
-        PILOTBandwidth: UInt8,
-        DFMBandwidth: UInt8,
-        callSign: String,
-        frequencyCorrection: Int,
-        batPin: UInt16,
-        batMin: UInt16,
-        batMax: UInt16,
-        batType: UInt16,
-        lcdType: UInt8,
-        nameType: UInt8,
-        buzPin: UInt8,
-        softwareVersion: String
-    ) {
-        self.probeType = probeType
-        self.frequency = frequency
-        self.oledSDA = oledSDA
-        self.oledSCL = oledSCL
-        self.oledRST = oledRST
-        self.ledPin = ledPin
-        self.RS41Bandwidth = RS41Bandwidth
-        self.M20Bandwidth = M20Bandwidth
-        self.M10Bandwidth = M10Bandwidth
-        self.PILOTBandwidth = PILOTBandwidth
-        self.DFMBandwidth = DFMBandwidth
-        self.callSign = callSign
-        self.frequencyCorrection = frequencyCorrection
-        self.batPin = batPin
-        self.batMin = batMin
-        self.batMax = batMax
-        self.batType = batType
-        self.lcdType = lcdType
-        self.nameType = nameType
-        self.buzPin = buzPin
-        self.softwareVersion = softwareVersion
-    }
-}
-
 // MARK: - Errors
-
 public enum BLEError: LocalizedError {
     case bluetoothPoweredOff
     case bluetoothUnauthorized

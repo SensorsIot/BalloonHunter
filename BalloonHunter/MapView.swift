@@ -58,25 +58,9 @@ public struct MapView: View {
     @State private var mapAnnotations: [MapAnnotationItem] = []
     
     private var panelTelemetry: TelemetryStruct? {
-        guard let packet = viewModel.latestTelemetry else { return nil }
-        return TelemetryStruct(
-            probeType: packet.probeType,
-            frequency: packet.frequency,
-            name: packet.name,
-            latitude: packet.latitude,
-            longitude: packet.longitude,
-            altitude: packet.altitude,
-            horizontalSpeed: packet.horizontalSpeed,
-            verticalSpeed: packet.verticalSpeed,
-            signalStrength: packet.signalStrength,
-            batteryPercentage: packet.batteryPercentage,
-            afc: packet.afc,
-            burstKiller: packet.burstKiller,
-            burstKillerTime: packet.burstKillerTime,
-            batteryVoltage: packet.batteryVoltage,
-            buzzerMute: packet.buzzerMute,
-            firmwareVersion: packet.firmwareVersion
-        )
+        // Direct assignment is used here to avoid recreating the struct with incorrect property names.
+        // The TelemetryStruct is already created and updated in the BLEManager.
+        viewModel.latestTelemetry
     }
     
     @EnvironmentObject private var predictionInfo: PredictionInfo
