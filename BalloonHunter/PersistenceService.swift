@@ -82,7 +82,7 @@ public class PersistenceService {
     /// Saves DeviceSettingsModel (all fields) asynchronously.
     public func saveDeviceSettings(_ settings: DeviceSettingsModel) async throws {
         do {
-            try await context.perform {
+            await context.perform {
                 // TODO: Update Core Data entity "DeviceSettings" to match all struct fields.
                 let entity = NSEntityDescription.insertNewObject(forEntityName: "DeviceSettings", into: self.context)
                 entity.setValue(settings.sondeType, forKey: "sondeType")
@@ -108,7 +108,7 @@ public class PersistenceService {
                 let fetch = NSFetchRequest<NSManagedObject>(entityName: "DeviceSettings")
                 fetch.sortDescriptors = [NSSortDescriptor(key: "dateSaved", ascending: false)]
                 fetch.fetchLimit = 1
-                guard let entity = try? self.context.fetch(fetch).first else {
+                guard let entity = try self.context.fetch(fetch).first else {
                     // Return default if fetch fails or no data found
                     let settings = DeviceSettingsModel.default
                     print("[DEBUG] Loaded DeviceSettings:", settings)
@@ -137,7 +137,7 @@ public class PersistenceService {
     /// Saves TelemetryTransferData as a new entity asynchronously.
     public func saveTelemetryTransfer(_ telemetry: TelemetryTransferData) async throws {
         do {
-            try await context.perform {
+            await context.perform {
                 // TODO: Create Core Data entity "TelemetryTransferData" with all fields.
                 let entity = NSEntityDescription.insertNewObject(forEntityName: "TelemetryTransferData", into: self.context)
                 entity.setValue(telemetry.latitude, forKey: "latitude")
@@ -162,7 +162,7 @@ public class PersistenceService {
                 let fetch = NSFetchRequest<NSManagedObject>(entityName: "TelemetryTransferData")
                 fetch.sortDescriptors = [NSSortDescriptor(key: "timestamp", ascending: false)]
                 fetch.fetchLimit = 1
-                guard let entity = try? self.context.fetch(fetch).first else {
+                guard let entity = try self.context.fetch(fetch).first else {
                     // Return nil if fetch fails or no data found
                     return nil
                 }
@@ -186,7 +186,7 @@ public class PersistenceService {
     /// Saves SondeSettingsTransferData as a new entity asynchronously.
     public func saveSondeSettingsTransfer(_ transfer: SondeSettingsTransferData) async throws {
         do {
-            try await context.perform {
+            await context.perform {
                 // TODO: Create Core Data entity "SondeSettingsTransferData" with all fields.
                 let entity = NSEntityDescription.insertNewObject(forEntityName: "SondeSettingsTransferData", into: self.context)
                 entity.setValue(transfer.sondeType, forKey: "sondeType")
@@ -209,7 +209,7 @@ public class PersistenceService {
                 // TODO: Update Core Data entity "SondeSettingsTransferData".
                 let fetch = NSFetchRequest<NSManagedObject>(entityName: "SondeSettingsTransferData")
                 fetch.fetchLimit = 1
-                guard let entity = try? self.context.fetch(fetch).first else {
+                guard let entity = try self.context.fetch(fetch).first else {
                     // Return nil if fetch fails or no data found
                     return nil
                 }
@@ -233,16 +233,17 @@ public class PersistenceService {
     
     public func saveForecastSettings(_ settings: ForecastSettingsModel) async throws {
         do {
-            try await context.perform {
-                let entity = NSEntityDescription.insertNewObject(forEntityName: "ForecastSettings", into: self.context)
-                entity.setValue(settings.burstAltitude, forKey: "burstAltitude")
-                entity.setValue(settings.ascentRate, forKey: "ascentRate")
-                entity.setValue(settings.descentRate, forKey: "descentRate")
-                entity.setValue(Date(), forKey: "dateSaved")
+            await context.perform {
+                let fetchRequest = NSFetchRequest<ForecastSettings>(entityName: "ForecastSettings")
+                // Assuming one settings object to be updated, or create a new one.
+                let entity = (try? self.context.fetch(fetchRequest).first) ?? ForecastSettings(context: self.context)
+                entity.burstAltitude = settings.burstAltitude
+                entity.ascentRate = settings.ascentRate
+                entity.descentRate = settings.descentRate
+                entity.dateSaved = Date()
             }
-            try await saveContext()
             print("[PersistenceService] Saved ForecastSettingsModel: \(settings)")
-            print("[DEBUG] Saved ForecastSettings:", settings)
+            try await saveContext()
         } catch {
             print("[PersistenceService] Failed to save ForecastSettingsModel: \(error.localizedDescription)")
         }
@@ -250,21 +251,21 @@ public class PersistenceService {
     public func fetchLatestForecastSettings() async throws -> ForecastSettingsModel {
         do {
             return try await context.perform {
-                let fetch = NSFetchRequest<NSManagedObject>(entityName: "ForecastSettings")
+                let fetch = NSFetchRequest<ForecastSettings>(entityName: "ForecastSettings")
                 fetch.sortDescriptors = [NSSortDescriptor(key: "dateSaved", ascending: false)]
                 fetch.fetchLimit = 1
-                guard let entity = try? self.context.fetch(fetch).first else {
+                guard let entity = try self.context.fetch(fetch).first else {
                     // Return default if fetch fails or no data found
                     let settings = ForecastSettingsModel.default
-                    print("[DEBUG] Loaded ForecastSettings:", settings)
+                    print("[PersistenceService] No forecast settings found, returning default.")
                     return settings
                 }
                 let settings = ForecastSettingsModel(
-                    burstAltitude: entity.value(forKey: "burstAltitude") as? Double ?? 35000,
-                    ascentRate: entity.value(forKey: "ascentRate") as? Double ?? 5,
-                    descentRate: entity.value(forKey: "descentRate") as? Double ?? 5
+                    burstAltitude: entity.burstAltitude,
+                    ascentRate: entity.ascentRate,
+                    descentRate: entity.descentRate
                 )
-                print("[DEBUG] Loaded ForecastSettings:", settings)
+                print("[PersistenceService] Loaded ForecastSettings: \(settings)")
                 return settings
             }
         } catch {
@@ -280,21 +281,24 @@ public class PersistenceService {
     public func saveBalloonTrack(_ track: BalloonTrackModel) async throws {
         do {
             try await context.perform {
-                let trackEntity = NSEntityDescription.insertNewObject(forEntityName: "BalloonTrack", into: self.context)
-                trackEntity.setValue(track.sondeName, forKey: "sondeName")
-                trackEntity.setValue(track.dateUpdated, forKey: "dateUpdated")
+                let trackEntity = BalloonTrack(context: self.context)
+                trackEntity.sondeName = track.sondeName
+                trackEntity.dateUpdated = track.dateUpdated
+                
+                var pointsSet = Set<BalloonTrackPoint>()
                 // Save points as child entities
                 for point in track.points {
-                    let pointEntity = NSEntityDescription.insertNewObject(forEntityName: "BalloonTrackPoint", into: self.context)
-                    pointEntity.setValue(point.latitude, forKey: "latitude")
-                    pointEntity.setValue(point.longitude, forKey: "longitude")
-                    pointEntity.setValue(point.altitude, forKey: "altitude")
-                    pointEntity.setValue(point.timestamp, forKey: "timestamp")
-                    pointEntity.setValue(trackEntity, forKey: "track")
+                    let pointEntity = BalloonTrackPoint(context: self.context)
+                    pointEntity.latitude = point.latitude
+                    pointEntity.longitude = point.longitude
+                    pointEntity.altitude = point.altitude
+                    pointEntity.timestamp = point.timestamp
+                    pointsSet.insert(pointEntity)
                 }
+                trackEntity.points = pointsSet
             }
-            try await saveContext()
             print("[PersistenceService] Saved BalloonTrackModel for sonde '" + track.sondeName + "' with \(track.points.count) points.")
+            try await saveContext()
         } catch {
             print("[PersistenceService] Failed to save BalloonTrackModel: \(error.localizedDescription)")
         }
@@ -302,24 +306,23 @@ public class PersistenceService {
     public func fetchBalloonTrack(forSonde sondeName: String) async throws -> BalloonTrackModel? {
         do {
             return try await context.perform {
-                let fetch = NSFetchRequest<NSManagedObject>(entityName: "BalloonTrack")
+                let fetch = NSFetchRequest<BalloonTrack>(entityName: "BalloonTrack")
                 fetch.predicate = NSPredicate(format: "sondeName == %@", sondeName)
                 fetch.sortDescriptors = [NSSortDescriptor(key: "dateUpdated", ascending: false)]
                 fetch.fetchLimit = 1
-                guard let trackEntity = try? self.context.fetch(fetch).first else {
+                guard let trackEntity = try self.context.fetch(fetch).first else {
                     // Return nil if fetch fails or no data found
                     return nil
                 }
-                let sondeName = trackEntity.value(forKey: "sondeName") as? String ?? ""
-                let dateUpdated = trackEntity.value(forKey: "dateUpdated") as? Date ?? Date()
+                let sondeName = trackEntity.sondeName
+                let dateUpdated = trackEntity.dateUpdated
                 // Fetch child points
-                let pointsSet = trackEntity.value(forKey: "points") as? Set<NSManagedObject> ?? []
-                let points = pointsSet.compactMap { pt in
+                let points = trackEntity.points.map { pt in
                     TrackPoint(
-                        latitude: pt.value(forKey: "latitude") as? Double ?? 0,
-                        longitude: pt.value(forKey: "longitude") as? Double ?? 0,
-                        altitude: pt.value(forKey: "altitude") as? Double ?? 0,
-                        timestamp: pt.value(forKey: "timestamp") as? Date ?? Date()
+                        latitude: pt.latitude,
+                        longitude: pt.longitude,
+                        altitude: pt.altitude,
+                        timestamp: pt.timestamp
                     )
                 }.sorted { $0.timestamp < $1.timestamp }
                 return BalloonTrackModel(sondeName: sondeName, points: points, dateUpdated: dateUpdated)
@@ -363,23 +366,16 @@ public class PersistenceService {
             entity.softwareVersion = settings.softwareVersion
             entity.dateSaved = Date()
         }
-        try await saveContext()
         print("[PersistenceService] Saved MySondyGo settings.")
+        try await saveContext()
     }
     
     // You may add additional fetch-all/clear methods as needed for compliance.
     
     // MARK: - Helper
     private func saveContext() async throws {
-        try await context.perform {
-            if self.context.hasChanges {
-                do {
-                    try self.context.save()
-                } catch {
-                    print("[PersistenceService] Failed to save context: \(error.localizedDescription)")
-                    throw error
-                }
-            }
+        if context.hasChanges {
+            try await context.perform { try self.context.save() }
         }
     }
 }

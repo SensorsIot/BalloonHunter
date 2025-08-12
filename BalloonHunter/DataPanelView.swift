@@ -1,6 +1,33 @@
 import SwiftUI
 import CoreLocation
 
+/// A reusable row view that displays a label and a content view.
+/// Used for presenting labeled information in a consistent style.
+public struct InfoRowView<Content: View>: View {
+    /// The label text for the row.
+    public let label: String
+    /// The content view to display alongside the label.
+    public let content: () -> Content
+    
+    /// Creates an InfoRowView with a label and content view.
+    /// - Parameters:
+    ///   - label: The label string.
+    ///   - content: A view builder that provides the content view.
+    public init(label: String, @ViewBuilder content: @escaping () -> Content) {
+        self.label = label
+        self.content = content
+    }
+    
+    public var body: some View {
+        HStack {
+            Text(label)
+                .fontWeight(.semibold)
+            Spacer()
+            content()
+        }
+    }
+}
+
 public struct DataPanelView: View {
     public let isBleConnected: Bool
     @Binding public var isBuzzerOn: Bool
@@ -106,3 +133,4 @@ public struct DataPanelView: View {
         }
     }
 }
+
