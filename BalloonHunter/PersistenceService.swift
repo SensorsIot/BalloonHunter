@@ -2,43 +2,6 @@ import Foundation
 import CoreLocation
 import CoreData
 
-// MARK: - Transfer Data Types
-
-/// Codable, Equatable struct to represent telemetry for persistence.
-public struct TelemetryTransferData: Codable, Equatable {
-    public let latitude: Double
-    public let longitude: Double
-    public let altitude: Double
-    public let signalStrength: Double
-    public let batteryPercentage: Int
-    public let firmwareVersion: String
-    public let timestamp: Date
-    // Add further fields as required.
-}
-
-/// Codable, Equatable struct to represent sonde settings data.
-public struct SondeSettingsTransferData: Codable, Equatable {
-    public let sondeType: String
-    public let frequency: Double
-    public let oledSDA: Int
-    public let callSign: String
-    public let threshold: Double
-    // Add further fields as required.
-}
-
-// MARK: - DeviceSettings Entity Struct
-
-/// Struct for device settings matching requirements.
-public struct DeviceSettingsModel: Codable, Equatable {
-    public let sondeType: String
-    public let frequency: Double
-    public let oledSDA: Int
-    public let callSign: String
-    public let threshold: Double
-    public let deviceMode: String
-    public static let `default` = DeviceSettingsModel(sondeType: "", frequency: 0, oledSDA: 0, callSign: "", threshold: 0, deviceMode: "")
-}
-
 // MARK: - Forecast Settings Entity Struct
 
 public struct ForecastSettingsModel: Codable, Equatable {
@@ -74,158 +37,6 @@ public class PersistenceService {
             if let error = error {
                 print("[PersistenceService] Failed to load persistent stores: \(error.localizedDescription)")
             }
-        }
-    }
-
-    // MARK: - Device Settings
-
-    /// Saves DeviceSettingsModel (all fields) asynchronously.
-    public func saveDeviceSettings(_ settings: DeviceSettingsModel) async throws {
-        do {
-            await context.perform {
-                // TODO: Update Core Data entity "DeviceSettings" to match all struct fields.
-                let entity = NSEntityDescription.insertNewObject(forEntityName: "DeviceSettings", into: self.context)
-                entity.setValue(settings.sondeType, forKey: "sondeType")
-                entity.setValue(settings.frequency, forKey: "frequency")
-                entity.setValue(settings.oledSDA, forKey: "oledSDA")
-                entity.setValue(settings.callSign, forKey: "callSign")
-                entity.setValue(settings.threshold, forKey: "threshold")
-                entity.setValue(settings.deviceMode, forKey: "deviceMode") // deviceMode is now a String
-                entity.setValue(Date(), forKey: "dateSaved")
-            }
-            print("[PersistenceService] Saved DeviceSettingsModel: \(settings)")
-            print("[DEBUG] Saved DeviceSettings:", settings)
-            try await saveContext()
-        } catch {
-            print("[PersistenceService] Failed to save DeviceSettingsModel: \(error.localizedDescription)")
-        }
-    }
-    /// Fetches the latest DeviceSettingsModel. Returns default if fetch fails or no data found.
-    public func fetchLatestDeviceSettings() async throws -> DeviceSettingsModel {
-        do {
-            return try await context.perform {
-                // TODO: Update Core Data fetch to match fields.
-                let fetch = NSFetchRequest<NSManagedObject>(entityName: "DeviceSettings")
-                fetch.sortDescriptors = [NSSortDescriptor(key: "dateSaved", ascending: false)]
-                fetch.fetchLimit = 1
-                guard let entity = try self.context.fetch(fetch).first else {
-                    // Return default if fetch fails or no data found
-                    let settings = DeviceSettingsModel.default
-                    print("[DEBUG] Loaded DeviceSettings:", settings)
-                    return settings
-                }
-                let settings = DeviceSettingsModel(
-                    sondeType: entity.value(forKey: "sondeType") as? String ?? "",
-                    frequency: entity.value(forKey: "frequency") as? Double ?? 0,
-                    oledSDA: entity.value(forKey: "oledSDA") as? Int ?? 0,
-                    callSign: entity.value(forKey: "callSign") as? String ?? "",
-                    threshold: entity.value(forKey: "threshold") as? Double ?? 0,
-                    deviceMode: entity.value(forKey: "deviceMode") as? String ?? "" // deviceMode is String
-                )
-                print("[DEBUG] Loaded DeviceSettings:", settings)
-                return settings
-            }
-        } catch {
-            print("[PersistenceService] Failed to fetch DeviceSettingsModel: \(error.localizedDescription)")
-            let settings = DeviceSettingsModel.default
-            print("[DEBUG] Loaded DeviceSettings:", settings)
-            return settings // Return default on error
-        }
-    }
-
-    // MARK: - Telemetry Transfer
-    /// Saves TelemetryTransferData as a new entity asynchronously.
-    public func saveTelemetryTransfer(_ telemetry: TelemetryTransferData) async throws {
-        do {
-            await context.perform {
-                // TODO: Create Core Data entity "TelemetryTransferData" with all fields.
-                let entity = NSEntityDescription.insertNewObject(forEntityName: "TelemetryTransferData", into: self.context)
-                entity.setValue(telemetry.latitude, forKey: "latitude")
-                entity.setValue(telemetry.longitude, forKey: "longitude")
-                entity.setValue(telemetry.altitude, forKey: "altitude")
-                entity.setValue(telemetry.signalStrength, forKey: "signalStrength")
-                entity.setValue(telemetry.batteryPercentage, forKey: "batteryPercentage")
-                entity.setValue(telemetry.firmwareVersion, forKey: "firmwareVersion")
-                entity.setValue(telemetry.timestamp, forKey: "timestamp")
-            }
-            print("[PersistenceService] Saved TelemetryTransferData: \(telemetry)")
-            try await saveContext()
-        } catch {
-            print("[PersistenceService] Failed to save TelemetryTransferData: \(error.localizedDescription)")
-        }
-    }
-    /// Fetches latest TelemetryTransferData. Returns nil if fetch fails or no data found.
-    public func fetchLatestTelemetryTransfer() async throws -> TelemetryTransferData? {
-        do {
-            return try await context.perform {
-                // TODO: Update Core Data entity "TelemetryTransferData".
-                let fetch = NSFetchRequest<NSManagedObject>(entityName: "TelemetryTransferData")
-                fetch.sortDescriptors = [NSSortDescriptor(key: "timestamp", ascending: false)]
-                fetch.fetchLimit = 1
-                guard let entity = try self.context.fetch(fetch).first else {
-                    // Return nil if fetch fails or no data found
-                    return nil
-                }
-                return TelemetryTransferData(
-                    latitude: entity.value(forKey: "latitude") as? Double ?? 0,
-                    longitude: entity.value(forKey: "longitude") as? Double ?? 0,
-                    altitude: entity.value(forKey: "altitude") as? Double ?? 0,
-                    signalStrength: entity.value(forKey: "signalStrength") as? Double ?? 0,
-                    batteryPercentage: entity.value(forKey: "batteryPercentage") as? Int ?? 0,
-                    firmwareVersion: entity.value(forKey: "firmwareVersion") as? String ?? "",
-                    timestamp: entity.value(forKey: "timestamp") as? Date ?? Date()
-                )
-            }
-        } catch {
-            print("[PersistenceService] Failed to fetch TelemetryTransferData: \(error.localizedDescription)")
-            return nil // Return nil on error
-        }
-    }
-
-    // MARK: - Sonde Settings Transfer
-    /// Saves SondeSettingsTransferData as a new entity asynchronously.
-    public func saveSondeSettingsTransfer(_ transfer: SondeSettingsTransferData) async throws {
-        do {
-            await context.perform {
-                // TODO: Create Core Data entity "SondeSettingsTransferData" with all fields.
-                let entity = NSEntityDescription.insertNewObject(forEntityName: "SondeSettingsTransferData", into: self.context)
-                entity.setValue(transfer.sondeType, forKey: "sondeType")
-                entity.setValue(transfer.frequency, forKey: "frequency")
-                entity.setValue(transfer.oledSDA, forKey: "oledSDA")
-                entity.setValue(transfer.callSign, forKey: "callSign")
-                entity.setValue(transfer.threshold, forKey: "threshold")
-            }
-            print("[PersistenceService] Saved SondeSettingsTransferData: \(transfer)")
-            print("[DEBUG] Saved SondeSettingsTransfer:", transfer)
-            try await saveContext()
-        } catch {
-            print("[PersistenceService] Failed to save SondeSettingsTransferData: \(error.localizedDescription)")
-        }
-    }
-    /// Fetches latest SondeSettingsTransferData. Returns nil if fetch fails or no data found.
-    public func fetchLatestSondeSettingsTransfer() async throws -> SondeSettingsTransferData? {
-        do {
-            return try await context.perform {
-                // TODO: Update Core Data entity "SondeSettingsTransferData".
-                let fetch = NSFetchRequest<NSManagedObject>(entityName: "SondeSettingsTransferData")
-                fetch.fetchLimit = 1
-                guard let entity = try self.context.fetch(fetch).first else {
-                    // Return nil if fetch fails or no data found
-                    return nil
-                }
-                let transfer = SondeSettingsTransferData(
-                    sondeType: entity.value(forKey: "sondeType") as? String ?? "",
-                    frequency: entity.value(forKey: "frequency") as? Double ?? 0,
-                    oledSDA: entity.value(forKey: "oledSDA") as? Int ?? 0,
-                    callSign: entity.value(forKey: "callSign") as? String ?? "",
-                    threshold: entity.value(forKey: "threshold") as? Double ?? 0
-                )
-                print("[DEBUG] Loaded SondeSettingsTransfer:", transfer)
-                return transfer
-            }
-        } catch {
-            print("[PersistenceService] Failed to fetch SondeSettingsTransferData: \(error.localizedDescription)")
-            return nil // Return nil on error
         }
     }
     
@@ -280,7 +91,7 @@ public class PersistenceService {
     
     public func saveBalloonTrack(_ track: BalloonTrackModel) async throws {
         do {
-            try await context.perform {
+            await context.perform {
                 let trackEntity = BalloonTrack(context: self.context)
                 trackEntity.sondeName = track.sondeName
                 trackEntity.dateUpdated = track.dateUpdated
@@ -336,7 +147,7 @@ public class PersistenceService {
     // MARK: - MySondyGo Settings
     
     public func saveMySondyGoSettings(_ settings: BLEDeviceSettingsModel) async throws {
-        try await context.perform {
+        await context.perform {
             // Fetch existing or create new. This logic assumes a single settings record.
             let fetchRequest = NSFetchRequest<MySondyGoSettings>(entityName: "MySondyGoSettings")
             fetchRequest.fetchLimit = 1

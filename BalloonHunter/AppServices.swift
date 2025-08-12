@@ -119,7 +119,6 @@ public final class CurrentLocationService: NSObject, ObservableObject {
 extension CurrentLocationService: CLLocationManagerDelegate {
     public func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         let loc = locations.last
-        print("[LocationService] Location update: \(loc?.coordinate.latitude ?? 0), \(loc?.coordinate.longitude ?? 0)")
         location = loc
     }
     public func locationManager(_ manager: CLLocationManager, didUpdateHeading newHeading: CLHeading) {
