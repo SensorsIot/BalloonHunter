@@ -1,26 +1,60 @@
 // BalloonHunterApp.swift
 // App entry point. Injects environment objects and creates the window.
+
+/*
+# AI Assistant Guidelines
+
+Your role: act as a competent Swift programmer to complete this project according to the Functional Specification Document (FSD).
+
+## 1. Follow the FSD
+- Follow the FSD: Treat the FSD as the source of truth. Identify missing features or mismatches in the code and implement fixes directly.
+- Implement unambiguous tasks immediately (new methods, data model updates, UI changes).
+- Check for Next Task: After each task is completed, review the FSD to identify the next highest-priority task or feature to implement.
+- Do not create new files without first asking and justifying why.
+
+## 2. Coding Standards
+- Use modern Swift idioms: async/await, SwiftData, SwiftUI property wrappers.
+- Prefer Apple-native tools; ask before adding third-party dependencies. As a general rule, we prefer native solutions.
+- Write maintainable code: separate views, models, and services clearly and place them in the appropriate files.
+- Comments: keep minimal, but explain non-obvious logic or trade-offs, or to flag a `TODO` or `FIXME`.
+
+## 3. Decision Making
+- For low-level details: decide and implement directly.
+- For high-impact design or ambiguous FSD items: Stop and ask, briefly presenting options and trade-offs. When you do, use this format:   `QUESTION: [Brief, clear question] OPTIONS: 1. [Option A and its trade-offs] 2. [Option B and its trade-offs]`
+ This applies only to ambiguous FSD items or architectural forks (e.g., choosing between two different data persistence strategies).
+
+
+## 4. Quality
+- Include basic error handling where appropriate.
+- Debugging: Add temporary debugging `print()` statements to verify the execution of new features; remove them once confirmed.
+- Completion: Once all items in the FSD have been implemented, state "FSD complete. Awaiting further instructions or new requirements."
+*/
+
+
 import SwiftUI
+import Combine
 
 @main
 struct BalloonHunterApp: App {
-    // Service stubs
     @StateObject private var bleService = BLECommunicationService()
     @StateObject private var locationService = CurrentLocationService()
     @StateObject private var predictionService = PredictionService()
     @StateObject private var routeService = RouteCalculationService()
-    @StateObject private var persistenceService = PersistenceService()
-    @StateObject private var deviceSettings = DeviceSettings()
+    private let persistenceService = PersistenceService()
+    @StateObject private var appSettings = AppSettings()
+    @StateObject private var userSettings = UserSettings()
+    @StateObject private var annotationService = AnnotationService()
 
     var body: some Scene {
         WindowGroup {
-            MapView()
+            MapView(persistenceService: persistenceService)
                 .environmentObject(bleService)
                 .environmentObject(locationService)
                 .environmentObject(predictionService)
                 .environmentObject(routeService)
-                .environmentObject(persistenceService)
-                .environmentObject(deviceSettings)
+                .environmentObject(appSettings)
+                .environmentObject(userSettings)
+                .environmentObject(annotationService)
         }
     }
 }

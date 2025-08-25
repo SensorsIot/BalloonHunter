@@ -6,13 +6,49 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		473FAF832E4B0F5E00D53910 /* BalloonHunter.xcdatamodeld in Sources */ = {isa = PBXBuildFile; fileRef = 473FAF812E4B0F5E00D53910 /* BalloonHunter.xcdatamodeld */; };
+		47FE05062E5BA1E40037A8A6 /* BLECommunicationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 47FE05052E5BA1E40037A8A6 /* BLECommunicationService.swift */; };
+		47FEEB1A2E54FDDE0026A588 /* BalloonHunterApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 47FEEB192E54FDDE0026A588 /* BalloonHunterApp.swift */; };
+		47FEEB1C2E54FDE00026A588 /* AppModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 47FEEB1B2E54FDE00026A588 /* AppModels.swift */; };
+		47FEEB1E2E54FDE20026A588 /* AppServices.swift in Sources */ = {isa = PBXBuildFile; fileRef = 47FEEB1D2E54FDE20026A588 /* AppServices.swift */; };
+		47FEEB202E54FDE40026A588 /* MapView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 47FEEB1F2E54FDE40026A588 /* MapView.swift */; };
+		47FEEB222E54FDE50026A588 /* DataPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 47FEEB212E54FDE50026A588 /* DataPanelView.swift */; };
+		47FEEB242E54FDE60026A588 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 47FEEB232E54FDE60026A588 /* SettingsView.swift */; };
+		47FEEB262E54FDE90026A588 /* Overlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 47FEEB252E54FDE90026A588 /* Overlay.swift */; };
+		47FEEB2C2E5511C00026A588 /* BalloonPredictionOpenPoints.md in Resources */ = {isa = PBXBuildFile; fileRef = 47FEEB2B2E5511C00026A588 /* BalloonPredictionOpenPoints.md */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
+		473FAF822E4B0F5E00D53910 /* BalloonHunter.xcdatamodel */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcdatamodel; path = BalloonHunter.xcdatamodel; sourceTree = "<group>"; };
 		4771180D2E3B511A00C79172 /* BalloonHunter.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = BalloonHunter.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		47FE05052E5BA1E40037A8A6 /* BLECommunicationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BLECommunicationService.swift; sourceTree = "<group>"; };
+		47FEEB192E54FDDE0026A588 /* BalloonHunterApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BalloonHunterApp.swift; sourceTree = "<group>"; };
+		47FEEB1B2E54FDE00026A588 /* AppModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModels.swift; sourceTree = "<group>"; };
+		47FEEB1D2E54FDE20026A588 /* AppServices.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppServices.swift; sourceTree = "<group>"; };
+		47FEEB1F2E54FDE40026A588 /* MapView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MapView.swift; sourceTree = "<group>"; };
+		47FEEB212E54FDE50026A588 /* DataPanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DataPanelView.swift; sourceTree = "<group>"; };
+		47FEEB232E54FDE60026A588 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		47FEEB252E54FDE90026A588 /* Overlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Overlay.swift; sourceTree = "<group>"; };
+		47FEEB2B2E5511C00026A588 /* BalloonPredictionOpenPoints.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = BalloonPredictionOpenPoints.md; sourceTree = "<group>"; };
 /* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		47FE05082E5BB8330037A8A6 /* Exceptions for "BalloonHunter" folder in "BalloonHunter" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 4771180C2E3B511A00C79172 /* BalloonHunter */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		4771180F2E3B511A00C79172 /* BalloonHunter */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				47FE05082E5BB8330037A8A6 /* Exceptions for "BalloonHunter" folder in "BalloonHunter" target */,
+			);
 			path = BalloonHunter;
 			sourceTree = "<group>";
 		};
@@ -32,8 +68,18 @@
 		477118042E3B511A00C79172 = {
 			isa = PBXGroup;
 			children = (
+				473FAF812E4B0F5E00D53910 /* BalloonHunter.xcdatamodeld */,
 				4771180F2E3B511A00C79172 /* BalloonHunter */,
 				4771180E2E3B511A00C79172 /* Products */,
+				47FEEB192E54FDDE0026A588 /* BalloonHunterApp.swift */,
+				47FEEB1B2E54FDE00026A588 /* AppModels.swift */,
+				47FEEB1D2E54FDE20026A588 /* AppServices.swift */,
+				47FEEB1F2E54FDE40026A588 /* MapView.swift */,
+				47FEEB212E54FDE50026A588 /* DataPanelView.swift */,
+				47FEEB232E54FDE60026A588 /* SettingsView.swift */,
+				47FEEB252E54FDE90026A588 /* Overlay.swift */,
+				47FEEB2B2E5511C00026A588 /* BalloonPredictionOpenPoints.md */,
+				47FE05052E5BA1E40037A8A6 /* BLECommunicationService.swift */,
 			);
 			sourceTree = "<group>";
 		};
@@ -109,6 +155,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				47FEEB2C2E5511C00026A588 /* BalloonPredictionOpenPoints.md in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -119,6 +166,15 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				47FEEB242E54FDE60026A588 /* SettingsView.swift in Sources */,
+				47FE05062E5BA1E40037A8A6 /* BLECommunicationService.swift in Sources */,
+				473FAF832E4B0F5E00D53910 /* BalloonHunter.xcdatamodeld in Sources */,
+				47FEEB262E54FDE90026A588 /* Overlay.swift in Sources */,
+				47FEEB1E2E54FDE20026A588 /* AppServices.swift in Sources */,
+				47FEEB202E54FDE40026A588 /* MapView.swift in Sources */,
+				47FEEB1C2E54FDE00026A588 /* AppModels.swift in Sources */,
+				47FEEB1A2E54FDDE0026A588 /* BalloonHunterApp.swift in Sources */,
+				47FEEB222E54FDE50026A588 /* DataPanelView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -254,6 +310,7 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = BalloonHunter/Info.plist;
 				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "to connect to RadioSondyGo";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "The app has to calculate the route from where I am to the balloon landing place";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
@@ -276,13 +333,14 @@
 				REGISTER_APP_GROUPS = YES;
 				SDKROOT = auto;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
-				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx xros xrsimulator";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = "1,2,7";
+				TARGETED_DEVICE_FAMILY = "1,2";
 				XROS_DEPLOYMENT_TARGET = 26.0;
 			};
 			name = Debug;
@@ -300,6 +358,7 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = BalloonHunter/Info.plist;
 				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "to connect to RadioSondyGo";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "The app has to calculate the route from where I am to the balloon landing place";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
@@ -322,13 +381,14 @@
 				REGISTER_APP_GROUPS = YES;
 				SDKROOT = auto;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
-				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx xros xrsimulator";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = "1,2,7";
+				TARGETED_DEVICE_FAMILY = "1,2";
 				XROS_DEPLOYMENT_TARGET = 26.0;
 			};
 			name = Release;
@@ -355,6 +415,19 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCVersionGroup section */
+		473FAF812E4B0F5E00D53910 /* BalloonHunter.xcdatamodeld */ = {
+			isa = XCVersionGroup;
+			children = (
+				473FAF822E4B0F5E00D53910 /* BalloonHunter.xcdatamodel */,
+			);
+			currentVersion = 473FAF822E4B0F5E00D53910 /* BalloonHunter.xcdatamodel */;
+			path = BalloonHunter.xcdatamodeld;
+			sourceTree = "<group>";
+			versionGroupType = wrapper.xcdatamodel;
+		};
+/* End XCVersionGroup section */
 	};
 	rootObject = 477118052E3B511A00C79172 /* Project object */;
 }
