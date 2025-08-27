@@ -5,7 +5,7 @@ struct SettingsView: View {
     @EnvironmentObject var appSettings: AppSettings
     @EnvironmentObject var userSettings: UserSettings
     @EnvironmentObject var bleService: BLECommunicationService
-    let persistenceService: PersistenceService
+    @EnvironmentObject var persistenceService: PersistenceService
 
     @State private var selection: Int = 0
 
@@ -41,9 +41,11 @@ struct SondeSettingsView: View {
             }
         }
         .onAppear {
+            // Temporary: Start BLE service before sending initial command to ensure connection is ready
+            // bleService.start() // <-- Removed as this method does not exist in BLECommunicationService
             bleService.sendCommand(command: "?")
         }
-        .onReceive(bleService.deviceSettings) { settings in
+        .onReceive(bleService.$deviceSettings) { settings in
             appSettings.deviceSettings = settings
         }
     }
@@ -157,8 +159,9 @@ struct TuneView: View {
 }
 
 #Preview {
-    SettingsView(persistenceService: PersistenceService())
+    SettingsView()
         .environmentObject(AppSettings())
         .environmentObject(UserSettings())
-        .environmentObject(BLECommunicationService())
+        .environmentObject(BLECommunicationService(persistenceService: PersistenceService()))
+        .environmentObject(PersistenceService())
 }

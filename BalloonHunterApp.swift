@@ -32,22 +32,30 @@ Your role: act as a competent Swift programmer to complete this project accordin
 
 
 import SwiftUI
-import Combine
 
 @main
 struct BalloonHunterApp: App {
-    @StateObject private var bleService = BLECommunicationService()
-    @StateObject private var locationService = CurrentLocationService()
-    @StateObject private var predictionService = PredictionService()
-    @StateObject private var routeService = RouteCalculationService()
     private let persistenceService = PersistenceService()
     @StateObject private var appSettings = AppSettings()
     @StateObject private var userSettings = UserSettings()
     @StateObject private var annotationService = AnnotationService()
+    @StateObject private var routeService = RouteCalculationService()
+    @StateObject private var locationService = CurrentLocationService()
+    @StateObject private var bleService = BLECommunicationService(persistenceService: PersistenceService())
+    @StateObject private var predictionService = PredictionService()
+
+    
 
     var body: some Scene {
         WindowGroup {
-            MapView(persistenceService: persistenceService)
+            MapView()
+                .onAppear {
+                    if let persisted = persistenceService.readPredictionParameters() {
+                        userSettings.burstAltitude = persisted.burstAltitude
+                        userSettings.ascentRate = persisted.ascentRate
+                        userSettings.descentRate = persisted.descentRate
+                    }
+                }
                 .environmentObject(bleService)
                 .environmentObject(locationService)
                 .environmentObject(predictionService)
@@ -55,6 +63,7 @@ struct BalloonHunterApp: App {
                 .environmentObject(appSettings)
                 .environmentObject(userSettings)
                 .environmentObject(annotationService)
+                .environmentObject(persistenceService)
         }
     }
 }

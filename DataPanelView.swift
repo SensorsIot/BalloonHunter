@@ -75,6 +75,17 @@ struct DataPanelView: View {
             }
             .padding(.horizontal) // Keep padding
 
+#if DEBUG
+            if let url = predictionService.lastAPICallURL {
+                Text("Prediction API URL: \(url)")
+                    .font(.footnote.monospaced())
+                    .foregroundColor(.gray)
+                    .padding([.horizontal, .bottom], 10)
+                    .lineLimit(3)
+                    .truncationMode(.middle)
+            }
+#endif
+
         }
         .background(Color(.systemGray6))
         .cornerRadius(15)

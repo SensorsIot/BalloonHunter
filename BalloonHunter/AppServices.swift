@@ -6,48 +6,12 @@ import CoreBluetooth
 import CoreLocation
 import MapKit
 
-// MARK: - AnnotationService
-@MainActor
-final class AnnotationService: ObservableObject {
-    init() {
-        print("[DEBUG] AnnotationService init")
-    }
-    @Published var annotations: [MapAnnotationItem] = []
-    private let isFinalApproachSubject = PassthroughSubject<Bool, Never>()
-    var isFinalApproach: AnyPublisher<Bool, Never> { isFinalApproachSubject.eraseToAnyPublisher() }
-    func updateAnnotations(
-        telemetry: TelemetryData?,
-        userLocation: LocationData?,
-        prediction: PredictionData?
-    ) {
-        var items: [MapAnnotationItem] = []
-        if let userLoc = userLocation {
-            items.append(MapAnnotationItem(coordinate: CLLocationCoordinate2D(latitude: userLoc.latitude, longitude: userLoc.longitude), kind: .user))
-        }
-        if let tel = telemetry {
-            items.append(MapAnnotationItem(coordinate: CLLocationCoordinate2D(latitude: tel.latitude, longitude: tel.longitude), kind: .balloon))
-        }
-        if let burst = prediction?.burstPoint {
-            items.append(MapAnnotationItem(coordinate: burst, kind: .burst))
-        }
-        if let landing = prediction?.landingPoint {
-            items.append(MapAnnotationItem(coordinate: landing, kind: .landing))
-        }
-        if let tel = telemetry, tel.verticalSpeed < 0 {
-            items.append(MapAnnotationItem(coordinate: CLLocationCoordinate2D(latitude: tel.latitude, longitude: tel.longitude), kind: .landed))
-            isFinalApproachSubject.send(true)
-        } else {
-            isFinalApproachSubject.send(false)
-        }
-        self.annotations = items
-    }
-}
-
 // MARK: - BLECommunicationService
 @MainActor
 final class BLECommunicationService: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeripheralDelegate {
     private var centralManager: CBCentralManager!
     private var persistenceService: PersistenceService
+    private var connectedPeripheral: CBPeripheral?
     init(persistenceService: PersistenceService) {
         self.persistenceService = persistenceService
         super.init()
@@ -67,12 +31,14 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
             if peripheralName.contains("MySondy") {
                 print("[DEBUG] Found MySondy: \(peripheralName)")
                 centralManager.stopScan()
+                connectedPeripheral = peripheral
                 centralManager.connect(peripheral, options: nil)
             }
         }
     }
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
         print("[DEBUG] Connected to MySondy")
+        connectedPeripheral = peripheral
         peripheral.delegate = self
         peripheral.discoverServices(nil)
     }
@@ -117,6 +83,7 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
             telemetryData.parse(message: message)
             self.latestTelemetry = telemetryData
             self.telemetryData.send(telemetryData)
+            self.telemetryHistory.append(telemetryData)
             if !isReadyForCommands {
                 isReadyForCommands = true
                 readSettings()
@@ -138,6 +105,7 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
     @Published var deviceSettings: DeviceSettings = .default
     @Published var connectionStatus: ConnectionStatus = .disconnected
     @Published var telemetryData = PassthroughSubject<TelemetryData, Never>()
+    @Published var telemetryHistory: [TelemetryData] = []
     func readSettings() {
         sendCommand(command: "o{?}o")
     }
@@ -235,3 +203,147 @@ final class RouteCalculationService: ObservableObject {
         }
     }
 }
+
+// MARK: - PredictionService
+@MainActor
+final class PredictionService: NSObject, ObservableObject {
+    @Published var appInitializationFinished: Bool = false
+    override init() {
+        super.init()
+        print("[DEBUG] PredictionService init: \(Unmanaged.passUnretained(self).toOpaque())")
+    }
+    func debugPrintInstanceAddress(label: String = "") {
+        print("[DEBUG][PredictionService] Instance address \(label): \(Unmanaged.passUnretained(self).toOpaque())")
+    }
+    @Published var predictionData: PredictionData? {
+        didSet {
+            // print("[Debug][PredictionService] predictionData didSet: \(String(describing: predictionData?.landingPoint))")
+        }
+    }
+    @Published var lastAPICallURL: String? = nil
+    @Published var isLoading: Bool = false
+
+    private var path: [CLLocationCoordinate2D] = []
+    private var burstPoint: CLLocationCoordinate2D? = nil
+    private var landingPoint: CLLocationCoordinate2D? = nil
+    private var landingTime: Date? = nil
+    private var lastPredictionFetchTime: Date?
+    @Published var predictionStatus: PredictionStatus = .noValidPrediction
+
+    // JSON structs for parsing
+    nonisolated private struct APIResponse: Codable {
+        struct Prediction: Codable {
+            struct TrajectoryPoint: Codable {
+                let altitude: Double?
+                let datetime: String?
+                let latitude: Double?
+                let longitude: Double?
+            }
+            let stage: String
+            let trajectory: [TrajectoryPoint]
+        }
+        let prediction: [Prediction]
+    }
+    func fetchPrediction(telemetry: TelemetryData, userSettings: UserSettings) {
+        if let lastFetchTime = lastPredictionFetchTime {
+            let timeSinceLastFetch = Date().timeIntervalSince(lastFetchTime)
+            if timeSinceLastFetch < 30 {
+                // print("[Debug][PredictionService] Skipping fetch: time since last fetch = \(timeSinceLastFetch)")
+                return
+            }
+        }
+        lastPredictionFetchTime = Date()
+        predictionStatus = .fetching
+        isLoading = true
+        print("[Debug][PredictionService] Fetching prediction...")
+        path = []
+        burstPoint = nil
+        landingPoint = nil
+        landingTime = nil
+        let dateFormatter = ISO8601DateFormatter()
+        dateFormatter.formatOptions = [.withInternetDateTime]
+        let launchDatetime = dateFormatter.string(from: Date().addingTimeInterval(60))
+        let urlString = "https://api.v2.sondehub.org/tawhiri?launch_latitude=\(telemetry.latitude)&launch_longitude=\(telemetry.longitude)&launch_altitude=\(telemetry.altitude)&launch_datetime=\(launchDatetime)&ascent_rate=\(userSettings.ascentRate)&descent_rate=\(userSettings.descentRate)&burst_altitude=\(userSettings.burstAltitude)"
+        self.lastAPICallURL = urlString
+        print("[Debug][PredictionService] API Call: \(urlString)")
+        guard let url = URL(string: urlString) else {
+            isLoading = false
+            return
+        }
+        Task.detached {
+            do {
+                let (data, _) = try await URLSession.shared.data(from: url)
+                let apiResponse = try JSONDecoder().decode(APIResponse.self, from: data)
+                await MainActor.run {
+                    self.path = []
+                    var ascentPoints: [CLLocationCoordinate2D] = []
+                    var descentPoints: [CLLocationCoordinate2D] = []
+
+                    for p in apiResponse.prediction {
+                        if p.stage == "ascent" {
+                            for point in p.trajectory {
+                                if let lat = point.latitude, let lon = point.longitude {
+                                    let coord = CLLocationCoordinate2D(latitude: lat, longitude: lon)
+                                    ascentPoints.append(coord)
+                                }
+                            }
+                            self.burstPoint = ascentPoints.last
+                        } else if p.stage == "descent" {
+                            var lastDescentPoint: APIResponse.Prediction.TrajectoryPoint? = nil
+                            for point in p.trajectory {
+                                if let lat = point.latitude, let lon = point.longitude {
+                                    let coord = CLLocationCoordinate2D(latitude: lat, longitude: lon)
+                                    descentPoints.append(coord)
+                                    lastDescentPoint = point
+                                }
+                            }
+                            if let last = lastDescentPoint, let lat = last.latitude, let lon = last.longitude {
+                                self.landingPoint = CLLocationCoordinate2D(latitude: lat, longitude: lon)
+                                // print("[Debug][PredictionService] Parsed landing point: lat = \(lat), lon = \(lon)")
+                                // print("[Debug][PredictionService] CLLocationCoordinate2DIsValid: \(CLLocationCoordinate2DIsValid(coord))")
+                                if lat == 0 && lon == 0 {
+                                    print("[Debug][PredictionService] Landing point is at (0,0) -- likely invalid")
+                                }
+                                if let dt = last.datetime {
+                                    let formatter = ISO8601DateFormatter()
+                                    self.landingTime = formatter.date(from: dt)
+                                }
+                            }
+                        }
+                    }
+                    self.path = ascentPoints + descentPoints
+
+                    if let landingPoint = self.landingPoint {
+                        // print("[Debug][PredictionService] Prediction parsing finished. Valid prediction received.")
+                        // print("[Debug][PredictionService] Final parsed landingPoint for PredictionData: \(landingPoint)")
+                        // print("[Debug][PredictionService] about to set predictionData.landingPoint = \(String(describing: landingPoint))")
+                        let newPredictionData = PredictionData(path: self.path, burstPoint: self.burstPoint, landingPoint: landingPoint, landingTime: self.landingTime)
+                        self.predictionData = newPredictionData
+                        // print("[Debug][PredictionService] predictionData set: \(String(describing: self.predictionData?.landingPoint))")
+                        self.predictionStatus = .success
+                        if self.appInitializationFinished == false {
+                            self.appInitializationFinished = true
+                            // print("[Debug][PredictionService] appInitializationFinished set to true")
+                        }
+                    } else {
+                        print("[Debug][PredictionService] Prediction parsing finished, but no valid landing point found.")
+                        if case .fetching = self.predictionStatus {
+                            self.predictionStatus = .noValidPrediction
+                        }
+                    }
+                    self.isLoading = false
+                }
+                // print("[Debug][PredictionService] Prediction fetch succeeded.")
+            } catch {
+                await MainActor.run {
+                    print("[Debug][PredictionService] Network or JSON parsing failed: \(error.localizedDescription)")
+                    self.predictionStatus = .error(error.localizedDescription)
+                    self.isLoading = false
+                }
+                print("[Debug][PredictionService] Prediction fetch failed with error: \(error.localizedDescription)")
+            }
+        }
+    }
+}
+
+

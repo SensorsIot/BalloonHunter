@@ -293,11 +293,17 @@ struct AFCData {
 
 // Ensured ObservableObject conformance and class type for SwiftUI compatibility.
 final class AppSettings: ObservableObject {
+    init() {
+        print("[DEBUG] AppSettings init")
+    }
     @Published var deviceSettings: DeviceSettings = .default
 }
 
 // Ensured ObservableObject conformance and class type for SwiftUI compatibility.
 final class UserSettings: ObservableObject {
+    init() {
+        print("[DEBUG] UserSettings init")
+    }
     @Published var burstAltitude: Double = 35000.0
     @Published var ascentRate: Double = 5.0
     @Published var descentRate: Double = 5.0

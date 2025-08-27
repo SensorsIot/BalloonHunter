@@ -38,10 +38,13 @@ struct MapView: View {
     @EnvironmentObject var locationService: CurrentLocationService
     @EnvironmentObject var bleService: BLECommunicationService
     @EnvironmentObject var predictionService: PredictionService
-    let persistenceService: PersistenceService
+    @EnvironmentObject var persistenceService: PersistenceService
     @EnvironmentObject var userSettings: UserSettings
 
+    @State private var longRangeTrackingActive = false
     // Removed @State var balloonDescends: Bool = false
+    @State private var hasInitiallyFittedCamera = false
+    @State private var initialCameraFitDone = false
 
     @State private var cameraPosition = MapCameraPosition.region(
         MKCoordinateRegion(
@@ -57,13 +60,37 @@ struct MapView: View {
 
     var body: some View {
         GeometryReader { geometry in
-            ZStack(alignment: .bottom) {
-                VStack(spacing: 0) {
+            VStack(spacing: 0) {
+                HStack {
+                    Spacer()
+                    Picker("Mode", selection: $transportMode) {
+                        Text("Car").tag(TransportationMode.car)
+                        Text("Bicycle").tag(TransportationMode.bike)
+                    }
+                    .pickerStyle(SegmentedPickerStyle())
+                    .padding([.top, .horizontal])
+                    Spacer()
+                }
+
+                if longRangeTrackingActive {
                     if isFinalApproach {
                         Map(position: $cameraPosition) {
-                            ForEach(annotationService.annotations.filter { $0.kind == .landed || $0.kind == .user }) { annotation in
-                                Annotation(String(describing: annotation.kind), coordinate: annotation.coordinate) {
-                                    annotation.view
+                            ForEach(annotationService.annotations.filter { $0.kind == .landed || $0.kind == .user || $0.kind == .burst || $0.kind == .balloon }) { annotation in
+                                Annotation("", coordinate: annotation.coordinate) {
+                                    switch annotation.kind {
+                                    case .user:
+                                        Image(systemName: "person.circle")
+                                    case .balloon:
+                                        Image(systemName: "balloon")
+                                    case .landed:
+                                        Image(systemName: "balloon.fill")
+                                    case .landing:
+                                        Image(systemName: "flag.checkered")
+                                    case .burst:
+                                        Image(systemName: "sparkles")
+                                    default:
+                                        EmptyView()
+                                    }
                                 }
                             }
                         }
@@ -72,39 +99,12 @@ struct MapView: View {
                             MapPitchToggle()
                             MapUserLocationButton()
                         }
-                        .ignoresSafeArea(.container, edges: .top)
-                        .onAppear {
-                            // Zoom to show all relevant annotations
-                            var allCoordinates: [CLLocationCoordinate2D] = []
-                            if let userCoord = locationService.locationData {
-                                allCoordinates.append(CLLocationCoordinate2D(latitude: userCoord.latitude, longitude: userCoord.longitude))
-                            }
-                            if let balloonCoord = bleService.latestTelemetry {
-                                allCoordinates.append(CLLocationCoordinate2D(latitude: balloonCoord.latitude, longitude: balloonCoord.longitude))
-                            }
-                            if let landingCoord = predictionService.predictionData?.landingPoint {
-                                allCoordinates.append(landingCoord)
-                            }
-                            if let burstCoord = predictionService.predictionData?.burstPoint {
-                                allCoordinates.append(burstCoord)
-                            }
-
-                            if !allCoordinates.isEmpty {
-                                let minLat = allCoordinates.map { $0.latitude }.min() ?? 0
-                                let maxLat = allCoordinates.map { $0.latitude }.max() ?? 0
-                                let minLon = allCoordinates.map { $0.longitude }.min() ?? 0
-                                let maxLon = allCoordinates.map { $0.longitude }.max() ?? 0
-
-                                let center = CLLocationCoordinate2D(latitude: (minLat + maxLat) / 2, longitude: (minLon + maxLon) / 2)
-                                let span = MKCoordinateSpan(latitudeDelta: (maxLat - minLat) * 1.5, longitudeDelta: (maxLon - minLon) * 1.5)
-                                cameraPosition = .region(MKCoordinateRegion(center: center, span: span))
-                            }
-                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .ignoresSafeArea(edges: .top)
                     } else {
                         ZStack(alignment: .top) {
                             if case .error(let message) = predictionService.predictionStatus, showPredictionError {
                                 Color(.systemBackground)
-                                    .ignoresSafeArea()
                                 VStack {
                                     Text("Prediction Error: \(message)")
                                         .foregroundColor(.white)
@@ -118,10 +118,46 @@ struct MapView: View {
                                 }
                             } else {
                                 Map(position: $cameraPosition) {
-                                    ForEach(annotationService.annotations) { annotation in
-                                        Annotation(String(describing: annotation.kind), coordinate: annotation.coordinate) {
-                                            annotation.view
+                                    // User annotation if available
+                                    if let userLocation = locationService.locationData {
+                                        Annotation("", coordinate: CLLocationCoordinate2D(latitude: userLocation.latitude, longitude: userLocation.longitude)) {
+                                            Image(systemName: "person.circle")
                                         }
+                                    }
+                                    // Balloon annotation if available
+                                    if let balloonTelemetry = bleService.latestTelemetry {
+                                        Annotation("", coordinate: CLLocationCoordinate2D(latitude: balloonTelemetry.latitude, longitude: balloonTelemetry.longitude)) {
+                                            Image(systemName: "balloon")
+                                        }
+                                    }
+                                    // Landing annotation if available
+                                    if let landingPoint = predictionService.predictionData?.landingPoint {
+                                        Annotation("", coordinate: landingPoint) {
+                                            Image(systemName: "flag.checkered")
+                                        }
+                                    }
+                                    // Burst annotation if available
+                                    if let burstPoint = predictionService.predictionData?.burstPoint {
+                                        Annotation("", coordinate: burstPoint) {
+                                            Image(systemName: "exclamationmark.triangle.fill").foregroundColor(.orange)
+                                        }
+                                    }
+                                    // Draw historical track (thin red line)
+                                    if !bleService.telemetryHistory.isEmpty {
+                                        MapPolyline(coordinates: bleService.telemetryHistory.map { CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude) })
+                                            .stroke(.red, lineWidth: 2)
+                                    }
+
+                                    // Draw predicted path (thick blue line)
+                                    if let predictedPath = predictionService.predictionData?.path {
+                                        MapPolyline(coordinates: predictedPath)
+                                            .stroke(.blue, lineWidth: 4)
+                                    }
+                                    
+                                    // Draw user’s planned route (thick green line) on top of others
+                                    if let routePath = routeService.routeData?.path, routePath.count >= 2 {
+                                        MapPolyline(coordinates: routePath)
+                                            .stroke(.green, lineWidth: 5)
                                     }
                                 }
                                 .mapControls {
@@ -129,15 +165,25 @@ struct MapView: View {
                                     MapPitchToggle()
                                     MapUserLocationButton()
                                 }
-                                .ignoresSafeArea(.container, edges: .top)
                             }
                         }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .ignoresSafeArea(edges: .top)
                     }
+                } else {
+                    // Loading or empty state
+                    Color(.systemBackground)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
+                
                 DataPanelView()
-                    .frame(maxHeight: geometry.size.height * 0.3)
                     .frame(maxWidth: .infinity)
                     .background(Color(.systemBackground).opacity(0.95))
+            }
+            .background(Color(.systemGroupedBackground))
+            .onAppear {
+                longRangeTrackingActive = true
+                // Removed updateCameraToFitAllPoints() and hasInitiallyFittedCamera = true here
             }
             .onChange(of: predictionService.predictionStatus) { _, status in
                 if case .error = status {
@@ -146,20 +192,36 @@ struct MapView: View {
             }
         }
         .sheet(isPresented: $showSettings) {
-            SettingsView(persistenceService: persistenceService)
+            SettingsView()
         }
         .onReceive(locationService.$locationData) { locationData in
             // Updates are now only triggered by valid BLE packets.
             recalculateRoute()
+            // Removed updateCameraToFitAllPoints() here
         }
         .onReceive(bleService.telemetryData) { telemetry in
             // Assuming telemetry.latitude and telemetry.longitude are non-optional Double
+
+            // Removed initial camera fit block here
+
             updateAnnotations()
             predictionService.fetchPrediction(telemetry: telemetry, userSettings: userSettings)
+            // Removed updateCameraToFitAllPoints() here
         }
         .onReceive(predictionService.$predictionData) { predictionData in
             // Updates are now only triggered by valid BLE packets.
+
+            if !hasInitiallyFittedCamera,
+               locationService.locationData != nil,
+               bleService.latestTelemetry != nil,
+               predictionData?.landingPoint != nil {
+                // Only fit camera after receiving valid prediction with landing point
+                updateCameraToFitAllPoints()
+                hasInitiallyFittedCamera = true
+            }
+
             recalculateRoute()
+            // Removed updateCameraToFitAllPoints() here
         }
         .onReceive(predictionTimer) { _ in
             if let telemetry = bleService.latestTelemetry {
@@ -173,20 +235,20 @@ struct MapView: View {
                 print("[Debug][MapView] Entering final approach state")
             }
         }
+        .onReceive(predictionService.$appInitializationFinished) { finished in
+            if finished, !initialCameraFitDone {
+                updateCameraToFitAllPoints()
+                initialCameraFitDone = true
+            }
+        }
+        .onChange(of: transportMode) { mode in
+            recalculateRoute()
+        }
         // Removed .onChange(of: bleService.balloonDescends) { value in ... }
     }
 
     private func updateAnnotations() {
-        if let telemetry = bleService.latestTelemetry {
-            print("[Debug][MapView] Updating annotations with telemetry: lat=\(telemetry.latitude), lon=\(telemetry.longitude), sondeName=\(telemetry.sondeName)")
-        } else {
-            print("[Debug][MapView] Updating annotations with no telemetry")
-        }
         annotationService.updateAnnotations(telemetry: bleService.latestTelemetry, userLocation: locationService.locationData, prediction: predictionService.predictionData)
-        print("[Debug][MapView] Current annotations: \(annotationService.annotations.count)")
-        for annotation in annotationService.annotations {
-            print("[Debug][MapView] Annotation: kind=\(annotation.kind), coordinate=\(annotation.coordinate)")
-        }
     }
 
     private func recalculateRoute() {
@@ -200,14 +262,124 @@ struct MapView: View {
             transportType: transportMode
         )
     }
+    
+    private func updateCameraToFitAllPoints() {
+        var points: [CLLocationCoordinate2D] = []
+        var labeledPoints: [(label: String, coordinate: CLLocationCoordinate2D)] = []
+        
+        // Only user, balloon, and landing are used for camera fit.
+        
+        if let userLocation = locationService.locationData {
+            let userCoord = CLLocationCoordinate2D(latitude: userLocation.latitude, longitude: userLocation.longitude)
+            points.append(userCoord)
+            labeledPoints.append(("User", userCoord))
+        }
+        
+        if let balloonTelemetry = bleService.latestTelemetry {
+            let balloonCoord = CLLocationCoordinate2D(latitude: balloonTelemetry.latitude, longitude: balloonTelemetry.longitude)
+            points.append(balloonCoord)
+            labeledPoints.append(("Balloon", balloonCoord))
+        }
+        
+        if let landing = predictionService.predictionData?.landingPoint {
+            points.append(landing)
+            labeledPoints.append(("Landing", landing))
+        }
+        
+        // Filter out invalid or zero coordinates
+        let validPoints = points.filter { CLLocationCoordinate2DIsValid($0) && ($0.latitude != 0 || $0.longitude != 0) }
+        
+        guard validPoints.count >= 2 else {
+            return
+        }
+        
+        let latitudes = validPoints.map { $0.latitude }
+        let longitudes = validPoints.map { $0.longitude }
+        
+        guard let minLat = latitudes.min(),
+              let maxLat = latitudes.max(),
+              let minLon = longitudes.min(),
+              let maxLon = longitudes.max() else {
+            return
+        }
+        
+        // Compute bounding box corners
+        let sw = CLLocationCoordinate2D(latitude: minLat, longitude: minLon)
+        let nw = CLLocationCoordinate2D(latitude: maxLat, longitude: minLon)
+        let se = CLLocationCoordinate2D(latitude: minLat, longitude: maxLon)
+        let ne = CLLocationCoordinate2D(latitude: maxLat, longitude: maxLon)
+        
+        // Check if each labeled point falls within the bounding box
+        for (label, coord) in labeledPoints {
+            let withinLat = (coord.latitude >= minLat) && (coord.latitude <= maxLat)
+            let withinLon = (coord.longitude >= minLon) && (coord.longitude <= maxLon)
+            _ = withinLat && withinLon
+        }
+        
+        let centerLat = (minLat + maxLat) / 2
+        let centerLon = (minLon + maxLon) / 2
+        
+        var latitudeDelta = (maxLat - minLat) * 1.3
+        var longitudeDelta = (maxLon - minLon) * 1.3
+        
+        let minDelta = 0.05
+        latitudeDelta = max(latitudeDelta, minDelta)
+        longitudeDelta = max(longitudeDelta, minDelta)
+        
+        let center = CLLocationCoordinate2D(latitude: centerLat, longitude: centerLon)
+        let span = MKCoordinateSpan(latitudeDelta: latitudeDelta, longitudeDelta: longitudeDelta)
+        let region = MKCoordinateRegion(center: center, span: span)
+        
+        // Update camera position to the computed region to fit all points with padding
+        cameraPosition = .region(region)
+    }
+
+    private func collectAllCoordinates() -> [CLLocationCoordinate2D] {
+        var allCoordinates: [CLLocationCoordinate2D] = []
+        
+        if let userLocation = locationService.locationData {
+            allCoordinates.append(CLLocationCoordinate2D(latitude: userLocation.latitude, longitude: userLocation.longitude))
+        }
+        
+        if let balloonTelemetry = bleService.latestTelemetry {
+            allCoordinates.append(CLLocationCoordinate2D(latitude: balloonTelemetry.latitude, longitude: balloonTelemetry.longitude))
+        }
+        
+        if let landingPoint = predictionService.predictionData?.landingPoint {
+            allCoordinates.append(landingPoint)
+        }
+        
+        if let burstPoint = predictionService.predictionData?.burstPoint {
+            allCoordinates.append(burstPoint)
+        }
+        
+        allCoordinates.append(contentsOf: bleService.telemetryHistory.map { CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude) })
+        
+        if let predictedPath = predictionService.predictionData?.path {
+            allCoordinates.append(contentsOf: predictedPath)
+        }
+        
+        return allCoordinates
+    }
 }
 
 #Preview {
-    MapView(persistenceService: PersistenceService())
+    MapView()
         .environmentObject(AnnotationService())
         .environmentObject(RouteCalculationService())
         .environmentObject(CurrentLocationService())
-        .environmentObject(BLECommunicationService())
+        .environmentObject(BLECommunicationService(persistenceService: PersistenceService()))
         .environmentObject(PredictionService())
         .environmentObject(UserSettings())
+        .environmentObject(PersistenceService())
+}
+
+extension CLLocationCoordinate2D: Hashable {
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(latitude)
+        hasher.combine(longitude)
+    }
+    public static func == (lhs: CLLocationCoordinate2D, rhs: CLLocationCoordinate2D) -> Bool {
+        lhs.latitude == rhs.latitude && lhs.longitude == rhs.longitude
+    }
 }

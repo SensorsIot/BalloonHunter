@@ -5,6 +5,9 @@ import SwiftUI
 
 @MainActor
 final class AnnotationService: ObservableObject {
+    init() {
+        print("[DEBUG] AnnotationService init")
+    }
     @Published var annotations: [MapAnnotationItem] = []
     private let isFinalApproachSubject = PassthroughSubject<Bool, Never>()
     var isFinalApproach: AnyPublisher<Bool, Never> { isFinalApproachSubject.eraseToAnyPublisher() }
