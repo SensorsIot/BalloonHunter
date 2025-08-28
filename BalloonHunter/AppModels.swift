@@ -3,6 +3,18 @@ import SwiftUI
 import MapKit
 import Combine
 
+enum AppState: String {
+    case startup
+    case longRangeTracking
+    case finalApproach
+}
+
+class SharedAppState {
+    static let shared = SharedAppState()
+    private init() {}
+    var appState: AppState = .startup
+}
+
 // MARK: - Core Data Models from FSD
 
 // 7. Data Structures (Models)
@@ -214,6 +226,7 @@ struct MapAnnotationItem: Identifiable {
     let id = UUID()
     var coordinate: CLLocationCoordinate2D
     var kind: AnnotationKind
+    var isAscending: Bool? = nil
     var status: AnnotationStatus = .fresh
 
     enum AnnotationKind {
@@ -238,7 +251,7 @@ struct MapAnnotationItem: Identifiable {
                 .font(.title)
         case .balloon:
             Image(systemName: "balloon.fill")
-                .foregroundColor(status == .fresh ? .green : .red)
+                .foregroundColor(isAscending == true ? .green : .red)
                 .font(.title)
         case .burst:
             Image(systemName: "exclamationmark.triangle.fill")

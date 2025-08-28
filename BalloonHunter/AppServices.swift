@@ -16,54 +16,64 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
         self.persistenceService = persistenceService
         super.init()
         centralManager = CBCentralManager(delegate: self, queue: nil)
-        print("[DEBUG] BLECommunicationService init")
+        print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] BLECommunicationService init")
     }
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
         if central.state == .poweredOn {
-            print("[DEBUG] BLE is powered on. Starting scan...")
+            print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] BLE is powered on. Starting scan...")
             centralManager.scanForPeripherals(withServices: nil, options: nil)
         } else {
-            print("[DEBUG] BLE is not available.")
+            print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] BLE is not available.")
         }
     }
     func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral, advertisementData: [String : Any], rssi RSSI: NSNumber) {
         if let peripheralName = advertisementData[CBAdvertisementDataLocalNameKey] as? String {
             if peripheralName.contains("MySondy") {
-                print("[DEBUG] Found MySondy: \(peripheralName)")
+                print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] Found MySondy: \(peripheralName)")
                 centralManager.stopScan()
                 connectedPeripheral = peripheral
+                connectionStatus = .connecting
                 centralManager.connect(peripheral, options: nil)
             }
         }
     }
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
-        print("[DEBUG] Connected to MySondy")
+        print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] Connected to MySondy")
+        connectionStatus = .connected
         connectedPeripheral = peripheral
         peripheral.delegate = self
         peripheral.discoverServices(nil)
     }
     func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
-        print("[DEBUG] Failed to connect to MySondy: \(error?.localizedDescription ?? "Unknown error")")
+        print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] Failed to connect to MySondy: \(error?.localizedDescription ?? "Unknown error")")
+        connectionStatus = .disconnected
+    }
+    func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
+        print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] Disconnected from MySondy")
+        connectionStatus = .disconnected
+        connectedPeripheral = nil
+        // Optionally, restart scanning
+        centralManager.scanForPeripherals(withServices: nil, options: nil)
     }
     func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
         if let error = error {
-            print("[DEBUG] Error discovering services: \(error.localizedDescription)")
+            print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] Error discovering services: \(error.localizedDescription)")
             return
         }
         guard let services = peripheral.services else { return }
         for service in services {
-            print("[DEBUG] Discovered service: \(service)")
+            print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] Discovered service: \(service)")
             peripheral.discoverCharacteristics(nil, for: service)
         }
     }
     func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
         if let error = error {
-            print("[DEBUG] Error discovering characteristics: \(error.localizedDescription)")
+            print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] Error discovering characteristics: \(error.localizedDescription)")
             return
         }
         guard let characteristics = service.characteristics else { return }
         for characteristic in characteristics {
-            print("[DEBUG] Discovered characteristic: \(characteristic)")
+            print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] Discovered characteristic: \(characteristic)")
             if characteristic.properties.contains(.notify) {
                 peripheral.setNotifyValue(true, for: characteristic)
             }
@@ -92,12 +102,12 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
     }
     func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
         if let error = error {
-            print("[DEBUG] Error updating value for characteristic: \(error.localizedDescription)")
+            print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] Error updating value for characteristic: \(error.localizedDescription)")
             return
         }
         guard let data = characteristic.value else { return }
         if let string = String(data: data, encoding: .utf8) {
-            print("[DEBUG] Received data: \(string)")
+            print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] Received data: \(string)")
             self.parse(message: string)
         }
     }
@@ -110,7 +120,7 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
         sendCommand(command: "o{?}o")
     }
     func sendCommand(command: String) {
-        print("[BLECommunicationService] sendCommand: \(command)")
+        print("[BLECommunicationService][State: \(SharedAppState.shared.appState.rawValue)] sendCommand: \(command)")
         // TODO: Implement command sending via BLE
     }
     func simulateTelemetry(_ data: TelemetryData) {
@@ -125,7 +135,7 @@ final class CurrentLocationService: NSObject, ObservableObject {
     @Published var locationData: LocationData?
     private let locationManager = CLLocationManager()
     override init() {
-        print("[DEBUG] CurrentLocationService init")
+        print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] CurrentLocationService init")
         super.init()
         locationManager.delegate = self
         locationManager.desiredAccuracy = kCLLocationAccuracyBest
@@ -140,7 +150,7 @@ extension CurrentLocationService: CLLocationManagerDelegate {
         self.locationData = LocationData(latitude: location.coordinate.latitude, longitude: location.coordinate.longitude, heading: heading)
     }
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
-        print("[CurrentLocationService] Failed to get location: \(error.localizedDescription)")
+        print("[CurrentLocationService][State: \(SharedAppState.shared.appState.rawValue)] Failed to get location: \(error.localizedDescription)")
     }
 }
 
@@ -159,9 +169,9 @@ final class PersistenceService: ObservableObject {
         return userSettings
     }
     init() {
-        print("[DEBUG] PersistenceService init")
+        print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] PersistenceService init")
         let fileManager = FileManager.default
-        print("[DEBUG] Current working directory: \(fileManager.currentDirectoryPath)")
+        print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] Current working directory: \(fileManager.currentDirectoryPath)")
     }
 }
 
@@ -169,7 +179,7 @@ final class PersistenceService: ObservableObject {
 @MainActor
 final class RouteCalculationService: ObservableObject {
     init() {
-        print("[DEBUG] RouteCalculationService init")
+        print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] RouteCalculationService init")
     }
     @Published var routeData: RouteData? = nil
     func calculateRoute(
@@ -192,11 +202,11 @@ final class RouteCalculationService: ObservableObject {
         directions.calculate { [weak self] response, error in
             guard let self = self else { return }
             if let error = error {
-                print("[RouteCalculationService] Route calculation error: \(error.localizedDescription)")
+                print("[RouteCalculationService][State: \(SharedAppState.shared.appState.rawValue)] Route calculation error: \(error.localizedDescription)")
                 return
             }
             guard let route = response?.routes.first else {
-                print("[RouteCalculationService] No route found.")
+                print("[RouteCalculationService][State: \(SharedAppState.shared.appState.rawValue)] No route found.")
                 return
             }
 
@@ -223,10 +233,10 @@ final class PredictionService: NSObject, ObservableObject {
     @Published var appInitializationFinished: Bool = false
     override init() {
         super.init()
-        print("[DEBUG] PredictionService init: \(Unmanaged.passUnretained(self).toOpaque())")
+        print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] PredictionService init: \(Unmanaged.passUnretained(self).toOpaque())")
     }
     func debugPrintInstanceAddress(label: String = "") {
-        print("[DEBUG][PredictionService] Instance address \(label): \(Unmanaged.passUnretained(self).toOpaque())")
+        print("[DEBUG][PredictionService][State: \(SharedAppState.shared.appState.rawValue)] Instance address \(label): \(Unmanaged.passUnretained(self).toOpaque())")
     }
     @Published var predictionData: PredictionData? {
         didSet {
@@ -268,7 +278,7 @@ final class PredictionService: NSObject, ObservableObject {
         lastPredictionFetchTime = Date()
         predictionStatus = .fetching
         isLoading = true
-        print("[Debug][PredictionService] Fetching prediction...")
+        print("[Debug][PredictionService][State: \(SharedAppState.shared.appState.rawValue)] Fetching prediction...")
         path = []
         burstPoint = nil
         landingPoint = nil
@@ -278,7 +288,7 @@ final class PredictionService: NSObject, ObservableObject {
         let launchDatetime = dateFormatter.string(from: Date().addingTimeInterval(60))
         let urlString = "https://api.v2.sondehub.org/tawhiri?launch_latitude=\(telemetry.latitude)&launch_longitude=\(telemetry.longitude)&launch_altitude=\(telemetry.altitude)&launch_datetime=\(launchDatetime)&ascent_rate=\(userSettings.ascentRate)&descent_rate=\(userSettings.descentRate)&burst_altitude=\(userSettings.burstAltitude)"
         self.lastAPICallURL = urlString
-        print("[Debug][PredictionService] API Call: \(urlString)")
+        print("[Debug][PredictionService][State: \(SharedAppState.shared.appState.rawValue)] API Call: \(urlString)")
         guard let url = URL(string: urlString) else {
             isLoading = false
             return
@@ -315,7 +325,7 @@ final class PredictionService: NSObject, ObservableObject {
                                 // print("[Debug][PredictionService] Parsed landing point: lat = \(lat), lon = \(lon)")
                                 // print("[Debug][PredictionService] CLLocationCoordinate2DIsValid: \(CLLocationCoordinate2DIsValid(coord))")
                                 if lat == 0 && lon == 0 {
-                                    print("[Debug][PredictionService] Landing point is at (0,0) -- likely invalid")
+                                    print("[Debug][PredictionService][State: \(SharedAppState.shared.appState.rawValue)] Landing point is at (0,0) -- likely invalid")
                                 }
                                 if let dt = last.datetime {
                                     let formatter = ISO8601DateFormatter()
@@ -340,7 +350,7 @@ final class PredictionService: NSObject, ObservableObject {
                             // print("[Debug][PredictionService] appInitializationFinished set to true")
                         }
                     } else {
-                        print("[Debug][PredictionService] Prediction parsing finished, but no valid landing point found.")
+                        print("[Debug][PredictionService][State: \(SharedAppState.shared.appState.rawValue)] Prediction parsing finished, but no valid landing point found.")
                         if case .fetching = self.predictionStatus {
                             self.predictionStatus = .noValidPrediction
                         }
@@ -350,11 +360,11 @@ final class PredictionService: NSObject, ObservableObject {
                 // print("[Debug][PredictionService] Prediction fetch succeeded.")
             } catch {
                 await MainActor.run {
-                    print("[Debug][PredictionService] Network or JSON parsing failed: \(error.localizedDescription)")
+                    print("[Debug][PredictionService][State: \(SharedAppState.shared.appState.rawValue)] Network or JSON parsing failed: \(error.localizedDescription)")
                     self.predictionStatus = .error(error.localizedDescription)
                     self.isLoading = false
                 }
-                print("[Debug][PredictionService] Prediction fetch failed with error: \(error.localizedDescription)")
+                print("[Debug][PredictionService][State: \(SharedAppState.shared.appState.rawValue)] Prediction fetch failed with error: \(error.localizedDescription)")
             }
         }
     }
@@ -363,15 +373,64 @@ final class PredictionService: NSObject, ObservableObject {
 // MARK: - AnnotationService
 @MainActor
 final class AnnotationService: ObservableObject {
-    init() {
-        print("[DEBUG] AnnotationService init")
+    @Published private(set) var appState: AppState = .startup {
+        didSet {
+            SharedAppState.shared.appState = appState
+        }
     }
     @Published var annotations: [MapAnnotationItem] = []
-    private let isFinalApproachSubject = PassthroughSubject<Bool, Never>()
-    var isFinalApproach: AnyPublisher<Bool, Never> { isFinalApproachSubject.eraseToAnyPublisher() }
 
-    // Update the annotations list based on latest data.
-    func updateAnnotations(
+    init() {
+        print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] AnnotationService init")
+    }
+
+    func updateState(
+        telemetry: TelemetryData?,
+        userLocation: LocationData?,
+        prediction: PredictionData?,
+        route: RouteData?,
+        telemetryHistory: [TelemetryData]
+    ) {
+        // First, update annotations regardless of state
+        updateAnnotations(telemetry: telemetry, userLocation: userLocation, prediction: prediction)
+
+        // Then, run the state machine
+        switch appState {
+        case .startup:
+            // Trigger to move to long range tracking
+            if telemetry != nil { // Only check telemetry for early map display
+                print("[STATE][State: \(SharedAppState.shared.appState.rawValue)] Transitioning to Long Range Tracking")
+                appState = .longRangeTracking
+            }
+        case .longRangeTracking:
+            // Trigger to move to final approach
+            guard let userLoc = userLocation,
+                  let tel = telemetry,
+                  telemetryHistory.count >= 10 else {
+                return
+            }
+
+            let last10Telemetry = telemetryHistory.suffix(10)
+            let isBalloonStable = last10Telemetry.allSatisfy { $0.verticalSpeed < 1 && $0.horizontalSpeed < 5 }
+
+            if isBalloonStable {
+                 let userCLLocation = CLLocation(latitude: userLoc.latitude, longitude: userLoc.longitude)
+                 let balloonCLLocation = CLLocation(latitude: tel.latitude, longitude: tel.longitude)
+                 let distance = userCLLocation.distance(from: balloonCLLocation)
+                 let isUserClose = distance < 1000 // 1 km
+
+                if isUserClose {
+                    print("[STATE][State: \(SharedAppState.shared.appState.rawValue)] Transitioning to Final Approach")
+                    appState = .finalApproach
+                }
+            }
+        case .finalApproach:
+            // No transition out of final approach defined yet
+            break
+        }
+    }
+
+    private func updateAnnotations(
         telemetry: TelemetryData?,
         userLocation: LocationData?,
         prediction: PredictionData?
@@ -383,7 +442,8 @@ final class AnnotationService: ObservableObject {
         }
         // Add balloon annotation if telemetry available
         if let tel = telemetry {
-            items.append(MapAnnotationItem(coordinate: CLLocationCoordinate2D(latitude: tel.latitude, longitude: tel.longitude), kind: .balloon))
+            let isAscending = tel.verticalSpeed >= 0
+            items.append(MapAnnotationItem(coordinate: CLLocationCoordinate2D(latitude: tel.latitude, longitude: tel.longitude), kind: .balloon, isAscending: isAscending))
         }
         // Add burst point (prediction)
         if let burst = prediction?.burstPoint {
@@ -396,12 +456,7 @@ final class AnnotationService: ObservableObject {
         // Add landed annotation if vertical speed negative (descending/landed)
         if let tel = telemetry, tel.verticalSpeed < 0 {
             items.append(MapAnnotationItem(coordinate: CLLocationCoordinate2D(latitude: tel.latitude, longitude: tel.longitude), kind: .landed))
-            isFinalApproachSubject.send(true)
-        } else {
-            isFinalApproachSubject.send(false)
         }
         self.annotations = items
     }
 }
-
-

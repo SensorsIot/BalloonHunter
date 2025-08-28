@@ -17,6 +17,7 @@ struct DataPanelView: View {
                     Image(systemName: bleService.connectionStatus == .connected ? "antenna.radiowaves.left.and.right" : "antenna.radiowaves.left.and.right.slash")
                         .foregroundColor(bleService.connectionStatus == .connected ? .green : .red)
                         .font(.headline)
+                        .scaleEffect(1.5)
                     Text(bleService.latestTelemetry?.probeType ?? "N/A")
                         .font(.headline)
                         .minimumScaleFactor(0.5)
@@ -26,12 +27,13 @@ struct DataPanelView: View {
                         .font(.headline)
                         .minimumScaleFactor(0.5)
                         .lineLimit(1)
-                        .frame(maxWidth: .infinity)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     Button(action: {
                         bleService.sendCommand(command: "mute=1")
                     }) {
                         Image(systemName: bleService.latestTelemetry?.buzmute == true ? "speaker.slash.fill" : "speaker.fill")
                             .font(.headline)
+                            .scaleEffect(1.5)
                             .frame(minWidth: 44, minHeight: 44)
                     }
                     .gridCellAnchor(.trailing)
@@ -43,28 +45,28 @@ struct DataPanelView: View {
             Grid(alignment: .leading, horizontalSpacing: 5, verticalSpacing: 10) {
                 GridRow {
                     Text("\(String(format: "%.3f", bleService.latestTelemetry?.frequency ?? 0.0)) MHz")
-                        .font(.headline).minimumScaleFactor(0.5).lineLimit(1).frame(maxWidth: .infinity)
+                        .font(.headline).minimumScaleFactor(0.5).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
                     Text("RSSI: \(signalStrengthString) dB")
-                        .font(.headline).minimumScaleFactor(0.5).lineLimit(1).frame(maxWidth: .infinity)
+                        .font(.headline).minimumScaleFactor(0.5).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
                     Text("Batt: \(batteryPercentageString)%")
-                        .font(.headline).minimumScaleFactor(0.5).lineLimit(1).frame(maxWidth: .infinity)
+                        .font(.headline).minimumScaleFactor(0.5).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
                 }
                 GridRow {
                     Text("V: \(verticalSpeedAvgString) m/s")
-                        .font(.headline).lineLimit(1).frame(maxWidth: .infinity)
+                        .font(.headline).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
                         .foregroundColor((bleService.latestTelemetry?.verticalSpeed ?? 0) >= 0 ? .green : .red)
                     Text("H: \(horizontalSpeedString) km/h")
-                        .font(.headline).lineLimit(1).frame(maxWidth: .infinity)
+                        .font(.headline).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
                     Text("Dist: \(distanceString) km")
-                        .font(.headline).minimumScaleFactor(0.5).lineLimit(1).frame(maxWidth: .infinity)
+                        .font(.headline).minimumScaleFactor(0.5).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
                 }
                 GridRow {
                     Text("Flight: \(flightTime)")
-                        .font(.headline).minimumScaleFactor(0.5).lineLimit(1).frame(maxWidth: .infinity)
+                        .font(.headline).minimumScaleFactor(0.5).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
                     Text("Land: \(landingTimeString)")
-                        .font(.headline).minimumScaleFactor(0.5).lineLimit(1).frame(maxWidth: .infinity)
+                        .font(.headline).minimumScaleFactor(0.5).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
                     Text("Arrival: \(arrivalTimeString)")
-                        .font(.headline).minimumScaleFactor(0.5).lineLimit(1).frame(maxWidth: .infinity)
+                        .font(.headline).minimumScaleFactor(0.5).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
             .padding(.horizontal)
