@@ -137,15 +137,17 @@ struct MapView: View {
                     .ignoresSafeArea(edges: .top)
                 }
                 
-                DataPanelView()
-                    .frame(maxWidth: .infinity)
-                    .background(Color(.systemBackground).opacity(0.95))
-                    .gesture(DragGesture(minimumDistance: 3.0, coordinateSpace: .local)
-                        .onEnded { value in
-                            if value.translation.height < 0 && abs(value.translation.width) < abs(value.translation.height) {
-                                showSettings = true
-                            }
-                        })
+                if annotationService.appState != .finalApproach {
+                    DataPanelView()
+                        .frame(maxWidth: .infinity)
+                        .background(Color(.systemBackground).opacity(0.95))
+                        .gesture(DragGesture(minimumDistance: 3.0, coordinateSpace: .local)
+                            .onEnded { value in
+                                if value.translation.height < 0 && abs(value.translation.width) < abs(value.translation.height) {
+                                    showSettings = true
+                                }
+                            })
+                }
             }
             .background(Color(.systemGroupedBackground))
             .onAppear { // Moved here

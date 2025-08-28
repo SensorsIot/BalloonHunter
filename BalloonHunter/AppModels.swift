@@ -80,6 +80,23 @@ struct DeviceSettings: Codable, Equatable {
     }
 }
 
+extension DeviceSettings {
+    var probeTypeCode: Int {
+        switch sondeType.uppercased() {
+        case "RS41": return 1
+        case "M20": return 2
+        case "M10": return 3
+        case "PILOT": return 4
+        case "DFM": return 5
+        default: return 1
+        }
+    }
+
+    func toCommandString() -> String {
+        return "3/\(probeTypeCode)/\(String(format: "%.3f", frequency))/\(oledSDA)/\(oledSCL)/\(oledRST)/\(ledPin)/\(RS41Bandwidth)/\(M20Bandwidth)/\(M10Bandwidth)/\(PILOTBandwidth)/\(DFMBandwidth)/\(callSign)/\(frequencyCorrection)/\(batPin)/\(batMin)/\(batMax)/\(batType)/\(lcdType)/\(nameType)/\(buzPin)/\(softwareVersion)"
+    }
+}
+
 // A class intended to hold prediction-related data that can be shared across the app
 class PredictionInfo: ObservableObject {
     @Published var landingTime: Date?
