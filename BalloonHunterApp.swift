@@ -35,35 +35,35 @@ import SwiftUI
 
 @main
 struct BalloonHunterApp: App {
-    private let persistenceService = PersistenceService()
-    @StateObject private var appSettings = AppSettings()
-    @StateObject private var userSettings = UserSettings()
-    @StateObject private var annotationService = AnnotationService()
-    @StateObject private var routeService = RouteCalculationService()
-    @StateObject private var locationService = CurrentLocationService()
-    @StateObject private var bleService = BLECommunicationService(persistenceService: PersistenceService())
-    @StateObject private var predictionService = PredictionService()
+    @StateObject var serviceManager = ServiceManager()
+    @StateObject var appSettings = AppSettings()
+    @StateObject var userSettings = UserSettings()
 
-    
+    init() {
+        // No need for individual service initializations here, ServiceManager handles it.
+    }
 
     var body: some Scene {
         WindowGroup {
             MapView()
                 .onAppear {
-                    if let persisted = persistenceService.readPredictionParameters() {
+                    if let persisted = serviceManager.persistenceService.readPredictionParameters() {
                         userSettings.burstAltitude = persisted.burstAltitude
                         userSettings.ascentRate = persisted.ascentRate
                         userSettings.descentRate = persisted.descentRate
                     }
+                    serviceManager.currentLocationService.requestPermission()
+                    serviceManager.currentLocationService.startUpdating()
                 }
-                .environmentObject(bleService)
-                .environmentObject(locationService)
-                .environmentObject(predictionService)
-                .environmentObject(routeService)
+                .environmentObject(serviceManager.bleCommunicationService)
+                .environmentObject(serviceManager.predictionService)
+                .environmentObject(serviceManager.routeCalculationService)
+                .environmentObject(serviceManager.currentLocationService)
                 .environmentObject(appSettings)
                 .environmentObject(userSettings)
-                .environmentObject(annotationService)
-                .environmentObject(persistenceService)
+                .environmentObject(serviceManager.annotationService)
+                .environmentObject(serviceManager.persistenceService)
+                .environmentObject(serviceManager) // Pass ServiceManager as environment object
         }
     }
 }

@@ -270,9 +270,17 @@ struct MapAnnotationItem: Identifiable {
 }
 
 // A simple enum to represent the user's preferred mode of transport for route calculations.
-enum TransportationMode {
+enum TransportationMode: Sendable, Equatable {
     case car
     case bike
+
+    nonisolated static func == (lhs: TransportationMode, rhs: TransportationMode) -> Bool {
+        switch (lhs, rhs) {
+        case (.car, .car): return true
+        case (.bike, .bike): return true
+        default: return false
+        }
+    }
 }
 
 // Additional models from the FSD that are useful
@@ -380,12 +388,35 @@ final class AppSettings: ObservableObject {
 }
 
 // Ensured ObservableObject conformance and class type for SwiftUI compatibility.
-final class UserSettings: ObservableObject {
+final class UserSettings: ObservableObject, Codable { // Added Codable
     init() {
         print("[DEBUG] UserSettings init")
     }
     @Published var burstAltitude: Double = 35000.0
     @Published var ascentRate: Double = 5.0
     @Published var descentRate: Double = 5.0
+
+    static var `default`: UserSettings { UserSettings() }
+
+    // Manual Codable implementation because @Published properties are not automatically encoded/decoded
+    enum CodingKeys: String, CodingKey {
+        case burstAltitude
+        case ascentRate
+        case descentRate
+    }
+
+    required init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        burstAltitude = try container.decode(Double.self, forKey: .burstAltitude)
+        ascentRate = try container.decode(Double.self, forKey: .ascentRate)
+        descentRate = try container.decode(Double.self, forKey: .descentRate)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(burstAltitude, forKey: .burstAltitude)
+        try container.encode(ascentRate, forKey: .ascentRate)
+        try container.encode(descentRate, forKey: .descentRate)
+    }
 }
 

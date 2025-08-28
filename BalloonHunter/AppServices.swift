@@ -12,6 +12,8 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
     private var centralManager: CBCentralManager!
     private var persistenceService: PersistenceService
     private var connectedPeripheral: CBPeripheral?
+    private var writeCharacteristic: CBCharacteristic?
+
     init(persistenceService: PersistenceService) {
         self.persistenceService = persistenceService
         super.init()
@@ -77,6 +79,9 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
             if characteristic.properties.contains(.notify) {
                 peripheral.setNotifyValue(true, for: characteristic)
             }
+            if characteristic.properties.contains(.write) || characteristic.properties.contains(.writeWithoutResponse) {
+                self.writeCharacteristic = characteristic
+            }
         }
     }
     @Published var isReadyForCommands = false
@@ -94,6 +99,7 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
             self.latestTelemetry = telemetryData
             self.telemetryData.send(telemetryData)
             self.telemetryHistory.append(telemetryData)
+            afcHistory.append(telemetryData.afcFrequency)
             if !isReadyForCommands {
                 isReadyForCommands = true
                 readSettings()
@@ -116,16 +122,33 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
     @Published var connectionStatus: ConnectionStatus = .disconnected
     @Published var telemetryData = PassthroughSubject<TelemetryData, Never>()
     @Published var telemetryHistory: [TelemetryData] = []
+    @Published var afcHistory: [Int] = []
+    private let afcHistoryCapacity = 20
+
     func readSettings() {
         sendCommand(command: "o{?}o")
     }
     func sendCommand(command: String) {
         print("[BLECommunicationService][State: \(SharedAppState.shared.appState.rawValue)] sendCommand: \(command)")
-        // TODO: Implement command sending via BLE
+        guard let peripheral = connectedPeripheral,
+              let characteristic = writeCharacteristic,
+              let data = command.data(using: .utf8) else {
+            print("[BLECommunicationService][State: \(SharedAppState.shared.appState.rawValue)] Error: Not connected or write characteristic not found.")
+            return
+        }
+        peripheral.writeValue(data, for: characteristic, type: .withResponse)
     }
     func simulateTelemetry(_ data: TelemetryData) {
         self.latestTelemetry = data
         self.telemetryData.send(data)
+    }
+
+    func disconnect() {
+        if let connectedPeripheral = connectedPeripheral {
+            centralManager.cancelPeripheralConnection(connectedPeripheral)
+        }
+        centralManager.stopScan()
+        connectionStatus = .disconnected
     }
 }
 
@@ -139,7 +162,13 @@ final class CurrentLocationService: NSObject, ObservableObject {
         super.init()
         locationManager.delegate = self
         locationManager.desiredAccuracy = kCLLocationAccuracyBest
+    }
+
+    func requestPermission() {
         locationManager.requestWhenInUseAuthorization()
+    }
+
+    func startUpdating() {
         locationManager.startUpdatingLocation()
     }
 }
@@ -158,18 +187,41 @@ extension CurrentLocationService: CLLocationManagerDelegate {
 @MainActor
 final class PersistenceService: ObservableObject {
     @Published var deviceSettings: DeviceSettings? = nil
-    @Published var userSettings: UserSettings? = nil
+    @Published var userSettings: UserSettings = .default {
+        didSet {
+            // Save to UserDefaults whenever userSettings changes
+            if let encoded = try? JSONEncoder().encode(userSettings) {
+                UserDefaults.standard.set(encoded, forKey: "userSettings")
+                print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] UserSettings saved to UserDefaults.")
+            } else {
+                print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] Failed to encode UserSettings for saving.")
+            }
+        }
+    }
+
     func save(deviceSettings: DeviceSettings) {
         self.deviceSettings = deviceSettings
+        print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] PersistenceService: deviceSettings saved: \(deviceSettings)")
     }
     func save(userSettings: UserSettings) {
-        self.userSettings = userSettings
+        self.userSettings = userSettings // This will trigger didSet
     }
     func readPredictionParameters() -> UserSettings? {
         return userSettings
     }
     init() {
         print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] PersistenceService init")
+        // Load UserSettings from UserDefaults on init
+        if let savedSettings = UserDefaults.standard.data(forKey: "userSettings") {
+            if let decodedSettings = try? JSONDecoder().decode(UserSettings.self, from: savedSettings) {
+                self.userSettings = decodedSettings
+                print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] UserSettings loaded from UserDefaults.")
+            } else {
+                print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] Failed to decode UserSettings from UserDefaults.")
+            }
+        } else {
+            print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] No UserSettings found in UserDefaults, using default.")
+        }
         let fileManager = FileManager.default
         print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] Current working directory: \(fileManager.currentDirectoryPath)")
     }
@@ -297,7 +349,7 @@ final class PredictionService: NSObject, ObservableObject {
             do {
                 let (data, _) = try await URLSession.shared.data(from: url)
                 let apiResponse = try JSONDecoder().decode(APIResponse.self, from: data)
-                await MainActor.run {
+                await MainActor.run { @MainActor in
                     self.path = []
                     var ascentPoints: [CLLocationCoordinate2D] = []
                     var descentPoints: [CLLocationCoordinate2D] = []
@@ -359,7 +411,7 @@ final class PredictionService: NSObject, ObservableObject {
                 }
                 // print("[Debug][PredictionService] Prediction fetch succeeded.")
             } catch {
-                await MainActor.run {
+                await MainActor.run { @MainActor in
                     print("[Debug][PredictionService][State: \(SharedAppState.shared.appState.rawValue)] Network or JSON parsing failed: \(error.localizedDescription)")
                     self.predictionStatus = .error(error.localizedDescription)
                     self.isLoading = false
@@ -440,23 +492,48 @@ final class AnnotationService: ObservableObject {
         if let userLoc = userLocation {
             items.append(MapAnnotationItem(coordinate: CLLocationCoordinate2D(latitude: userLoc.latitude, longitude: userLoc.longitude), kind: .user))
         }
-        // Add balloon annotation if telemetry available
-        if let tel = telemetry {
-            let isAscending = tel.verticalSpeed >= 0
-            items.append(MapAnnotationItem(coordinate: CLLocationCoordinate2D(latitude: tel.latitude, longitude: tel.longitude), kind: .balloon, isAscending: isAscending))
-        }
-        // Add burst point (prediction)
-        if let burst = prediction?.burstPoint {
-            items.append(MapAnnotationItem(coordinate: burst, kind: .burst))
-        }
-        // Add landing point (prediction)
-        if let landing = prediction?.landingPoint {
-            items.append(MapAnnotationItem(coordinate: landing, kind: .landing))
-        }
-        // Add landed annotation if vertical speed negative (descending/landed)
-        if let tel = telemetry, tel.verticalSpeed < 0 {
-            items.append(MapAnnotationItem(coordinate: CLLocationCoordinate2D(latitude: tel.latitude, longitude: tel.longitude), kind: .landed))
+
+        // Only add balloon-related annotations if in longRangeTracking or finalApproach state
+        if self.appState == .longRangeTracking || self.appState == .finalApproach {
+            // Add balloon annotation if telemetry available
+            if let tel = telemetry {
+                let isAscending = tel.verticalSpeed >= 0
+                items.append(MapAnnotationItem(coordinate: CLLocationCoordinate2D(latitude: tel.latitude, longitude: tel.longitude), kind: .balloon, isAscending: isAscending))
+            }
+            // Add burst point (prediction)
+            if let burst = prediction?.burstPoint {
+                items.append(MapAnnotationItem(coordinate: burst, kind: .burst))
+            }
+            // Add landing point (prediction)
+            if let landing = prediction?.landingPoint {
+                items.append(MapAnnotationItem(coordinate: landing, kind: .landing))
+            }
+            // Add landed annotation if vertical speed negative (descending/landed)
+            if let tel = telemetry, tel.verticalSpeed < 0 {
+                items.append(MapAnnotationItem(coordinate: CLLocationCoordinate2D(latitude: tel.latitude, longitude: tel.longitude), kind: .landed))
+            }
         }
         self.annotations = items
+    }
+}
+
+// MARK: - ServiceManager
+@MainActor
+final class ServiceManager: ObservableObject {
+    let bleCommunicationService: BLECommunicationService
+    let currentLocationService: CurrentLocationService
+    let persistenceService: PersistenceService
+    let routeCalculationService: RouteCalculationService
+    let predictionService: PredictionService
+    let annotationService: AnnotationService
+
+    init() {
+        print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] ServiceManager init")
+        self.persistenceService = PersistenceService()
+        self.bleCommunicationService = BLECommunicationService(persistenceService: self.persistenceService)
+        self.currentLocationService = CurrentLocationService()
+        self.routeCalculationService = RouteCalculationService()
+        self.predictionService = PredictionService()
+        self.annotationService = AnnotationService()
     }
 }
