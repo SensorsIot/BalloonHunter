@@ -180,7 +180,14 @@ final class RouteCalculationService: ObservableObject {
         let request = MKDirections.Request()
         request.source = MKMapItem(placemark: MKPlacemark(coordinate: from))
         request.destination = MKMapItem(placemark: MKPlacemark(coordinate: to))
-        request.transportType = (transportType == .car) ? .automobile : .walking
+
+        switch transportType {
+        case .car:
+            request.transportType = .automobile
+        case .bike:
+            request.transportType = .cycling
+        }
+
         let directions = MKDirections(request: request)
         directions.calculate { [weak self] response, error in
             guard let self = self else { return }
@@ -192,10 +199,16 @@ final class RouteCalculationService: ObservableObject {
                 print("[RouteCalculationService] No route found.")
                 return
             }
+
+            var travelTime = route.expectedTravelTime
+            if transportType == .bike {
+                travelTime *= 0.7 // Reduce by 30% for bicycle
+            }
+
             let routeData = RouteData(
                 path: route.polyline.coordinates,
                 distance: route.distance,
-                expectedTravelTime: route.expectedTravelTime
+                expectedTravelTime: travelTime
             )
             DispatchQueue.main.async {
                 self.routeData = routeData
@@ -306,6 +319,7 @@ final class PredictionService: NSObject, ObservableObject {
                                 }
                                 if let dt = last.datetime {
                                     let formatter = ISO8601DateFormatter()
+                                    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
                                     self.landingTime = formatter.date(from: dt)
                                 }
                             }
@@ -343,6 +357,50 @@ final class PredictionService: NSObject, ObservableObject {
                 print("[Debug][PredictionService] Prediction fetch failed with error: \(error.localizedDescription)")
             }
         }
+    }
+}
+
+// MARK: - AnnotationService
+@MainActor
+final class AnnotationService: ObservableObject {
+    init() {
+        print("[DEBUG] AnnotationService init")
+    }
+    @Published var annotations: [MapAnnotationItem] = []
+    private let isFinalApproachSubject = PassthroughSubject<Bool, Never>()
+    var isFinalApproach: AnyPublisher<Bool, Never> { isFinalApproachSubject.eraseToAnyPublisher() }
+
+    // Update the annotations list based on latest data.
+    func updateAnnotations(
+        telemetry: TelemetryData?,
+        userLocation: LocationData?,
+        prediction: PredictionData?
+    ) {
+        var items: [MapAnnotationItem] = []
+        // Add user annotation if available
+        if let userLoc = userLocation {
+            items.append(MapAnnotationItem(coordinate: CLLocationCoordinate2D(latitude: userLoc.latitude, longitude: userLoc.longitude), kind: .user))
+        }
+        // Add balloon annotation if telemetry available
+        if let tel = telemetry {
+            items.append(MapAnnotationItem(coordinate: CLLocationCoordinate2D(latitude: tel.latitude, longitude: tel.longitude), kind: .balloon))
+        }
+        // Add burst point (prediction)
+        if let burst = prediction?.burstPoint {
+            items.append(MapAnnotationItem(coordinate: burst, kind: .burst))
+        }
+        // Add landing point (prediction)
+        if let landing = prediction?.landingPoint {
+            items.append(MapAnnotationItem(coordinate: landing, kind: .landing))
+        }
+        // Add landed annotation if vertical speed negative (descending/landed)
+        if let tel = telemetry, tel.verticalSpeed < 0 {
+            items.append(MapAnnotationItem(coordinate: CLLocationCoordinate2D(latitude: tel.latitude, longitude: tel.longitude), kind: .landed))
+            isFinalApproachSubject.send(true)
+        } else {
+            isFinalApproachSubject.send(false)
+        }
+        self.annotations = items
     }
 }
 

@@ -62,6 +62,17 @@ struct MapView: View {
         GeometryReader { geometry in
             VStack(spacing: 0) {
                 HStack {
+                    Button(action: {
+                        showSettings = true
+                    }) {
+                        Image(systemName: "gearshape.fill")
+                            .font(.title)
+                            .padding()
+                            .background(Color.white.opacity(0.8))
+                            .clipShape(Circle())
+                            .shadow(radius: 5)
+                    }
+                    .padding(.leading)
                     Spacer()
                     Picker("Mode", selection: $transportMode) {
                         Text("Car").tag(TransportationMode.car)
@@ -88,8 +99,6 @@ struct MapView: View {
                                         Image(systemName: "flag.checkered")
                                     case .burst:
                                         Image(systemName: "sparkles")
-                                    default:
-                                        EmptyView()
                                     }
                                 }
                             }
@@ -120,13 +129,13 @@ struct MapView: View {
                                 Map(position: $cameraPosition) {
                                     // User annotation if available
                                     if let userLocation = locationService.locationData {
-                                        Annotation("", coordinate: CLLocationCoordinate2D(latitude: userLocation.latitude, longitude: userLocation.longitude)) {
+                                        Annotation("",coordinate: CLLocationCoordinate2D(latitude: userLocation.latitude, longitude: userLocation.longitude)) {
                                             Image(systemName: "person.circle")
                                         }
                                     }
                                     // Balloon annotation if available
                                     if let balloonTelemetry = bleService.latestTelemetry {
-                                        Annotation("", coordinate: CLLocationCoordinate2D(latitude: balloonTelemetry.latitude, longitude: balloonTelemetry.longitude)) {
+                                        Annotation("",coordinate: CLLocationCoordinate2D(latitude: balloonTelemetry.latitude, longitude: balloonTelemetry.longitude)) {
                                             Image(systemName: "balloon")
                                         }
                                     }
@@ -241,7 +250,7 @@ struct MapView: View {
                 initialCameraFitDone = true
             }
         }
-        .onChange(of: transportMode) { mode in
+        .onChange(of: transportMode) { _, _ in
             recalculateRoute()
         }
         // Removed .onChange(of: bleService.balloonDescends) { value in ... }
@@ -303,18 +312,7 @@ struct MapView: View {
             return
         }
         
-        // Compute bounding box corners
-        let sw = CLLocationCoordinate2D(latitude: minLat, longitude: minLon)
-        let nw = CLLocationCoordinate2D(latitude: maxLat, longitude: minLon)
-        let se = CLLocationCoordinate2D(latitude: minLat, longitude: maxLon)
-        let ne = CLLocationCoordinate2D(latitude: maxLat, longitude: maxLon)
         
-        // Check if each labeled point falls within the bounding box
-        for (label, coord) in labeledPoints {
-            let withinLat = (coord.latitude >= minLat) && (coord.latitude <= maxLat)
-            let withinLon = (coord.longitude >= minLon) && (coord.longitude <= maxLon)
-            _ = withinLat && withinLon
-        }
         
         let centerLat = (minLat + maxLat) / 2
         let centerLon = (minLon + maxLon) / 2
@@ -374,12 +372,4 @@ struct MapView: View {
         .environmentObject(PersistenceService())
 }
 
-extension CLLocationCoordinate2D: Hashable {
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(latitude)
-        hasher.combine(longitude)
-    }
-    public static func == (lhs: CLLocationCoordinate2D, rhs: CLLocationCoordinate2D) -> Bool {
-        lhs.latitude == rhs.latitude && lhs.longitude == rhs.longitude
-    }
-}
+

@@ -76,7 +76,26 @@ class PredictionInfo: ObservableObject {
 }
 
 // A comprehensive class representing a single telemetry data point from the sonde
-struct TelemetryData: Identifiable {
+struct TelemetryData: Identifiable, Equatable {
+    static func == (lhs: TelemetryData, rhs: TelemetryData) -> Bool {
+        lhs.latitude == rhs.latitude &&
+        lhs.longitude == rhs.longitude &&
+        lhs.altitude == rhs.altitude &&
+        lhs.signalStrength == rhs.signalStrength &&
+        lhs.batteryPercentage == rhs.batteryPercentage &&
+        lhs.firmwareVersion == rhs.firmwareVersion &&
+        lhs.sondeName == rhs.sondeName &&
+        lhs.probeType == rhs.probeType &&
+        lhs.frequency == rhs.frequency &&
+        lhs.horizontalSpeed == rhs.horizontalSpeed &&
+        lhs.verticalSpeed == rhs.verticalSpeed &&
+        lhs.afcFrequency == rhs.afcFrequency &&
+        lhs.burstKillerEnabled == rhs.burstKillerEnabled &&
+        lhs.burstKillerTime == rhs.burstKillerTime &&
+        lhs.batVoltage == rhs.batVoltage &&
+        lhs.buzmute == rhs.buzmute
+    }
+
     let id = UUID()
     var latitude: Double = 0.0
     var longitude: Double = 0.0
@@ -96,6 +115,19 @@ struct TelemetryData: Identifiable {
     var buzmute: Bool = false
     var lastUpdateTime: TimeInterval? = nil
     
+    private enum Type0Index: Int {
+        case probeType = 1, frequency, signalStrength, batteryPercentage, batVoltage, buzmute, firmwareVersion
+    }
+    
+    private enum Type1Index: Int {
+        case probeType = 1, frequency, sondeName, latitude, longitude, altitude, horizontalSpeed, verticalSpeed, signalStrength, batteryPercentage, afcFrequency, burstKillerEnabled, burstKillerTime, batVoltage, buzmute
+        case firmwareVersion = 19
+    }
+    
+    private enum Type2Index: Int {
+        case probeType = 1, frequency, sondeName, signalStrength, batteryPercentage, afcFrequency, batVoltage, buzmute, firmwareVersion
+    }
+
     // Method to parse different types of telemetry messages
     mutating func parse(message: String) {
         let components = message.components(separatedBy: "/")
@@ -120,46 +152,46 @@ struct TelemetryData: Identifiable {
     
     private mutating func parseType0(components: [String]) {
         guard components.count >= 8 else { return }
-        self.probeType = components[1]
-        self.frequency = Double(components[2]) ?? 0.0
-        self.signalStrength = Double(components[3]) ?? 0.0
-        self.batteryPercentage = Int(components[4]) ?? 0
-        self.batVoltage = Int(components[5]) ?? 0
-        self.buzmute = (components[6] == "1")
-        self.firmwareVersion = components[7]
+        self.probeType = components[Type0Index.probeType.rawValue]
+        self.frequency = Double(components[Type0Index.frequency.rawValue]) ?? 0.0
+        self.signalStrength = Double(components[Type0Index.signalStrength.rawValue]) ?? 0.0
+        self.batteryPercentage = Int(components[Type0Index.batteryPercentage.rawValue]) ?? 0
+        self.batVoltage = Int(components[Type0Index.batVoltage.rawValue]) ?? 0
+        self.buzmute = (components[Type0Index.buzmute.rawValue] == "1")
+        self.firmwareVersion = components[Type0Index.firmwareVersion.rawValue]
     }
     
     private mutating func parseType1(components: [String]) {
         guard components.count >= 20 else { return }
-        self.probeType = components[1]
-        self.frequency = Double(components[2]) ?? 0.0
-        self.sondeName = components[3]
-        self.latitude = Double(components[4]) ?? 0.0
-        self.longitude = Double(components[5]) ?? 0.0
-        self.altitude = Double(components[6]) ?? 0.0
-        self.horizontalSpeed = Double(components[7]) ?? 0.0
-        self.verticalSpeed = Double(components[8]) ?? 0.0
-        self.signalStrength = Double(components[9]) ?? 0.0
-        self.batteryPercentage = Int(components[10]) ?? 0
-        self.afcFrequency = Int(components[11]) ?? 0
-        self.burstKillerEnabled = (components[12] == "1")
-        self.burstKillerTime = Int(components[13]) ?? 0
-        self.batVoltage = Int(components[14]) ?? 0
-        self.buzmute = (components[15] == "1")
-        self.firmwareVersion = components[19]
+        self.probeType = components[Type1Index.probeType.rawValue]
+        self.frequency = Double(components[Type1Index.frequency.rawValue]) ?? 0.0
+        self.sondeName = components[Type1Index.sondeName.rawValue]
+        self.latitude = Double(components[Type1Index.latitude.rawValue]) ?? 0.0
+        self.longitude = Double(components[Type1Index.longitude.rawValue]) ?? 0.0
+        self.altitude = Double(components[Type1Index.altitude.rawValue]) ?? 0.0
+        self.horizontalSpeed = Double(components[Type1Index.horizontalSpeed.rawValue]) ?? 0.0
+        self.verticalSpeed = Double(components[Type1Index.verticalSpeed.rawValue]) ?? 0.0
+        self.signalStrength = Double(components[Type1Index.signalStrength.rawValue]) ?? 0.0
+        self.batteryPercentage = Int(components[Type1Index.batteryPercentage.rawValue]) ?? 0
+        self.afcFrequency = Int(components[Type1Index.afcFrequency.rawValue]) ?? 0
+        self.burstKillerEnabled = (components[Type1Index.burstKillerEnabled.rawValue] == "1")
+        self.burstKillerTime = Int(components[Type1Index.burstKillerTime.rawValue]) ?? 0
+        self.batVoltage = Int(components[Type1Index.batVoltage.rawValue]) ?? 0
+        self.buzmute = (components[Type1Index.buzmute.rawValue] == "1")
+        self.firmwareVersion = components[Type1Index.firmwareVersion.rawValue]
     }
     
     private mutating func parseType2(components: [String]) {
         guard components.count >= 10 else { return }
-        self.probeType = components[1]
-        self.frequency = Double(components[2]) ?? 0.0
-        self.sondeName = components[3]
-        self.signalStrength = Double(components[4]) ?? 0.0
-        self.batteryPercentage = Int(components[5]) ?? 0
-        self.afcFrequency = Int(components[6]) ?? 0
-        self.batVoltage = Int(components[7]) ?? 0
-        self.buzmute = (components[8] == "1")
-        self.firmwareVersion = components[9]
+        self.probeType = components[Type2Index.probeType.rawValue]
+        self.frequency = Double(components[Type2Index.frequency.rawValue]) ?? 0.0
+        self.sondeName = components[Type2Index.sondeName.rawValue]
+        self.signalStrength = Double(components[Type2Index.signalStrength.rawValue]) ?? 0.0
+        self.batteryPercentage = Int(components[Type2Index.batteryPercentage.rawValue]) ?? 0
+        self.afcFrequency = Int(components[Type2Index.afcFrequency.rawValue]) ?? 0
+        self.batVoltage = Int(components[Type2Index.batVoltage.rawValue]) ?? 0
+        self.buzmute = (components[Type2Index.buzmute.rawValue] == "1")
+        self.firmwareVersion = components[Type2Index.firmwareVersion.rawValue]
     }
 }
 
@@ -237,7 +269,7 @@ struct LocationData: Equatable {
     var heading: Double
 }
 
-struct PredictionData {
+struct PredictionData: Equatable {
     var path: [CLLocationCoordinate2D]?
     var burstPoint: CLLocationCoordinate2D?
     var landingPoint: CLLocationCoordinate2D?
@@ -260,6 +292,31 @@ struct PredictionData {
         self.landingTime = landingTime
         self.latestTelemetry = latestTelemetry
     }
+
+    static func == (lhs: PredictionData, rhs: PredictionData) -> Bool {
+        let pathsEqual: Bool
+        if let lhsPath = lhs.path, let rhsPath = rhs.path {
+            pathsEqual = lhsPath.elementsEqual(rhsPath) { $0.latitude == $1.latitude && $0.longitude == $1.longitude }
+        } else {
+            pathsEqual = lhs.path == nil && rhs.path == nil
+        }
+
+        let burstPointsEqual: Bool
+        if let lhsBurst = lhs.burstPoint, let rhsBurst = rhs.burstPoint {
+            burstPointsEqual = lhsBurst.latitude == rhsBurst.latitude && lhsBurst.longitude == rhsBurst.longitude
+        } else {
+            burstPointsEqual = lhs.burstPoint == nil && rhs.burstPoint == nil
+        }
+
+        let landingPointsEqual: Bool
+        if let lhsLanding = lhs.landingPoint, let rhsLanding = rhs.landingPoint {
+            landingPointsEqual = lhsLanding.latitude == rhsLanding.latitude && lhsLanding.longitude == rhsLanding.longitude
+        } else {
+            landingPointsEqual = lhs.landingPoint == nil && rhs.landingPoint == nil
+        }
+
+        return pathsEqual && burstPointsEqual && landingPointsEqual && lhs.landingTime == rhs.landingTime && lhs.latestTelemetry == rhs.latestTelemetry
+    }
 }
 
 enum PredictionStatus: Equatable {
@@ -269,10 +326,20 @@ enum PredictionStatus: Equatable {
     case error(String) // Network error or explicit API error
 }
 
-struct RouteData {
+struct RouteData: Equatable {
     var path: [CLLocationCoordinate2D]?
     var distance: Double // in meters
     var expectedTravelTime: TimeInterval // in seconds
+
+    static func == (lhs: RouteData, rhs: RouteData) -> Bool {
+        let pathsEqual: Bool
+        if let lhsPath = lhs.path, let rhsPath = rhs.path {
+            pathsEqual = lhsPath.elementsEqual(rhsPath) { $0.latitude == $1.latitude && $0.longitude == $1.longitude }
+        } else {
+            pathsEqual = lhs.path == nil && rhs.path == nil
+        }
+        return pathsEqual && lhs.distance == rhs.distance && lhs.expectedTravelTime == rhs.expectedTravelTime
+    }
 }
 
 extension RouteData {

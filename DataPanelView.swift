@@ -5,15 +5,18 @@ struct DataPanelView: View {
     @EnvironmentObject var bleService: BLECommunicationService
     @EnvironmentObject var predictionService: PredictionService
     @EnvironmentObject var routeService: RouteCalculationService
+    @EnvironmentObject var locationService: CurrentLocationService
+
+    @State private var lastRouteCalculationTime: Date? = nil
 
     var body: some View {
         VStack {
-            // GRID 1 (Already done)
+            // Table 1: 4 columns
             Grid(alignment: .leading, horizontalSpacing: 5, verticalSpacing: 10) {
                 GridRow {
                     Image(systemName: bleService.connectionStatus == .connected ? "antenna.radiowaves.left.and.right" : "antenna.radiowaves.left.and.right.slash")
                         .foregroundColor(bleService.connectionStatus == .connected ? .green : .red)
-                        .font(.headline) // Smaller font for narrower column
+                        .font(.headline)
                     Text(bleService.latestTelemetry?.probeType ?? "N/A")
                         .font(.headline)
                         .minimumScaleFactor(0.5)
@@ -28,81 +31,137 @@ struct DataPanelView: View {
                         bleService.sendCommand(command: "mute=1")
                     }) {
                         Image(systemName: bleService.latestTelemetry?.buzmute == true ? "speaker.slash.fill" : "speaker.fill")
-                            .font(.headline) // Smaller font for narrower column
-                            .frame(minWidth: 44, minHeight: 44) // Keep tap target size
+                            .font(.headline)
+                            .frame(minWidth: 44, minHeight: 44)
                     }
-                    .gridCellAnchor(.trailing) // Pad to the right within its cell
+                    .gridCellAnchor(.trailing)
                 }
             }
-            .padding(.horizontal) // Add horizontal padding to match the other grid
+            .padding(.horizontal)
 
-            // NEW GRID 2: Frequency, Signal, Battery, Alt, H.Spd, V.Spd (3 columns)
+            // Table 2: 3 columns
             Grid(alignment: .leading, horizontalSpacing: 5, verticalSpacing: 10) {
                 GridRow {
-                    Text("\(String(format: "%.3f", bleService.latestTelemetry?.frequency ?? 0.0)) MHz") // Col 1
+                    Text("\(String(format: "%.3f", bleService.latestTelemetry?.frequency ?? 0.0)) MHz")
                         .font(.headline).minimumScaleFactor(0.5).lineLimit(1).frame(maxWidth: .infinity)
-                    Text("RSSI: \(bleService.latestTelemetry?.signalStrength ?? 0, specifier: "%.1f")") // Col 2
+                    Text("RSSI: \(signalStrengthString) dB")
                         .font(.headline).minimumScaleFactor(0.5).lineLimit(1).frame(maxWidth: .infinity)
-                    Text("Batt: \(bleService.latestTelemetry?.batteryPercentage ?? 0)%") // Col 3
+                    Text("Batt: \(batteryPercentageString)%")
                         .font(.headline).minimumScaleFactor(0.5).lineLimit(1).frame(maxWidth: .infinity)
                 }
                 GridRow {
-                    Text("Alt: \(bleService.latestTelemetry?.altitude ?? 0, specifier: "%.0f") m") // Col 1
-                        .font(.headline).minimumScaleFactor(0.5).lineLimit(1).frame(maxWidth: .infinity)
-                    Text("H: \(bleService.latestTelemetry?.horizontalSpeed ?? 0, specifier: "%.1f") m/s") // Col 2
-                        .font(.headline).lineLimit(1).frame(maxWidth: .infinity)
-                    Text("V: \(bleService.latestTelemetry?.verticalSpeed ?? 0, specifier: "%.1f") m/s") // Col 3
+                    Text("V: \(verticalSpeedAvgString) m/s")
                         .font(.headline).lineLimit(1).frame(maxWidth: .infinity)
                         .foregroundColor((bleService.latestTelemetry?.verticalSpeed ?? 0) >= 0 ? .green : .red)
-                }
-            }
-            .padding(.horizontal) // Add padding
-
-            // NEW GRID 3: Distance, Landing, Flight, Arrival (2 columns, 2 rows)
-            Grid(alignment: .leading, horizontalSpacing: 5, verticalSpacing: 10) {
-                GridRow {
-                    Text("Dist: \((routeService.routeData?.distance ?? 0) / 1000, specifier: "%.1f") km") // Col 1
-                        .font(.headline).minimumScaleFactor(0.5).lineLimit(1).frame(maxWidth: .infinity)
-                    Text("Flight: \(flightTime)") // Col 2
+                    Text("H: \(horizontalSpeedString) km/h")
+                        .font(.headline).lineLimit(1).frame(maxWidth: .infinity)
+                    Text("Dist: \(distanceString) km")
                         .font(.headline).minimumScaleFactor(0.5).lineLimit(1).frame(maxWidth: .infinity)
                 }
                 GridRow {
-                    Text("Land: \(predictionService.predictionData?.landingTime?.formatted(date: .omitted, time: .shortened) ?? "--:--")") // Col 1
+                    Text("Flight: \(flightTime)")
                         .font(.headline).minimumScaleFactor(0.5).lineLimit(1).frame(maxWidth: .infinity)
-                    Text("Arrival: \(routeService.routeData?.arrivalTime?.formatted(date: .omitted, time: .shortened) ?? "--:--")") // Col 2
+                    Text("Land: \(landingTimeString)")
+                        .font(.headline).minimumScaleFactor(0.5).lineLimit(1).frame(maxWidth: .infinity)
+                    Text("Arrival: \(arrivalTimeString)")
                         .font(.headline).minimumScaleFactor(0.5).lineLimit(1).frame(maxWidth: .infinity)
                 }
             }
-            .padding(.horizontal) // Keep padding
+            .padding(.horizontal)
 
-#if DEBUG
-            if let url = predictionService.lastAPICallURL {
-                Text("Prediction API URL: \(url)")
-                    .font(.footnote.monospaced())
-                    .foregroundColor(.gray)
-                    .padding([.horizontal, .bottom], 10)
-                    .lineLimit(3)
-                    .truncationMode(.middle)
-            }
-#endif
+
 
         }
         .background(Color(.systemGray6))
         .cornerRadius(15)
         .padding()
+        .onChange(of: predictionService.predictionData) { _, _ in
+            // Trigger update for flight time, landing time, arrival time, and distance
+            // These are already computed properties, so just re-rendering the view is enough
+        }
+        .onChange(of: routeService.routeData) { _, _ in
+            // Trigger update for flight time, landing time, arrival time, and distance
+            // These are already computed properties, so just re-rendering the view is enough
+        }
+        .onChange(of: locationService.locationData) { _, newLocation in
+            if let lastCalcTime = lastRouteCalculationTime {
+                if Date().timeIntervalSince(lastCalcTime) > 60 {
+                    // Recalculate route if user moved and last calculation was more than 1 minute ago
+                    // This logic should be in MapView or AppState, not DataPanelView
+                    // DataPanelView just displays the data
+                    lastRouteCalculationTime = Date()
+                }
+            } else {
+                lastRouteCalculationTime = Date()
+            }
+        }
     }
+
+    // MARK: - Computed properties and helpers
 
     var flightTime: String {
         guard let landingTime = predictionService.predictionData?.landingTime else { return "--:--" }
         let interval = landingTime.timeIntervalSinceNow
+
+        if interval < 0 {
+            return "00:00"
+        }
+
         let hours = Int(interval) / 3600
         let minutes = (Int(interval) % 3600) / 60
         return String(format: "%02d:%02d", hours, minutes)
     }
 
+    private var landingTimeString: String {
+        predictionService.predictionData?.landingTime?.formatted(date: .omitted, time: .shortened) ?? "--:--"
+    }
+
+    private var arrivalTimeString: String {
+        routeService.routeData?.arrivalTime?.formatted(date: .omitted, time: .shortened) ?? "--:--"
+    }
+
+    private var distanceString: String {
+        if let distanceMeters = routeService.routeData?.distance {
+            let distanceKm = distanceMeters / 1000.0
+            return String(format: "%.1f", distanceKm)
+        }
+        return "--"
+    }
+
+    private var signalStrengthString: String {
+        if let val = bleService.latestTelemetry?.signalStrength {
+            return String(format: "%.1f", val)
+        }
+        return "0.0"
+    }
+
+    private var batteryPercentageString: String {
+        if let val = bleService.latestTelemetry?.batteryPercentage {
+            return "\(val)"
+        }
+        return "0"
+    }
+
+    private var verticalSpeedAvg: Double {
+        let last5 = bleService.telemetryHistory.suffix(5)
+        let speeds = last5.compactMap { $0.verticalSpeed }
+        guard !speeds.isEmpty else { return bleService.latestTelemetry?.verticalSpeed ?? 0 }
+        let sum = speeds.reduce(0, +)
+        return sum / Double(speeds.count)
+    }
+    private var verticalSpeedAvgString: String {
+        String(format: "%.1f", verticalSpeedAvg)
+    }
+
+    private var horizontalSpeedString: String {
+        if let hs = bleService.latestTelemetry?.horizontalSpeed {
+            return String(format: "%.1f", hs)
+        }
+        return "N/A"
+    }
+}
 
 
-} // Closing brace for DataPanelView struct
 
 #Preview {
     DataPanelView()
