@@ -8,21 +8,11 @@
 
 /* Begin PBXBuildFile section */
 		473FAF832E4B0F5E00D53910 /* BalloonHunter.xcdatamodeld in Sources */ = {isa = PBXBuildFile; fileRef = 473FAF812E4B0F5E00D53910 /* BalloonHunter.xcdatamodeld */; };
-		47FEEB1A2E54FDDE0026A588 /* BalloonHunterApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 47FEEB192E54FDDE0026A588 /* BalloonHunterApp.swift */; };
-		47FEEB202E54FDE40026A588 /* MapView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 47FEEB1F2E54FDE40026A588 /* MapView.swift */; };
-		47FEEB222E54FDE50026A588 /* DataPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 47FEEB212E54FDE50026A588 /* DataPanelView.swift */; };
-		47FEEB242E54FDE60026A588 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 47FEEB232E54FDE60026A588 /* SettingsView.swift */; };
-		47FEEB262E54FDE90026A588 /* Overlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 47FEEB252E54FDE90026A588 /* Overlay.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		473FAF822E4B0F5E00D53910 /* BalloonHunter.xcdatamodel */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcdatamodel; path = BalloonHunter.xcdatamodel; sourceTree = "<group>"; };
 		4771180D2E3B511A00C79172 /* BalloonHunter.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = BalloonHunter.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		47FEEB192E54FDDE0026A588 /* BalloonHunterApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BalloonHunterApp.swift; sourceTree = "<group>"; };
-		47FEEB1F2E54FDE40026A588 /* MapView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MapView.swift; sourceTree = "<group>"; };
-		47FEEB212E54FDE50026A588 /* DataPanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DataPanelView.swift; sourceTree = "<group>"; };
-		47FEEB232E54FDE60026A588 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
-		47FEEB252E54FDE90026A588 /* Overlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Overlay.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -63,11 +53,6 @@
 				473FAF812E4B0F5E00D53910 /* BalloonHunter.xcdatamodeld */,
 				4771180F2E3B511A00C79172 /* BalloonHunter */,
 				4771180E2E3B511A00C79172 /* Products */,
-				47FEEB192E54FDDE0026A588 /* BalloonHunterApp.swift */,
-				47FEEB1F2E54FDE40026A588 /* MapView.swift */,
-				47FEEB212E54FDE50026A588 /* DataPanelView.swift */,
-				47FEEB232E54FDE60026A588 /* SettingsView.swift */,
-				47FEEB252E54FDE90026A588 /* Overlay.swift */,
 			);
 			sourceTree = "<group>";
 		};
@@ -153,12 +138,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				47FEEB242E54FDE60026A588 /* SettingsView.swift in Sources */,
 				473FAF832E4B0F5E00D53910 /* BalloonHunter.xcdatamodeld in Sources */,
-				47FEEB262E54FDE90026A588 /* Overlay.swift in Sources */,
-				47FEEB202E54FDE40026A588 /* MapView.swift in Sources */,
-				47FEEB1A2E54FDDE0026A588 /* BalloonHunterApp.swift in Sources */,
-				47FEEB222E54FDE50026A588 /* DataPanelView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -5,6 +5,9 @@
       location = "self:">
    </FileRef>
    <FileRef
-      location = "group:Info.plist">
+      location = "group:test.swift">
+   </FileRef>
+   <FileRef
+      location = "group:SettingsView.swift">
    </FileRef>
 </Workspace>

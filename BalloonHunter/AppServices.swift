@@ -96,11 +96,9 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
             return
         }
         print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] Discovered \(services.count) service(s) for \(peripheral.name ?? "Unknown").")
-        var uartServiceFound = false
         for service in services {
             print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] Discovered service: \(service.uuid.uuidString)")
             if service.uuid == UART_SERVICE_UUID {
-                uartServiceFound = true
                 print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] Found UART Service. Discovering characteristics for service: \(service.uuid.uuidString) with RX: \(UART_RX_CHARACTERISTIC_UUID.uuidString) and TX: \(UART_TX_CHARACTERISTIC_UUID.uuidString)")
                 peripheral.discoverCharacteristics([UART_RX_CHARACTERISTIC_UUID, UART_TX_CHARACTERISTIC_UUID], for: service)
             } else {
@@ -271,6 +269,14 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
         print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] sendSettingsCommand: Sending command: \(formattedCommand)")
         sendCommand(command: formattedCommand)
     }
+
+    var balloonLandedPosition: CLLocationCoordinate2D? {
+        let landed = telemetryHistory.suffix(100).filter { $0.verticalSpeed < 0 }
+        guard !landed.isEmpty else { return nil }
+        let lat = landed.map { $0.latitude }.reduce(0, +) / Double(landed.count)
+        let lon = landed.map { $0.longitude }.reduce(0, +) / Double(landed.count)
+        return CLLocationCoordinate2D(latitude: lat, longitude: lon)
+    }
 }
 
 // MARK: - CurrentLocationService
@@ -314,7 +320,7 @@ extension CurrentLocationService: CLLocationManagerDelegate {
 // MARK: - PersistenceService
 @MainActor
 final class PersistenceService: ObservableObject {
-    @Published var deviceSettings: DeviceSettings? = nil
+    @Published     @Published var deviceSettings: DeviceSettings? = nil
     @Published var userSettings: UserSettings = .default {
         didSet {
             // Save to UserDefaults whenever userSettings changes
@@ -383,10 +389,14 @@ final class RouteCalculationService: ObservableObject {
             guard let self = self else { return }
             if let error = error {
                 print("[RouteCalculationService][State: \(SharedAppState.shared.appState.rawValue)] Route calculation error: \(error.localizedDescription)")
+                // Do not block or throw, just print error and return
                 return
             }
             guard let route = response?.routes.first else {
                 print("[RouteCalculationService][State: \(SharedAppState.shared.appState.rawValue)] No route found.")
+                DispatchQueue.main.async {
+                    self.routeData = nil
+                }
                 return
             }
 

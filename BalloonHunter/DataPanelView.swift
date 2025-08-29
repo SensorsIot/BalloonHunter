@@ -29,12 +29,17 @@ struct DataPanelView: View {
                         .lineLimit(1)
                         .frame(maxWidth: .infinity, alignment: .leading)
                     Button(action: {
-                        bleService.sendCommand(command: "mute=1")
+                        if bleService.latestTelemetry?.buzmute == true {
+                            bleService.sendCommand(command: "mute=0") // Unmute
+                        } else {
+                            bleService.sendCommand(command: "mute=1") // Mute
+                        }
                     }) {
                         Image(systemName: bleService.latestTelemetry?.buzmute == true ? "speaker.slash.fill" : "speaker.fill")
                             .font(.headline)
-                            .scaleEffect(1.5)
-                            .frame(minWidth: 44, minHeight: 44)
+                            .scaleEffect(1.8)
+                            .frame(minWidth: 60, minHeight: 60)
+                            .contentShape(Rectangle())
                     }
                     .gridCellAnchor(.trailing)
                 }

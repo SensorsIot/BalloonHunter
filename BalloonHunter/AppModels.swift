@@ -192,6 +192,7 @@ struct TelemetryData: Identifiable, Equatable {
     
     private mutating func parseType1(components: [String]) {
         guard components.count >= 20 else { return }
+        print("[DEBUG][TelemetryData] Received type 1 packet: \(components.joined(separator: ", "))")
         self.probeType = components[Type1Index.probeType.rawValue]
         self.frequency = Double(components[Type1Index.frequency.rawValue]) ?? 0.0
         self.sondeName = components[Type1Index.sondeName.rawValue]
