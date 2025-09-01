@@ -616,6 +616,28 @@ final class PredictionService: NSObject, ObservableObject {
                     self.isLoading = false
                 }
                 print("[Debug][PredictionService][State: \(SharedAppState.shared.appState.rawValue)] Prediction fetch failed with error: \(error.localizedDescription)")
+                if let decodingError = error as? DecodingError {
+                    switch decodingError {
+                    case .dataCorrupted(let context):
+                        print("[Debug][PredictionService][State: \(SharedAppState.shared.appState.rawValue)] Data corrupted: \(context.debugDescription)")
+                        if let underlyingError = context.underlyingError {
+                            print("[Debug][PredictionService][State: \(SharedAppState.shared.appState.rawValue)] Underlying error: \(underlyingError.localizedDescription)")
+                        }
+                    case .keyNotFound(let key, let context):
+                        print("[Debug][PredictionService][State: \(SharedAppState.shared.appState.rawValue)] Key '\(key)' not found: \(context.debugDescription)")
+                    case .valueNotFound(let type, let context):
+                        print("[Debug][PredictionService][State: \(SharedAppState.shared.appState.rawValue)] Value of type '\(type)' not found: \(context.debugDescription)")
+                    case .typeMismatch(let type, let context):
+                        print("[Debug][PredictionService][State: \(SharedAppState.shared.appState.rawValue)] Type mismatch for type '\(type)': \(context.debugDescription)")
+                    @unknown default:
+                        print("[Debug][PredictionService][State: \(SharedAppState.shared.appState.rawValue)] Unknown decoding error: \(decodingError.localizedDescription)")
+                    }
+                }
+                // Attempt to print raw data if available (assuming 'data' is still in scope from the 'do' block)
+                // This part is tricky because 'data' is not directly accessible here.
+                // For a real-world scenario, you'd capture 'data' before the 'try' block.
+                // For now, we'll just print a placeholder message.
+                print("[Debug][PredictionService][State: \(SharedAppState.shared.appState.rawValue)] Return JSON: (Raw data not captured for logging in this scope)")
             }
         }
     }

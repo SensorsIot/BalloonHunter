@@ -38,6 +38,16 @@ struct MapView: View {
     private let locationManager = CLLocationManager()
     @State private var headingDelegate: HeadingDelegate? = nil
 
+    private var distanceToBalloon: CLLocationDistance? {
+        guard let userLocation = locationService.locationData,
+              let balloonTelemetry = bleService.latestTelemetry else {
+            return nil
+        }
+        let userCLLocation = CLLocation(latitude: userLocation.latitude, longitude: userLocation.longitude)
+        let balloonCLLocation = CLLocation(latitude: balloonTelemetry.latitude, longitude: balloonTelemetry.longitude)
+        return userCLLocation.distance(from: balloonCLLocation)
+    }
+
     var body: some View {
         GeometryReader { geometry in
             ZStack(alignment: .topLeading) {
@@ -211,13 +221,28 @@ struct MapView: View {
                                 })
                     }
                 }
-                Text("Heading: \(String(format: "%.0f", deviceHeading))°")
-                    .padding(8)
-                    .background(Color.black.opacity(0.7))
-                    .foregroundColor(.white)
-                    .cornerRadius(10)
-                    .padding([.top, .leading], 16)
-                    .font(.headline)
+                if annotationService.appState == .finalApproach {
+                    VStack(alignment: .leading) {
+                        Text("Heading: \(String(format: "%.0f", deviceHeading))°")
+                            .padding(8)
+                            .background(Color.black.opacity(0.7))
+                            .foregroundColor(.white)
+                            .cornerRadius(10)
+                            .padding(.top, 70)
+                            .padding(.leading, 16)
+                            .font(.headline)
+
+                        if let distance = distanceToBalloon {
+                            Text("Distance: \(String(format: "%.0f", distance)) m")
+                                .padding(8)
+                                .background(Color.black.opacity(0.7))
+                                .foregroundColor(.white)
+                                .cornerRadius(10)
+                                .padding(.leading, 16)
+                                .font(.headline)
+                        }
+                    }
+                }
             }
             .background(Color(.systemGroupedBackground))
             .onAppear { // Moved here
@@ -449,7 +474,7 @@ struct MapView: View {
         let aspectRatio = geometry.size.width / max(geometry.size.height, 1)
 
         // Padding as a small fraction of the distance (e.g., 10%)
-        let paddingFraction = 0.15
+        let paddingFraction = 0.3
         let verticalPadding = verticalDistance * paddingFraction
         let horizontalPadding = horizontalDistance * paddingFraction
 
