@@ -140,8 +140,20 @@ struct MapView: View {
                                     }
                                     // Balloon annotation if available
                                     if let balloonTelemetry = bleService.latestTelemetry {
-                                        Annotation("",coordinate: CLLocationCoordinate2D(latitude: balloonTelemetry.latitude, longitude: balloonTelemetry.longitude)) {
-                                            MapAnnotationItem(coordinate: CLLocationCoordinate2D(latitude: balloonTelemetry.latitude, longitude: balloonTelemetry.longitude), kind: .balloon, lastUpdateTime: bleService.lastTelemetryUpdateTime).view
+                                        let isAscending = balloonTelemetry.verticalSpeed >= 0 // Assuming this is needed for color
+                                        let color: Color = {
+                                            if let lastUpdate = bleService.lastTelemetryUpdateTime, Date().timeIntervalSince(lastUpdate) <= 3 {
+                                                return .green
+                                            } else {
+                                                return .red
+                                            }
+                                        }()
+
+                                        Annotation("", coordinate: CLLocationCoordinate2D(latitude: balloonTelemetry.latitude, longitude: balloonTelemetry.longitude)) {
+                                            BalloonAnnotationView(
+                                                altitude: balloonTelemetry.altitude,
+                                                isRecent: (bleService.lastTelemetryUpdateTime.map { Date().timeIntervalSince($0) <= 3 } ?? false)
+                                            )
                                         }
                                     }
                                     // Landing annotation if available
@@ -372,6 +384,17 @@ struct MapView: View {
         cameraPosition = .region(MKCoordinateRegion(center: center, span: span))
     }
 
+    private func updateFinalApproachCamera(geometry: GeometryProxy) {
+        let userCoord = locationService.locationData.map { CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude) }
+        let balloonLandedCoord = averagedBalloonLandedPosition()
+        finalApproachCameraPosition = computeFinalApproachCameraPosition(
+            geometry: geometry,
+            userCoord: userCoord,
+            balloonLandedCoord: balloonLandedCoord,
+            rotationDegrees: deviceHeading
+        )
+    }
+
     private func collectAllCoordinates() -> [CLLocationCoordinate2D] {
         var allCoordinates: [CLLocationCoordinate2D] = []
         
@@ -464,17 +487,6 @@ struct MapView: View {
         let cameraDistance = max(visibleMapHeight * 2, 250) // At least 250m
         let camera = MapCamera(centerCoordinate: adjustedCenterCoord, distance: cameraDistance, heading: rotationDegrees, pitch: 0)
         return .camera(camera)
-    }
-    
-    private func updateFinalApproachCamera(geometry: GeometryProxy) {
-        let userCoord = locationService.locationData.map { CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude) }
-        let balloonLandedCoord = averagedBalloonLandedPosition()
-        finalApproachCameraPosition = computeFinalApproachCameraPosition(
-            geometry: geometry,
-            userCoord: userCoord,
-            balloonLandedCoord: balloonLandedCoord,
-            rotationDegrees: deviceHeading
-        )
     }
     
     /// Helper method to compute the averaged balloon landed position from up to last 100 telemetry points after landing,

@@ -15,6 +15,7 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
     private var writeCharacteristic: CBCharacteristic?
 
     // Define UUIDs as constants
+    // Never touch these UUIDS!!!
     private let UART_SERVICE_UUID = CBUUID(string: "53797269-614D-6972-6B6F-44616C6D6F6E")
     private let UART_RX_CHARACTERISTIC_UUID = CBUUID(string: "53797267-614D-6972-6B6F-44616C6D6F8E")
     private let UART_TX_CHARACTERISTIC_UUID = CBUUID(string: "53797268-614D-6972-6B6F-44616C6D6F7E")
@@ -26,6 +27,14 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
         super.init()
         centralManager = CBCentralManager(delegate: self, queue: nil)
         print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] BLECommunicationService init")
+
+        // Phase 1: Populate currentSondeTrack at BLECommunicationService Init
+        // Load the track for the first sonde found in persistenceService.tracks if any exist
+        if let firstSondeName = persistenceService.tracks.keys.first {
+            self.currentSondeName = firstSondeName
+            self.currentSondeTrack = persistenceService.retrieveTrack(sondeName: firstSondeName)
+            print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] BLECommunicationService: Loaded initial track for \(firstSondeName) with \(self.currentSondeTrack.count) points.")
+        }
     }
 
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
@@ -52,6 +61,7 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
 
     func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral, advertisementData: [String : Any], rssi RSSI: NSNumber) {
         print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] Did discover peripheral: \(peripheral.name ?? "Unknown") (UUID: \(peripheral.identifier.uuidString)), RSSI: \(RSSI)")
+
         if let peripheralName = advertisementData[CBAdvertisementDataLocalNameKey] as? String {
             if peripheralName.contains("MySondy") {
                 print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] Found MySondy: \(peripheralName). Stopping scan and connecting...")
@@ -121,8 +131,6 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
         }
         print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] Discovered \(characteristics.count) characteristic(s) for service \(service.uuid.uuidString).")
         for characteristic in characteristics {
-            print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] Discovered characteristic: \(characteristic.uuid.uuidString) (Properties: \(characteristic.properties.rawValue))")
-
             if characteristic.uuid == UART_RX_CHARACTERISTIC_UUID {
                 print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] Found UART RX Characteristic. Checking notify property...")
                 if characteristic.properties.contains(.notify) {
@@ -131,57 +139,48 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
                 } else {
                     print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] UART RX Characteristic does not have notify property.")
                 }
-            }
-
-            if characteristic.uuid == UART_TX_CHARACTERISTIC_UUID {
+            } else if characteristic.uuid == UART_TX_CHARACTERISTIC_UUID {
                 print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] Found UART TX Characteristic. Checking write properties...")
-                if characteristic.properties.contains(.write) || characteristic.properties.contains(.writeWithoutResponse) {
+                if characteristic.properties.contains(.write) {
                     self.writeCharacteristic = characteristic
-                    print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] Assigned TX characteristic for writing.")
+                    print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] Assigned TX characteristic for writing (write).")
+                } else if characteristic.properties.contains(.writeWithoutResponse) {
+                    self.writeCharacteristic = characteristic
+                    print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] Assigned TX characteristic for writing (writeWithoutResponse).")
                 } else {
-                    print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] UART TX Characteristic does not have write properties.")
+                    print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] UART TX Characteristic does not have write or writeWithoutResponse properties.")
                 }
             }
         }
         // Additional debug if TX characteristic is missing among discovered characteristics
         if writeCharacteristic == nil {
-            print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] UART TX Characteristic not found among discovered characteristics. Make sure your BLE device is advertising it and has the correct properties (write/writeWithoutResponse).")
-            // Block command sending until TX characteristic is available
             isReadyForCommands = false
         } else {
-            // TX characteristic found and writable, ready for commands
             isReadyForCommands = true
         }
     }
 
     func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
         if let error = error {
-            print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] Error updating value for characteristic \(characteristic.uuid.uuidString): \(error.localizedDescription)")
             return
         }
         guard let data = characteristic.value else {
-            print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] Received empty data for characteristic \(characteristic.uuid.uuidString).")
             return
         }
         if let string = String(data: data, encoding: .utf8) {
-            // print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] Received data string from \(characteristic.uuid.uuidString): \(string)")
             self.parse(message: string)
         } else {
-            print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] Received data from \(characteristic.uuid.uuidString) but could not decode as UTF8: \(data.debugDescription)")
         }
     }
 
     func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {
         if let error = error {
-            print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] Error writing value for characteristic \(characteristic.uuid.uuidString): \(error.localizedDescription)")
         }
     }
 
     func peripheral(_ peripheral: CBPeripheral, didUpdateNotificationStateFor characteristic: CBCharacteristic, error: Error?) {
         if let error = error {
-            print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] Error updating notification state for characteristic \(characteristic.uuid.uuidString): \(error.localizedDescription)")
         } else {
-            print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] Successfully updated notification state for characteristic \(characteristic.uuid.uuidString). Is notifying: \(characteristic.isNotifying)")
         }
     }
 
@@ -199,13 +198,15 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
             var deviceSettings = DeviceSettings()
             deviceSettings.parse(message: message)
             persistenceService.save(deviceSettings: deviceSettings)
-            print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] Parse: Device settings updated: \(deviceSettings)")
         } else {
             var telemetryData = TelemetryData()
             telemetryData.parse(message: message)
             self.latestTelemetry = telemetryData
             self.telemetryData.send(telemetryData)
             self.lastTelemetryUpdateTime = Date()
+
+            // Print only position data
+            print("Position Data: Lat=\(telemetryData.latitude), Lon=\(telemetryData.longitude), Alt=\(telemetryData.altitude)")
 
             // Save track data using PersistenceService
             let didPurge = persistenceService.saveTrack(sondeName: telemetryData.sondeName, telemetryPoint: telemetryData)
@@ -249,6 +250,7 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
             print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] sendCommand Error: Could not convert command string to data.")
             return
         }
+        print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] Sending command: \(command) (Raw Data: \(data.hexEncodedString()))")
         peripheral.writeValue(data, for: characteristic, type: .withResponse)
     }
 
@@ -272,6 +274,12 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
         let formattedCommand = String(format: "o{f=%.2f/tipo=%d}o", frequency, probeType)
         print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] sendSettingsCommand: Sending command: \(formattedCommand)")
         sendCommand(command: formattedCommand)
+    }
+}
+
+extension Data {
+    func hexEncodedString() -> String {
+        return map { String(format: "%02hhx", $0) }.joined()
     }
 }
 
@@ -362,12 +370,10 @@ final class PersistenceService: ObservableObject {
 
         // Append the new point
         tracks[sondeName, default: []].append(transferData)
-        print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] PersistenceService: Appended telemetry for \(sondeName). Total points: \(tracks[sondeName]?.count ?? 0)")
 
         // Re-save the entire tracks dictionary to UserDefaults
         if let encoded = try? JSONEncoder().encode(tracks) {
             UserDefaults.standard.set(encoded, forKey: tracksUserDefaultsKey)
-            print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] PersistenceService: Tracks saved to UserDefaults.")
         } else {
             print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] PersistenceService: Failed to encode tracks for saving.")
         }
@@ -690,6 +696,7 @@ final class AnnotationService: ObservableObject {
         if self.appState == .longRangeTracking || self.appState == .finalApproach {
             // Add balloon annotation if telemetry available
             if let tel = telemetry {
+                
                 let isAscending = tel.verticalSpeed >= 0
                 items.append(MapAnnotationItem(coordinate: CLLocationCoordinate2D(latitude: tel.latitude, longitude: tel.longitude), kind: .balloon, isAscending: isAscending))
             }
