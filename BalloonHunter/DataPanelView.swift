@@ -150,11 +150,7 @@ struct DataPanelView: View {
     }
 
     private var verticalSpeedAvg: Double {
-        let last5 = bleService.telemetryHistory.suffix(5)
-        let speeds = last5.compactMap { $0.verticalSpeed }
-        guard !speeds.isEmpty else { return bleService.latestTelemetry?.verticalSpeed ?? 0 }
-        let sum = speeds.reduce(0, +)
-        return sum / Double(speeds.count)
+        return bleService.latestTelemetry?.verticalSpeed ?? 0
     }
     private var verticalSpeedAvgString: String {
         String(format: "%.1f", verticalSpeedAvg)

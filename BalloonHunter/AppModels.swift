@@ -227,10 +227,16 @@ struct TelemetryData: Identifiable, Equatable {
 
 
 // A struct that serves as a lightweight, serializable representation of telemetry data
-struct TelemetryTransferData: Codable {
+struct TelemetryTransferData: Codable, Equatable {
     var latitude: Double
     var longitude: Double
     var altitude: Double
+
+    init(telemetryData: TelemetryData) {
+        self.latitude = telemetryData.latitude
+        self.longitude = telemetryData.longitude
+        self.altitude = telemetryData.altitude
+    }
 }
 
 // A Codable and Equatable struct used for representing the settings received from or sent to the BLE device.
@@ -246,6 +252,7 @@ struct MapAnnotationItem: Identifiable {
     var kind: AnnotationKind
     var isAscending: Bool? = nil
     var status: AnnotationStatus = .fresh
+    var lastUpdateTime: Date? = nil
 
     enum AnnotationKind {
         case user
@@ -268,8 +275,15 @@ struct MapAnnotationItem: Identifiable {
                 .foregroundColor(.blue)
                 .font(.title)
         case .balloon:
+            let color: Color = {
+                if let lastUpdate = lastUpdateTime, Date().timeIntervalSince(lastUpdate) <= 3 {
+                    return .green
+                } else {
+                    return .red
+                }
+            }()
             Image(systemName: "balloon.fill")
-                .foregroundColor(isAscending == true ? .green : .red)
+                .foregroundColor(color)
                 .font(.title)
         case .burst:
             Image(systemName: "exclamationmark.triangle.fill")

@@ -693,9 +693,6 @@ struct SettingsView: View {
     var tuneTab: some View {
         Form {
             Section(header: Text("AFC Calibration")) {
-                Text("Mean AFC (last 20): \(afcMovingAverage)")
-                    .font(.headline)
-                    .padding(.bottom, 8)
                 TextField("Correction", value: $tempTuneFrequencyCorrection, formatter: NumberFormatter())
                     .keyboardType(.numberPad)
                     .font(.title)
@@ -706,12 +703,5 @@ struct SettingsView: View {
                 .disabled(!bleService.isReadyForCommands || isSavingTune)
             }
         }
-        .tabItem { Label("Tune", systemImage: "waveform") }
-    }
-    
-    var afcMovingAverage: Int {
-        let afc = bleService.afcHistory.suffix(20)
-        guard !afc.isEmpty else { return 0 }
-        return afc.reduce(0,+) / afc.count
     }
 }

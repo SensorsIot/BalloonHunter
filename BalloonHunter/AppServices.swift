@@ -205,8 +205,12 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
             telemetryData.parse(message: message)
             self.latestTelemetry = telemetryData
             self.telemetryData.send(telemetryData)
-            self.telemetryHistory.append(telemetryData)
-            afcHistory.append(telemetryData.afcFrequency)
+            self.lastTelemetryUpdateTime = Date()
+
+            // Save track data using PersistenceService
+            let didPurge = persistenceService.saveTrack(sondeName: telemetryData.sondeName, telemetryPoint: telemetryData)
+            self.currentSondeTrack = persistenceService.retrieveTrack(sondeName: telemetryData.sondeName)
+            self.currentSondeName = telemetryData.sondeName
 
             if !hasSentReadSettingsCommand && isReadyForCommands {
                 print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] First type 1 message parsed and TX ready. Reading settings...")
@@ -219,9 +223,9 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
     @Published var deviceSettings: DeviceSettings = .default
     @Published var connectionStatus: ConnectionStatus = .disconnected
     @Published var telemetryData = PassthroughSubject<TelemetryData, Never>()
-    @Published var telemetryHistory: [TelemetryData] = []
-    @Published var afcHistory: [Int] = []
-    private let afcHistoryCapacity = 20
+    @Published var lastTelemetryUpdateTime: Date? = nil
+    @Published var currentSondeTrack: [TelemetryTransferData] = []
+    @Published var currentSondeName: String? = nil
 
     func readSettings() {
         sendCommand(command: "o{?}o")
@@ -269,14 +273,6 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
         print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] sendSettingsCommand: Sending command: \(formattedCommand)")
         sendCommand(command: formattedCommand)
     }
-
-    var balloonLandedPosition: CLLocationCoordinate2D? {
-        let landed = telemetryHistory.suffix(100).filter { $0.verticalSpeed < 0 }
-        guard !landed.isEmpty else { return nil }
-        let lat = landed.map { $0.latitude }.reduce(0, +) / Double(landed.count)
-        let lon = landed.map { $0.longitude }.reduce(0, +) / Double(landed.count)
-        return CLLocationCoordinate2D(latitude: lat, longitude: lon)
-    }
 }
 
 // MARK: - CurrentLocationService
@@ -320,7 +316,7 @@ extension CurrentLocationService: CLLocationManagerDelegate {
 // MARK: - PersistenceService
 @MainActor
 final class PersistenceService: ObservableObject {
-    @Published     @Published var deviceSettings: DeviceSettings? = nil
+    @Published var deviceSettings: DeviceSettings? = nil
     @Published var userSettings: UserSettings = .default {
         didSet {
             // Save to UserDefaults whenever userSettings changes
@@ -333,6 +329,9 @@ final class PersistenceService: ObservableObject {
         }
     }
 
+    @Published var tracks: [String: [TelemetryTransferData]] = [:]
+    private let tracksUserDefaultsKey = "balloonTracks"
+
     func save(deviceSettings: DeviceSettings) {
         self.deviceSettings = deviceSettings
         print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] PersistenceService: deviceSettings saved: \(deviceSettings)")
@@ -343,6 +342,45 @@ final class PersistenceService: ObservableObject {
     func readPredictionParameters() -> UserSettings? {
         return userSettings
     }
+
+    /// Saves a telemetry point for a given sonde name.
+    /// If a new sonde name is encountered and other tracks exist, all old tracks are purged.
+    /// - Parameters:
+    ///   - sondeName: The name of the sonde.
+    ///   - telemetryPoint: The telemetry data point to save.
+    /// - Returns: `true` if a data purge occurred, `false` otherwise.
+    func saveTrack(sondeName: String, telemetryPoint: TelemetryData) -> Bool {
+        var didPurge = false
+        let transferData = TelemetryTransferData(telemetryData: telemetryPoint)
+
+        // Check for purge condition: new sondeName and existing tracks
+        if tracks[sondeName] == nil && !tracks.isEmpty {
+            tracks = [:] // Purge all old tracks
+            didPurge = true
+            print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] PersistenceService: Purged old tracks for new sonde: \(sondeName)")
+        }
+
+        // Append the new point
+        tracks[sondeName, default: []].append(transferData)
+        print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] PersistenceService: Appended telemetry for \(sondeName). Total points: \(tracks[sondeName]?.count ?? 0)")
+
+        // Re-save the entire tracks dictionary to UserDefaults
+        if let encoded = try? JSONEncoder().encode(tracks) {
+            UserDefaults.standard.set(encoded, forKey: tracksUserDefaultsKey)
+            print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] PersistenceService: Tracks saved to UserDefaults.")
+        } else {
+            print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] PersistenceService: Failed to encode tracks for saving.")
+        }
+        return didPurge
+    }
+
+    /// Retrieves the track for a given sonde name.
+    /// - Parameter sondeName: The name of the sonde.
+    /// - Returns: An array of `TelemetryTransferData` for the specified sonde, or an empty array if not found.
+    func retrieveTrack(sondeName: String) -> [TelemetryTransferData] {
+        return tracks[sondeName] ?? []
+    }
+
     init() {
         print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] PersistenceService init")
         // Load UserSettings from UserDefaults on init
@@ -356,6 +394,19 @@ final class PersistenceService: ObservableObject {
         } else {
             print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] No UserSettings found in UserDefaults, using default.")
         }
+
+        // Load tracks from UserDefaults on init
+        if let savedTracksData = UserDefaults.standard.data(forKey: tracksUserDefaultsKey) {
+            if let decodedTracks = try? JSONDecoder().decode([String: [TelemetryTransferData]].self, from: savedTracksData) {
+                self.tracks = decodedTracks
+                print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] PersistenceService: Tracks loaded from UserDefaults. Total tracks: \(tracks.count)")
+            } else {
+                print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] PersistenceService: Failed to decode tracks from UserDefaults.")
+            }
+        } else {
+            print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] PersistenceService: No tracks found in UserDefaults, initializing empty.")
+        }
+
         let fileManager = FileManager.default
         print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] Current working directory: \(fileManager.currentDirectoryPath)")
     }

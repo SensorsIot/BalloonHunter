@@ -31,14 +31,12 @@ struct MapView: View {
     // New state for device heading
     @State private var deviceHeading: CLLocationDirection = 0
     
-    // New state for final approach telemetry buffer
-    @State private var finalApproachTelemetry: [TelemetryData] = []
-    
     // New state for final approach camera position
     @State private var finalApproachCameraPosition: MapCameraPosition? = nil
 
     // CLLocationManager for compass heading
     private let locationManager = CLLocationManager()
+    @State private var headingDelegate: HeadingDelegate? = nil
 
     var body: some View {
         GeometryReader { geometry in
@@ -93,9 +91,9 @@ struct MapView: View {
                                 }
                             }
                             
-                            // Draw recent telemetry track from finalApproachTelemetry buffer if not empty
-                            if !finalApproachTelemetry.isEmpty {
-                                MapPolyline(coordinates: smoothedCoordinates(for: Array(finalApproachTelemetry.suffix(100))))
+                            // Draw recent telemetry track from currentSondeTrack if not empty
+                            if !bleService.currentSondeTrack.isEmpty {
+                                MapPolyline(coordinates: bleService.currentSondeTrack.map { CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude) })
                                     .stroke(.red, lineWidth: 2)
                             }
                         }
@@ -116,7 +114,7 @@ struct MapView: View {
                         .onAppear { updateFinalApproachCamera(geometry: geometry) }
                         .onChange(of: deviceHeading) { _, _ in updateFinalApproachCamera(geometry: geometry) }
                         .onChange(of: locationService.locationData) { _, _ in updateFinalApproachCamera(geometry: geometry) }
-                        .onChange(of: finalApproachTelemetry) { _, _ in updateFinalApproachCamera(geometry: geometry) }
+                        .onChange(of: bleService.currentSondeTrack) { _, _ in updateFinalApproachCamera(geometry: geometry) }
                     } else { // .startup or .longRangeTracking
                         ZStack(alignment: .top) {
                             if case .error(let message) = predictionService.predictionStatus, showPredictionError {
@@ -143,7 +141,7 @@ struct MapView: View {
                                     // Balloon annotation if available
                                     if let balloonTelemetry = bleService.latestTelemetry {
                                         Annotation("",coordinate: CLLocationCoordinate2D(latitude: balloonTelemetry.latitude, longitude: balloonTelemetry.longitude)) {
-                                            MapAnnotationItem(coordinate: CLLocationCoordinate2D(latitude: balloonTelemetry.latitude, longitude: balloonTelemetry.longitude), kind: .balloon, isAscending: balloonTelemetry.verticalSpeed >= 0).view
+                                            MapAnnotationItem(coordinate: CLLocationCoordinate2D(latitude: balloonTelemetry.latitude, longitude: balloonTelemetry.longitude), kind: .balloon, lastUpdateTime: bleService.lastTelemetryUpdateTime).view
                                         }
                                     }
                                     // Landing annotation if available
@@ -159,8 +157,8 @@ struct MapView: View {
                                         }
                                     }
                                     // Draw historical track (thin red line)
-                                    if !bleService.telemetryHistory.isEmpty {
-                                        MapPolyline(coordinates: smoothedCoordinates(for: bleService.telemetryHistory))
+                                    if !bleService.currentSondeTrack.isEmpty {
+                                        MapPolyline(coordinates: bleService.currentSondeTrack.map { CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude) })
                                             .stroke(.red, lineWidth: 2)
                                     }
 
@@ -214,11 +212,13 @@ struct MapView: View {
                 updateAppState()
 
                 // Setup locationManager for heading updates only once
-                locationManager.delegate = HeadingDelegate { newHeading in
+                let newDelegate = HeadingDelegate { newHeading in
                     withAnimation(.easeInOut(duration: 0.2)) {
                         self.deviceHeading = newHeading.trueHeading >= 0 ? newHeading.trueHeading : newHeading.magneticHeading
                     }
                 }
+                self.headingDelegate = newDelegate
+                locationManager.delegate = newDelegate
                 locationManager.requestWhenInUseAuthorization()
                 if CLLocationManager.headingAvailable() {
                     locationManager.headingFilter = 1
@@ -252,14 +252,16 @@ struct MapView: View {
             updateAppState()
             // Prevent prediction fetch during finalApproach
             if annotationService.appState != .finalApproach {
-                predictionService.fetchPrediction(telemetry: telemetry, userSettings: userSettings)
+                Task {
+                    await predictionService.fetchPrediction(telemetry: telemetry, userSettings: userSettings)
+                }
             }
             
             // Append telemetry only in finalApproach; clear otherwise
             if annotationService.appState == .finalApproach {
-                finalApproachTelemetry.append(telemetry)
+                // No longer using finalApproachTelemetry buffer, currentSondeTrack is the source
             } else {
-                finalApproachTelemetry.removeAll()
+                // No longer using finalApproachTelemetry buffer
             }
         }
         .onReceive(predictionService.$predictionData) { _ in
@@ -272,7 +274,9 @@ struct MapView: View {
         .onReceive(predictionTimer) { _ in
             if let telemetry = bleService.latestTelemetry {
                 print("[Debug][MapView][State: \(SharedAppState.shared.appState.rawValue)] Periodic prediction trigger.")
-                predictionService.fetchPrediction(telemetry: telemetry, userSettings: userSettings)
+                Task {
+                    await predictionService.fetchPrediction(telemetry: telemetry, userSettings: userSettings)
+                }
             }
         }
         .onChange(of: transportMode) { _, _ in
@@ -286,13 +290,14 @@ struct MapView: View {
             userLocation: locationService.locationData,
             prediction: predictionService.predictionData,
             route: routeService.routeData,
-            telemetryHistory: bleService.telemetryHistory
+            telemetryHistory: bleService.currentSondeTrack.map { TelemetryData(latitude: $0.latitude, longitude: $0.longitude, altitude: $0.altitude) }
         )
 
         if annotationService.appState == .longRangeTracking && !hasInitiallyFittedAllPoints {
              if locationService.locationData != nil,
                 bleService.latestTelemetry != nil,
-                predictionService.predictionData?.landingPoint != nil {
+                predictionService.predictionData?.landingPoint != nil,
+                !bleService.currentSondeTrack.isEmpty {
                  updateCameraToFitAllPoints()
                  hasInitiallyFittedAllPoints = true
              }
@@ -363,7 +368,6 @@ struct MapView: View {
         
         let center = CLLocationCoordinate2D(latitude: centerLat, longitude: centerLon)
         let span = MKCoordinateSpan(latitudeDelta: latitudeDelta, longitudeDelta: longitudeDelta)
-        
         // Update camera position to the computed region to fit all points with padding
         cameraPosition = .region(MKCoordinateRegion(center: center, span: span))
     }
@@ -387,7 +391,7 @@ struct MapView: View {
             allCoordinates.append(burstPoint)
         }
         
-        allCoordinates.append(contentsOf: bleService.telemetryHistory.map { CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude) })
+        allCoordinates.append(contentsOf: bleService.currentSondeTrack.map { CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude) })
         
         if let predictedPath = predictionService.predictionData?.path {
             allCoordinates.append(contentsOf: predictedPath)
@@ -396,26 +400,7 @@ struct MapView: View {
         return allCoordinates
     }
     
-    /// Helper method to compute the averaged balloon landed position from up to last 100 telemetry points after landing,
-    /// only relevant in finalApproach state.
-    private func averagedBalloonLandedPosition() -> CLLocationCoordinate2D? {
-        guard annotationService.appState == .finalApproach else {
-            return nil
-        }
-        // Use last up to 100 telemetry points in finalApproachTelemetry buffer
-        let recentTelemetry = finalApproachTelemetry.suffix(100)
-        guard !recentTelemetry.isEmpty else { return nil }
-        
-        let sumLat = recentTelemetry.reduce(0.0) { $0 + $1.latitude }
-        let sumLon = recentTelemetry.reduce(0.0) { $0 + $1.longitude }
-        
-        let avgLat = sumLat / Double(recentTelemetry.count)
-        let avgLon = sumLon / Double(recentTelemetry.count)
-        
-        let avgCoord = CLLocationCoordinate2D(latitude: avgLat, longitude: avgLon)
-        guard CLLocationCoordinate2DIsValid(avgCoord) else { return nil }
-        return avgCoord
-    }
+    
 
     // Helper to compute final approach camera position with rotation and offset so user is bottom-center and balloon landed visible
     private func computeFinalApproachCameraPosition(
@@ -473,35 +458,12 @@ struct MapView: View {
         let metersPerDegreeLon = metersPerDegreeLat * cos(user.latitude * .pi / 180)
         let latitudeDelta = visibleMapHeight / metersPerDegreeLat
         let longitudeDelta = visibleMapWidth / metersPerDegreeLon
-        let span = MKCoordinateSpan(latitudeDelta: latitudeDelta, longitudeDelta: longitudeDelta)
+        _ = MKCoordinateSpan(latitudeDelta: latitudeDelta, longitudeDelta: longitudeDelta)
 
         // Estimate a reasonable camera distance (for 2D map; otherwise adjust for 3D view if needed)
         let cameraDistance = max(visibleMapHeight * 2, 250) // At least 250m
         let camera = MapCamera(centerCoordinate: adjustedCenterCoord, distance: cameraDistance, heading: rotationDegrees, pitch: 0)
         return .camera(camera)
-    }
-    
-    /// Returns a moving average (window up to 100) of the telemetry list as CLLocationCoordinate2D values.
-    private func smoothedCoordinates(for history: [TelemetryData]) -> [CLLocationCoordinate2D] {
-        let window = 100
-        guard !history.isEmpty else { return [] }
-        var result: [CLLocationCoordinate2D] = []
-        var sumLat: Double = 0
-        var sumLon: Double = 0
-        var queueLat: [Double] = []
-        var queueLon: [Double] = []
-        for p in history {
-            queueLat.append(p.latitude)
-            queueLon.append(p.longitude)
-            sumLat += p.latitude
-            sumLon += p.longitude
-            if queueLat.count > window {
-                sumLat -= queueLat.removeFirst()
-                sumLon -= queueLon.removeFirst()
-            }
-            result.append(CLLocationCoordinate2D(latitude: sumLat / Double(queueLat.count), longitude: sumLon / Double(queueLon.count)))
-        }
-        return result
     }
     
     private func updateFinalApproachCamera(geometry: GeometryProxy) {
@@ -513,6 +475,27 @@ struct MapView: View {
             balloonLandedCoord: balloonLandedCoord,
             rotationDegrees: deviceHeading
         )
+    }
+    
+    /// Helper method to compute the averaged balloon landed position from up to last 100 telemetry points after landing,
+    /// only relevant in finalApproach state.
+    private func averagedBalloonLandedPosition() -> CLLocationCoordinate2D? {
+        guard annotationService.appState == .finalApproach else {
+            return nil
+        }
+        // Use last up to 100 telemetry points in finalApproachTelemetry buffer
+        let recentTelemetry = bleService.currentSondeTrack.suffix(100)
+        guard !recentTelemetry.isEmpty else { return nil }
+        
+        let sumLat = recentTelemetry.reduce(0.0) { $0 + $1.latitude }
+        let sumLon = recentTelemetry.reduce(0.0) { $0 + $1.longitude }
+        
+        let avgLat = sumLat / Double(recentTelemetry.count)
+        let avgLon = sumLon / Double(recentTelemetry.count)
+        
+        let avgCoord = CLLocationCoordinate2D(latitude: avgLat, longitude: avgLon)
+        guard CLLocationCoordinate2DIsValid(avgCoord) else { return nil }
+        return avgCoord
     }
 }
 
