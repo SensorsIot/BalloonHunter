@@ -14,6 +14,15 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
     private var connectedPeripheral: CBPeripheral?
     private var writeCharacteristic: CBCharacteristic?
 
+    // Injected annotationService reference (weak to avoid retain cycles)
+    weak var annotationService: AnnotationService?
+    
+    // Injected predictionService reference for new requirement
+    weak var predictionService: PredictionService?
+    
+    // Injected userLocationService reference for new requirement
+    weak var currentLocationService: CurrentLocationService?
+
     // Define UUIDs as constants
     // Never touch these UUIDS!!!
     private let UART_SERVICE_UUID = CBUUID(string: "53797269-614D-6972-6B6F-44616C6D6F6E")
@@ -155,8 +164,6 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
         // Additional debug if TX characteristic is missing among discovered characteristics
         if writeCharacteristic == nil {
             isReadyForCommands = false
-        } else {
-            isReadyForCommands = true
         }
     }
 
@@ -187,6 +194,11 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
     @Published var isReadyForCommands = false // Managed actively based on characteristic discovery
 
     private func parse(message: String) {
+        if !isReadyForCommands {
+            isReadyForCommands = true
+            print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] First BLE message received. isReadyForCommands is now true.")
+        }
+        
         let components = message.components(separatedBy: "/")
         guard components.count > 1 else {
             print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] Parse: Message too short or invalid format: \(message)")
@@ -198,15 +210,16 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
             var deviceSettings = DeviceSettings()
             deviceSettings.parse(message: message)
             persistenceService.save(deviceSettings: deviceSettings)
+            
+            // After settings saved, read settings from persistence and trigger prediction
+            triggerPredictionIfPossible()
+            
         } else {
             var telemetryData = TelemetryData()
             telemetryData.parse(message: message)
             self.latestTelemetry = telemetryData
             self.telemetryData.send(telemetryData)
             self.lastTelemetryUpdateTime = Date()
-
-            // Print only position data
-            print("Position Data: Lat=\(telemetryData.latitude), Lon=\(telemetryData.longitude), Alt=\(telemetryData.altitude)")
 
             // Save track data using PersistenceService
             let didPurge = persistenceService.saveTrack(sondeName: telemetryData.sondeName, telemetryPoint: telemetryData)
@@ -218,6 +231,11 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
                 readSettings()
                 hasSentReadSettingsCommand = true
             }
+            
+            // After parsing telemetry, try triggering prediction if possible
+            triggerPredictionIfPossible()
+
+            // Removed debug print for annotationService.updateState call
         }
     }
     @Published var latestTelemetry: TelemetryData? = nil
@@ -275,6 +293,24 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
         print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] sendSettingsCommand: Sending command: \(formattedCommand)")
         sendCommand(command: formattedCommand)
     }
+    
+    // New helper method to trigger prediction after both telemetry and device settings are available
+    private func triggerPredictionIfPossible() {
+        guard let latestTelemetry = latestTelemetry else {
+            return
+        }
+        // Read prediction parameters from persistenceService (UserDefaults)
+        let predictionParams = persistenceService.readPredictionParameters()
+        
+        guard let userSettings = predictionParams else {
+            // No user settings, can't predict
+            return
+        }
+        // Trigger PredictionService fetchPrediction
+        Task { @MainActor in
+            self.predictionService?.fetchPrediction(telemetry: latestTelemetry, userSettings: userSettings)
+        }
+    }
 }
 
 extension Data {
@@ -308,6 +344,7 @@ final class CurrentLocationService: NSObject, ObservableObject {
 
 extension CurrentLocationService: CLLocationManagerDelegate {
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
+        print("[DEBUG][CurrentLocationService] didUpdateLocations called with: \(locations)")
         guard let location = locations.last else {
             print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] CurrentLocationService: No locations received.")
             return
@@ -487,11 +524,27 @@ final class PredictionService: NSObject, ObservableObject {
     }
     @Published var predictionData: PredictionData? {
         didSet {
-            // print("[Debug][PredictionService] predictionData didSet: \(String(describing: predictionData?.landingPoint))")
+            // Whenever predictionData is set and valid, trigger route calculation
+            if let prediction = predictionData, let landingPoint = prediction.landingPoint {
+                // Obtain user location via injected currentLocationService if available
+                if let userLocation = currentLocationService?.locationData {
+                    Task { @MainActor in
+                        routeCalculationService?.calculateRoute(
+                            from: CLLocationCoordinate2D(latitude: userLocation.latitude, longitude: userLocation.longitude),
+                            to: landingPoint,
+                            transportType: .car
+                        )
+                    }
+                }
+            }
         }
     }
     @Published var lastAPICallURL: String? = nil
     @Published var isLoading: Bool = false
+
+    // Injected RouteCalculationService reference for triggering route calculation
+    weak var routeCalculationService: RouteCalculationService?
+    weak var currentLocationService: CurrentLocationService?
 
     private var path: [CLLocationCoordinate2D] = []
     private var burstPoint: CLLocationCoordinate2D? = nil
@@ -654,7 +707,7 @@ final class AnnotationService: ObservableObject {
     @Published var annotations: [MapAnnotationItem] = []
 
     init() {
-        print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] AnnotationService init")
+        print("[DEBUG][AnnotationService][state: \(appState.rawValue)] AnnotationService init")
     }
 
     func updateState(
@@ -662,17 +715,27 @@ final class AnnotationService: ObservableObject {
         userLocation: LocationData?,
         prediction: PredictionData?,
         route: RouteData?,
-        telemetryHistory: [TelemetryData]
+        telemetryHistory: [TelemetryData],
+        lastTelemetryUpdateTime: Date?
     ) {
-        // First, update annotations regardless of state
-        updateAnnotations(telemetry: telemetry, userLocation: userLocation, prediction: prediction)
+        if let tel = telemetry {
+            let telemetryStr = "lat=\(tel.latitude), lon=\(tel.longitude), alt=\(tel.altitude)"
+            let predictionStr = prediction != nil ? "true" : "false"
+            let routeStr = route != nil ? "true" : "false"
+            print("[DEBUG][AnnotationService][state: \(appState.rawValue)] telemetry=(\(telemetryStr)), prediction=\(predictionStr), route=\(routeStr), history=\(telemetryHistory.count)")
+        } else {
+            let predictionStr = prediction != nil ? "true" : "false"
+            let routeStr = route != nil ? "true" : "false"
+            print("[DEBUG][AnnotationService][state: \(appState.rawValue)] telemetry=nil, prediction=\(predictionStr), route=\(routeStr), history=\(telemetryHistory.count)")
+        }
 
         // Then, run the state machine
         switch appState {
         case .startup:
-            // Trigger to move to long range tracking
-            if telemetry != nil { // Only check telemetry for early map display
-                print("[STATE][State: \(SharedAppState.shared.appState.rawValue)] Transitioning to Long Range Tracking")
+            // Trigger to move to long range tracking only if all required data is present and route is valid
+            if let telemetry = telemetry,
+               let prediction = prediction, prediction.landingPoint != nil,
+               let route = route, route.path != nil {
                 appState = .longRangeTracking
             }
         case .longRangeTracking:
@@ -680,7 +743,7 @@ final class AnnotationService: ObservableObject {
             guard let userLoc = userLocation,
                   let tel = telemetry,
                   telemetryHistory.count >= 10 else {
-                return
+                break
             }
 
             let last10Telemetry = telemetryHistory.suffix(10)
@@ -693,7 +756,6 @@ final class AnnotationService: ObservableObject {
                  let isUserClose = distance < 1000 // 1 km
 
                 if isUserClose {
-                    print("[STATE][State: \(SharedAppState.shared.appState.rawValue)] Transitioning to Final Approach")
                     appState = .finalApproach
                 }
             }
@@ -701,12 +763,16 @@ final class AnnotationService: ObservableObject {
             // No transition out of final approach defined yet
             break
         }
+        
+        // First, update annotations regardless of state
+        updateAnnotations(telemetry: telemetry, userLocation: userLocation, prediction: prediction, lastTelemetryUpdateTime: lastTelemetryUpdateTime)
     }
 
     private func updateAnnotations(
         telemetry: TelemetryData?,
         userLocation: LocationData?,
-        prediction: PredictionData?
+        prediction: PredictionData?,
+        lastTelemetryUpdateTime: Date?
     ) {
         var items: [MapAnnotationItem] = []
         // Add user annotation if available
@@ -718,13 +784,15 @@ final class AnnotationService: ObservableObject {
         if self.appState == .longRangeTracking || self.appState == .finalApproach {
             // Add balloon annotation if telemetry available
             if let tel = telemetry {
-                
                 let isAscending = tel.verticalSpeed >= 0
-                items.append(MapAnnotationItem(coordinate: CLLocationCoordinate2D(latitude: tel.latitude, longitude: tel.longitude), kind: .balloon, isAscending: isAscending))
-            }
-            // Add burst point (prediction)
-            if let burst = prediction?.burstPoint {
-                items.append(MapAnnotationItem(coordinate: burst, kind: .burst))
+                items.append(MapAnnotationItem(coordinate: CLLocationCoordinate2D(latitude: tel.latitude, longitude: tel.longitude), kind: .balloon, isAscending: isAscending, lastUpdateTime: lastTelemetryUpdateTime, altitude: tel.altitude))
+                
+                // Add burst point (prediction) only if ascending
+                if isAscending {
+                    if let burst = prediction?.burstPoint {
+                        items.append(MapAnnotationItem(coordinate: burst, kind: .burst))
+                    }
+                }
             }
             // Add landing point (prediction)
             if let landing = prediction?.landingPoint {
@@ -749,6 +817,9 @@ final class ServiceManager: ObservableObject {
     let predictionService: PredictionService
     let annotationService: AnnotationService
 
+    private var cancellables = Set<AnyCancellable>()
+    private var predictionTimer: Timer?
+
     init() {
         print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] ServiceManager init")
         self.persistenceService = PersistenceService()
@@ -757,6 +828,69 @@ final class ServiceManager: ObservableObject {
         self.routeCalculationService = RouteCalculationService()
         self.predictionService = PredictionService()
         self.annotationService = AnnotationService()
+        // Inject annotationService reference into BLECommunicationService
+        self.bleCommunicationService.annotationService = self.annotationService
+        // Inject predictionService and currentLocationService into BLECommunicationService for triggers
+        self.bleCommunicationService.predictionService = self.predictionService
+        self.bleCommunicationService.currentLocationService = self.currentLocationService
+
+        // Inject RouteCalculationService and CurrentLocationService into PredictionService for route calculation trigger
+        self.predictionService.routeCalculationService = self.routeCalculationService
+        self.predictionService.currentLocationService = self.currentLocationService
+
+        // Setup Combine subscriptions to propagateStateUpdates on relevant changes
+        bleCommunicationService.$latestTelemetry
+            .sink { [weak self] _ in self?.propagateStateUpdates() }
+            .store(in: &cancellables)
+
+        currentLocationService.$locationData
+            .sink { [weak self] _ in self?.propagateStateUpdates() }
+            .store(in: &cancellables)
+
+        predictionService.$predictionData
+            .sink { [weak self] _ in self?.propagateStateUpdates() }
+            .store(in: &cancellables)
+
+        routeCalculationService.$routeData
+            .sink { [weak self] _ in self?.propagateStateUpdates() }
+            .store(in: &cancellables)
+
+        bleCommunicationService.$currentSondeTrack
+            .sink { [weak self] _ in self?.propagateStateUpdates() }
+            .store(in: &cancellables)
+        
+        setupTimers()
+    }
+
+    private func setupTimers() {
+        predictionTimer = Timer.scheduledTimer(withTimeInterval: 60.0, repeats: true) { [weak self] _ in
+            print("[DEBUG][ServiceManager] 60s timer fired. Fetching prediction.")
+            guard let self = self,
+                  let telemetry = self.bleCommunicationService.latestTelemetry,
+                  let userSettings = self.persistenceService.readPredictionParameters() else { return }
+            
+            if self.annotationService.appState != .startup {
+                self.predictionService.fetchPrediction(telemetry: telemetry, userSettings: userSettings)
+            }
+        }
+    }
+
+    func propagateStateUpdates() {
+        let telemetry = bleCommunicationService.latestTelemetry
+        let userLocation = currentLocationService.locationData
+        let prediction = predictionService.predictionData
+        let route = routeCalculationService.routeData
+        let telemetryHistory = bleCommunicationService.currentSondeTrack.map {
+            TelemetryData(latitude: $0.latitude, longitude: $0.longitude, altitude: $0.altitude)
+        }
+        annotationService.updateState(
+            telemetry: telemetry,
+            userLocation: userLocation,
+            prediction: prediction,
+            route: route,
+            telemetryHistory: telemetryHistory,
+            lastTelemetryUpdateTime: bleCommunicationService.lastTelemetryUpdateTime
+        )
     }
 }
 

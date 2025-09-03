@@ -10,78 +10,67 @@ struct DataPanelView: View {
     @State private var lastRouteCalculationTime: Date? = nil
 
     var body: some View {
-        VStack {
-            // Table 1: 4 columns
-            Grid(alignment: .leading, horizontalSpacing: 5, verticalSpacing: 10) {
-                GridRow {
-                    Image(systemName: bleService.connectionStatus == .connected ? "antenna.radiowaves.left.and.right" : "antenna.radiowaves.left.and.right.slash")
-                        .foregroundColor(bleService.connectionStatus == .connected ? .green : .red)
-                        .font(.headline)
-                        .scaleEffect(1.5)
-                    Text(bleService.latestTelemetry?.probeType ?? "N/A")
-                        .font(.headline)
-                        .minimumScaleFactor(0.5)
-                        .lineLimit(1)
-                        .frame(maxWidth: .infinity)
-                    Text(bleService.latestTelemetry?.sondeName ?? "N/A")
-                        .font(.headline)
-                        .minimumScaleFactor(0.5)
-                        .lineLimit(1)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    Button(action: {
-                        if bleService.latestTelemetry?.buzmute == true {
-                            bleService.sendCommand(command: "mute=0") // Unmute
-                        } else {
-                            bleService.sendCommand(command: "mute=1") // Mute
+        GeometryReader { geometry in // Added GeometryReader
+            VStack {
+                // Table 1: 4 columns
+                Grid(alignment: .leading, horizontalSpacing: 5, verticalSpacing: 10) {
+                    GridRow {
+                        Image(systemName: bleService.connectionStatus == .connected ? "antenna.radiowaves.left.and.right" : "antenna.radiowaves.left.and.right.slash")
+                            .foregroundColor(bleService.connectionStatus == .connected ? .green : .red)
+                        Text(bleService.latestTelemetry?.probeType ?? "N/A")
+                            .frame(maxWidth: .infinity)
+                        Text(bleService.latestTelemetry?.sondeName ?? "N/A")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Button(action: {
+                            if bleService.latestTelemetry?.buzmute == true {
+                                bleService.sendCommand(command: "mute=0") // Unmute
+                            } else {
+                                bleService.sendCommand(command: "mute=1") // Mute
+                            }
+                        }) {
+                            Image(systemName: bleService.latestTelemetry?.buzmute == true ? "speaker.slash.fill" : "speaker.fill")
+                                .frame(minWidth: 60, minHeight: 60)
+                                .contentShape(Rectangle())
                         }
-                    }) {
-                        Image(systemName: bleService.latestTelemetry?.buzmute == true ? "speaker.slash.fill" : "speaker.fill")
-                            .font(.headline)
-                            .scaleEffect(1.8)
-                            .frame(minWidth: 60, minHeight: 60)
-                            .contentShape(Rectangle())
+                        .gridCellAnchor(.trailing)
                     }
-                    .gridCellAnchor(.trailing)
                 }
+                .padding(.horizontal)
+
+                // Table 2: 3 columns
+                Grid(alignment: .leading, horizontalSpacing: 5, verticalSpacing: 10) {
+                    GridRow {
+                        Text("\(String(format: "%.3f", bleService.latestTelemetry?.frequency ?? 0.0)) MHz")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Text("RSSI: \(signalStrengthString) dB") // Reverted to dB
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Text("Batt: \(batteryPercentageString)%")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    GridRow {
+                        Text("V: \(verticalSpeedAvgString) m/s")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .foregroundColor((bleService.latestTelemetry?.verticalSpeed ?? 0) >= 0 ? .green : .red)
+                        Text("H: \(horizontalSpeedString) km/h")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Text("Dist: \(distanceString) km")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    GridRow {
+                        Text("Flight: \(flightTime)")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Text("Land: \(landingTimeString)")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Text("Arrival: \(arrivalTimeString)")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+                .padding(.horizontal)
             }
-            .padding(.horizontal)
-
-            // Table 2: 3 columns
-            Grid(alignment: .leading, horizontalSpacing: 5, verticalSpacing: 10) {
-                GridRow {
-                    Text("\(String(format: "%.3f", bleService.latestTelemetry?.frequency ?? 0.0)) MHz")
-                        .font(.headline).minimumScaleFactor(0.5).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
-                    Text("RSSI: \(signalStrengthString) dB")
-                        .font(.headline).minimumScaleFactor(0.5).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
-                    Text("Batt: \(batteryPercentageString)%")
-                        .font(.headline).minimumScaleFactor(0.5).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
-                }
-                GridRow {
-                    Text("V: \(verticalSpeedAvgString) m/s")
-                        .font(.headline).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
-                        .foregroundColor((bleService.latestTelemetry?.verticalSpeed ?? 0) >= 0 ? .green : .red)
-                    Text("H: \(horizontalSpeedString) km/h")
-                        .font(.headline).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
-                    Text("Dist: \(distanceString) km")
-                        .font(.headline).minimumScaleFactor(0.5).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
-                }
-                GridRow {
-                    Text("Flight: \(flightTime)")
-                        .font(.headline).minimumScaleFactor(0.5).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
-                    Text("Land: \(landingTimeString)")
-                        .font(.headline).minimumScaleFactor(0.5).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
-                    Text("Arrival: \(arrivalTimeString)")
-                        .font(.headline).minimumScaleFactor(0.5).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
-                }
-            }
-            .padding(.horizontal)
-
-
-
-        }
-        .background(Color(.systemGray6))
-        .cornerRadius(15)
-        .padding()
+            .font(.system(size: 18)) // Apply font size to the VStack
+            .frame(maxWidth: .infinity, maxHeight: .infinity) // Fill available space
+            .background(Color(.systemGray6))
+        } // End GeometryReader
         .onChange(of: predictionService.predictionData) { _, _ in
             // Trigger update for flight time, landing time, arrival time, and distance
             // These are already computed properties, so just re-rendering the view is enough
@@ -137,9 +126,11 @@ struct DataPanelView: View {
 
     private var signalStrengthString: String {
         if let val = bleService.latestTelemetry?.signalStrength {
-            return String(format: "%.1f", val)
+            // Assuming signalStrength is a value that can be directly used as a percentage (0-100)
+            // If it's RSSI in dB, this conversion is incorrect and needs clarification from the user.
+            return String(format: "%.0f", val)
         }
-        return "0.0"
+        return "0"
     }
 
     private var batteryPercentageString: String {

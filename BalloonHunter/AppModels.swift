@@ -253,6 +253,7 @@ struct MapAnnotationItem: Identifiable {
     var isAscending: Bool? = nil
     var status: AnnotationStatus = .fresh
     var lastUpdateTime: Date? = nil
+    var altitude: Double? = nil
 
     enum AnnotationKind {
         case user
@@ -282,9 +283,22 @@ struct MapAnnotationItem: Identifiable {
                     return .red
                 }
             }()
-            Image(systemName: "balloon.fill")
-                .foregroundColor(color)
-                .font(.title)
+            ZStack(alignment: .top) { // Use ZStack to layer image and text
+                Image(systemName: "balloon.fill")
+                    .font(.system(size: 90)) // Make balloon larger to fit text
+                    .foregroundColor(color)
+
+                if let altitude = altitude {
+                    Text("\(Int(altitude))")
+                        .font(.system(size: 16, weight: .heavy))
+                        .foregroundColor(.white)
+                        .shadow(color: .black.opacity(0.85), radius: 4, x: 0, y: 2)
+                        .minimumScaleFactor(0.4)
+                        .lineLimit(1)
+                        .frame(width: 54, height: 40)
+                        .position(x: 38, y: 34) // Center within 76x76 balloon
+                }
+            }
         case .burst:
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundColor(.orange)
@@ -421,9 +435,17 @@ final class AppSettings: ObservableObject {
 
 // Ensured ObservableObject conformance and class type for SwiftUI compatibility.
 final class UserSettings: ObservableObject, Codable { // Added Codable
-    init() {
+    required init() {
         print("[DEBUG] UserSettings init")
     }
+    
+    required init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        burstAltitude = try container.decode(Double.self, forKey: .burstAltitude)
+        ascentRate = try container.decode(Double.self, forKey: .ascentRate)
+        descentRate = try container.decode(Double.self, forKey: .descentRate)
+    }
+    
     @Published var burstAltitude: Double = 35000.0
     @Published var ascentRate: Double = 5.0
     @Published var descentRate: Double = 5.0
@@ -435,13 +457,6 @@ final class UserSettings: ObservableObject, Codable { // Added Codable
         case burstAltitude
         case ascentRate
         case descentRate
-    }
-
-    required init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        burstAltitude = try container.decode(Double.self, forKey: .burstAltitude)
-        ascentRate = try container.decode(Double.self, forKey: .ascentRate)
-        descentRate = try container.decode(Double.self, forKey: .descentRate)
     }
 
     func encode(to encoder: Encoder) throws {

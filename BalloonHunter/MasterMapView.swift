@@ -16,15 +16,7 @@ struct MasterMapView: View {
             case .finalApproach:
                 FinalMapView()
             default:
-                if annotationService.appState == .startup {
-                    VStack(spacing: 20) {
-                        ProgressView()
-                        Text("Waiting for balloon data...")
-                            .foregroundColor(.secondary)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(Color.black.opacity(0.25))
-                }
+                TrackingMapView()
             }
         }
     }

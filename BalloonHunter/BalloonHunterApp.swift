@@ -32,6 +32,7 @@ Your role: act as a competent Swift programmer to complete this project accordin
 
 
 import SwiftUI
+import Combine
 
 @main
 struct BalloonHunterApp: App {
@@ -39,13 +40,9 @@ struct BalloonHunterApp: App {
     @StateObject var appSettings = AppSettings()
     @StateObject var userSettings = UserSettings()
 
-    init() {
-        // No need for individual service initializations here, ServiceManager handles it.
-    }
-
     var body: some Scene {
         WindowGroup {
-            MapView()
+            MasterMapView()
                 .onAppear {
                     if let persisted = serviceManager.persistenceService.readPredictionParameters() {
                         userSettings.burstAltitude = persisted.burstAltitude
@@ -63,7 +60,7 @@ struct BalloonHunterApp: App {
                 .environmentObject(userSettings)
                 .environmentObject(serviceManager.annotationService)
                 .environmentObject(serviceManager.persistenceService)
-                .environmentObject(serviceManager) // Pass ServiceManager as environment object
+                .environmentObject(serviceManager)
         }
     }
 }
