@@ -23,6 +23,10 @@ struct MasterMapView: View {
 }
 
 #Preview {
+    let persistenceService = PersistenceService()
+    let bleService = BLECommunicationService(persistenceService: persistenceService)
     MasterMapView()
-        .environmentObject(AnnotationService())
+        .environmentObject(AnnotationService(bleService: bleService))
+        .environmentObject(bleService)
+        .environmentObject(persistenceService)
 }

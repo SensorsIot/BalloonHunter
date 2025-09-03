@@ -31,6 +31,10 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
 
     private var hasSentReadSettingsCommand = false
 
+    /// Published telemetry availability state. Updated solely by timer-based validity check.
+    /// Other services (e.g. AnnotationService) can observe this to trigger annotation updates on transitions.
+    @Published var telemetryAvailabilityState: Bool = false
+
     init(persistenceService: PersistenceService) {
         self.persistenceService = persistenceService
         super.init()
@@ -44,6 +48,42 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
             self.currentSondeTrack = persistenceService.retrieveTrack(sondeName: firstSondeName)
             print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] BLECommunicationService: Loaded initial track for \(firstSondeName) with \(self.currentSondeTrack.count) points.")
         }
+        
+        // Setup timer to update telemetryAvailabilityState based on lastTelemetryUpdateTime
+        // Telemetry validity is managed exclusively by timer-based checks now.
+        Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                await self?.updateTelemetryAvailabilityState()
+            }
+        }
+    }
+
+    // Timer-based update of telemetryAvailabilityState:
+    // If lastTelemetryUpdateTime is within the last 3 seconds, set telemetryAvailabilityState to true,
+    // otherwise set it to false. This replaces previous direct setting in checkTelemetryAvailability.
+    private func updateTelemetryAvailabilityState() {
+        guard let lastUpdate = lastTelemetryUpdateTime else {
+            if telemetryAvailabilityState != false {
+                telemetryAvailabilityState = false
+            }
+            return
+        }
+        let interval = Date().timeIntervalSince(lastUpdate)
+        let isAvailable = interval <= 3.0
+        if telemetryAvailabilityState != isAvailable {
+            telemetryAvailabilityState = isAvailable
+            if isAvailable {
+                print("[BLECommunicationService] Telemetry GAINED: lastTelemetryUpdateTime within 3 seconds.")
+            } else {
+                print("[BLECommunicationService] Telemetry LOST: lastTelemetryUpdateTime older than 3 seconds.")
+            }
+        }
+    }
+
+    // This method is retained but empty as telemetry availability state is now managed solely by timer updates.
+    private func checkTelemetryAvailability(_ newTelemetry: TelemetryData?) {
+        // Intentionally left empty to avoid duplicate state changes and logging.
+        // Telemetry availability is managed exclusively by updateTelemetryAvailabilityState timer.
     }
 
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
@@ -168,7 +208,8 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
     }
 
     func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
-        if let error = error {
+        if error != nil {
+            _ = error
             return
         }
         guard let data = characteristic.value else {
@@ -181,12 +222,14 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
     }
 
     func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {
-        if let error = error {
+        if error != nil {
+            _ = error
         }
     }
 
     func peripheral(_ peripheral: CBPeripheral, didUpdateNotificationStateFor characteristic: CBCharacteristic, error: Error?) {
-        if let error = error {
+        if error != nil {
+            _ = error
         } else {
         }
     }
@@ -218,11 +261,14 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
             var telemetryData = TelemetryData()
             telemetryData.parse(message: message)
             self.latestTelemetry = telemetryData
-            self.telemetryData.send(telemetryData)
+            
+            // Set lastTelemetryUpdateTime here after confirming valid telemetry parsed
             self.lastTelemetryUpdateTime = Date()
+            
+            self.telemetryData.send(telemetryData)
 
             // Save track data using PersistenceService
-            let didPurge = persistenceService.saveTrack(sondeName: telemetryData.sondeName, telemetryPoint: telemetryData)
+            _ = persistenceService.saveTrack(sondeName: telemetryData.sondeName, telemetryPoint: telemetryData)
             self.currentSondeTrack = persistenceService.retrieveTrack(sondeName: telemetryData.sondeName)
             self.currentSondeName = telemetryData.sondeName
 
@@ -235,10 +281,15 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
             // After parsing telemetry, try triggering prediction if possible
             triggerPredictionIfPossible()
 
-            // Removed debug print for annotationService.updateState call
+            // Removed direct call to annotationService.updateState here, as telemetryAvailabilityState changes trigger updates.
         }
     }
-    @Published var latestTelemetry: TelemetryData? = nil
+    @Published var latestTelemetry: TelemetryData? = nil {
+        didSet {
+            // Removed direct call to checkTelemetryAvailability(latestTelemetry).
+            // Availability state now updated exclusively by timer.
+        }
+    }
     @Published var deviceSettings: DeviceSettings = .default
     @Published var connectionStatus: ConnectionStatus = .disconnected
     @Published var telemetryData = PassthroughSubject<TelemetryData, Never>()
@@ -275,8 +326,13 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
     func simulateTelemetry(_ data: TelemetryData) {
         print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] Simulating telemetry: \(data)")
         self.latestTelemetry = data
+        self.lastTelemetryUpdateTime = Date()
+        // Availability state updated by timer
         self.telemetryData.send(data)
     }
+    
+    // If there are any places setting latestTelemetry explicitly to nil, call checkTelemetryAvailability(nil) there.
+    // Here, no explicit nil assignment seen except possibly elsewhere, so none added.
 
     func disconnect() {
         print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] Disconnect: Attempting to disconnect from peripheral.")
@@ -699,6 +755,12 @@ final class PredictionService: NSObject, ObservableObject {
 // MARK: - AnnotationService
 @MainActor
 final class AnnotationService: ObservableObject {
+    /// BLECommunicationService instance observed for telemetry availability changes.
+    private let bleService: BLECommunicationService
+    
+    /// Store cancellables for Combine subscriptions.
+    private var cancellables = Set<AnyCancellable>()
+    
     @Published private(set) var appState: AppState = .startup {
         didSet {
             SharedAppState.shared.appState = appState
@@ -706,8 +768,51 @@ final class AnnotationService: ObservableObject {
     }
     @Published var annotations: [MapAnnotationItem] = []
 
-    init() {
+    /// Initialize AnnotationService with injected BLECommunicationService instance.
+    /// This allows subscribing to telemetry availability changes to update annotations accordingly.
+    /// - Parameter bleService: BLECommunicationService instance to observe.
+    init(bleService: BLECommunicationService) {
+        self.bleService = bleService
         print("[DEBUG][AnnotationService][state: \(appState.rawValue)] AnnotationService init")
+        
+        // Subscribe to telemetryAvailabilityState changes to respond to telemetry availability transitions.
+        bleService.$telemetryAvailabilityState
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] isAvailable in
+                self?.handleTelemetryAvailabilityChanged(isAvailable)
+            }
+            .store(in: &cancellables)
+    }
+    
+    /// Called whenever telemetry availability changes.
+    /// Updates annotations depending on whether telemetry is now available or lost.
+    /// - Parameter isAvailable: Boolean indicating current telemetry availability.
+    private func handleTelemetryAvailabilityChanged(_ isAvailable: Bool) {
+        if isAvailable {
+            // Telemetry became available: update annotations with latest data.
+            let telemetry = bleService.latestTelemetry
+            let userLocation = bleService.currentLocationService?.locationData
+            let prediction = bleService.predictionService?.predictionData
+            let route = bleService.predictionService?.routeCalculationService?.routeData
+            let telemetryHistory = bleService.currentSondeTrack.map {
+                TelemetryData(latitude: $0.latitude, longitude: $0.longitude, altitude: $0.altitude)
+            }
+            let lastUpdateTime = bleService.lastTelemetryUpdateTime
+            
+            updateAnnotations(
+                telemetry: telemetry,
+                userLocation: userLocation,
+                prediction: prediction,
+                lastTelemetryUpdateTime: lastUpdateTime
+            )
+        } else {
+            // Telemetry lost: clear balloon-related annotations and keep user location annotation if present.
+            var items: [MapAnnotationItem] = []
+            if let userLoc = bleService.currentLocationService?.locationData {
+                items.append(MapAnnotationItem(coordinate: CLLocationCoordinate2D(latitude: userLoc.latitude, longitude: userLoc.longitude), kind: .user))
+            }
+            self.annotations = items
+        }
     }
 
     func updateState(
@@ -718,22 +823,25 @@ final class AnnotationService: ObservableObject {
         telemetryHistory: [TelemetryData],
         lastTelemetryUpdateTime: Date?
     ) {
-        if let tel = telemetry {
-            let telemetryStr = "lat=\(tel.latitude), lon=\(tel.longitude), alt=\(tel.altitude)"
-            let predictionStr = prediction != nil ? "true" : "false"
-            let routeStr = route != nil ? "true" : "false"
-            print("[DEBUG][AnnotationService][state: \(appState.rawValue)] telemetry=(\(telemetryStr)), prediction=\(predictionStr), route=\(routeStr), history=\(telemetryHistory.count)")
+        if telemetry != nil {
+            let telemetryStr = "lat=\(telemetry!.latitude), lon=\(telemetry!.longitude), alt=\(telemetry!.altitude)"
+            _ = telemetryStr
+            let _ = prediction != nil
+            let _ = route != nil
+            let _ = telemetryHistory.count
+            print("[DEBUG][AnnotationService][state: \(appState.rawValue)] telemetry=(\(telemetryStr)), prediction=\(prediction != nil ? "true" : "false"), route=\(route != nil ? "true" : "false"), history=\(telemetryHistory.count)")
         } else {
-            let predictionStr = prediction != nil ? "true" : "false"
-            let routeStr = route != nil ? "true" : "false"
-            print("[DEBUG][AnnotationService][state: \(appState.rawValue)] telemetry=nil, prediction=\(predictionStr), route=\(routeStr), history=\(telemetryHistory.count)")
+            _ = prediction != nil
+            _ = route != nil
+            _ = telemetryHistory.count
+            print("[DEBUG][AnnotationService][state: \(appState.rawValue)] telemetry=nil, prediction=\(prediction != nil ? "true" : "false"), route=\(route != nil ? "true" : "false"), history=\(telemetryHistory.count)")
         }
 
         // Then, run the state machine
         switch appState {
         case .startup:
             // Trigger to move to long range tracking only if all required data is present and route is valid
-            if let telemetry = telemetry,
+            if let _ = telemetry,
                let prediction = prediction, prediction.landingPoint != nil,
                let route = route, route.path != nil {
                 appState = .longRangeTracking
@@ -827,7 +935,8 @@ final class ServiceManager: ObservableObject {
         self.currentLocationService = CurrentLocationService()
         self.routeCalculationService = RouteCalculationService()
         self.predictionService = PredictionService()
-        self.annotationService = AnnotationService()
+        // Pass bleCommunicationService instance to AnnotationService for telemetry availability subscription
+        self.annotationService = AnnotationService(bleService: self.bleCommunicationService)
         // Inject annotationService reference into BLECommunicationService
         self.bleCommunicationService.annotationService = self.annotationService
         // Inject predictionService and currentLocationService into BLECommunicationService for triggers
@@ -864,13 +973,15 @@ final class ServiceManager: ObservableObject {
 
     private func setupTimers() {
         predictionTimer = Timer.scheduledTimer(withTimeInterval: 60.0, repeats: true) { [weak self] _ in
-            print("[DEBUG][ServiceManager] 60s timer fired. Fetching prediction.")
-            guard let self = self,
-                  let telemetry = self.bleCommunicationService.latestTelemetry,
-                  let userSettings = self.persistenceService.readPredictionParameters() else { return }
-            
-            if self.annotationService.appState != .startup {
-                self.predictionService.fetchPrediction(telemetry: telemetry, userSettings: userSettings)
+            Task { @MainActor in
+                guard let self = self else { return }
+                print("[DEBUG][ServiceManager] 60s timer fired. Fetching prediction.")
+                guard let telemetry = await self.bleCommunicationService.latestTelemetry,
+                      let userSettings = await self.persistenceService.readPredictionParameters() else { return }
+                
+                if await self.annotationService.appState != .startup {
+                    await self.predictionService.fetchPrediction(telemetry: telemetry, userSettings: userSettings)
+                }
             }
         }
     }

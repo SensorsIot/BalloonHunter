@@ -108,16 +108,15 @@ struct TrackingMapView: View {
                 }
                 updateStateAndCamera()
             }
-            .onChange(of: transportMode) { newMode in
+            .onChange(of: transportMode) {
                 guard let userLocation = locationService.locationData,
                       let landingPoint = predictionService.predictionData?.landingPoint else { return }
-                
                 print("[DEBUG][TrackingMapView] Transport mode changed. Recalculating route.")
                 routeService.routeData = nil
                 routeService.calculateRoute(
                     from: CLLocationCoordinate2D(latitude: userLocation.latitude, longitude: userLocation.longitude),
                     to: landingPoint,
-                    transportType: newMode
+                    transportType: transportMode
                 )
             }
             .onReceive(routeRecalculationTimer) { _ in
@@ -418,15 +417,4 @@ private func regionsAreDifferent(_ lhs: MKCoordinateRegion, _ rhs: MKCoordinateR
     let lonDeltaDiff = abs(lhs.span.longitudeDelta - rhs.span.longitudeDelta)
     let tolerance = 0.0001
     return latDiff > tolerance || lonDiff > tolerance || latDeltaDiff > tolerance || lonDeltaDiff > tolerance
-}
-
-#Preview {
-    TrackingMapView()
-        .environmentObject(AnnotationService())
-        .environmentObject(RouteCalculationService())
-        .environmentObject(CurrentLocationService())
-        .environmentObject(PredictionService())
-        .environmentObject(BLECommunicationService(persistenceService: PersistenceService()))
-        .environmentObject(PersistenceService())
-        .environmentObject(UserSettings())
 }

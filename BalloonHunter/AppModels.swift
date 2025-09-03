@@ -3,6 +3,12 @@ import SwiftUI
 import MapKit
 import Combine
 
+/// Compares two CLLocationCoordinate2D values for equality by latitude and longitude only.
+@inline(__always)
+func coordinatesEqual(_ lhs: CLLocationCoordinate2D, _ rhs: CLLocationCoordinate2D) -> Bool {
+    lhs.latitude == rhs.latitude && lhs.longitude == rhs.longitude
+}
+
 enum AppState: String {
     case startup
     case longRangeTracking
@@ -225,7 +231,6 @@ struct TelemetryData: Identifiable, Equatable {
     }
 }
 
-
 // A struct that serves as a lightweight, serializable representation of telemetry data
 struct TelemetryTransferData: Codable, Equatable {
     var latitude: Double
@@ -246,8 +251,7 @@ struct SondeSettingsTransferData: Codable, Equatable {
 }
 
 // A Identifiable struct used to represent markers on the map.
-struct MapAnnotationItem: Identifiable {
-    let id = UUID()
+struct MapAnnotationItem: Identifiable, Equatable {
     var coordinate: CLLocationCoordinate2D
     var kind: AnnotationKind
     var isAscending: Bool? = nil
@@ -255,7 +259,7 @@ struct MapAnnotationItem: Identifiable {
     var lastUpdateTime: Date? = nil
     var altitude: Double? = nil
 
-    enum AnnotationKind {
+    enum AnnotationKind: Equatable {
         case user
         case balloon
         case burst
@@ -263,9 +267,22 @@ struct MapAnnotationItem: Identifiable {
         case landed
     }
     
-    enum AnnotationStatus {
+    enum AnnotationStatus: Equatable {
         case fresh
         case stale
+    }
+    
+    var id: String {
+        String(format: "%@_%.5f_%.5f", String(describing: kind), coordinate.latitude, coordinate.longitude)
+    }
+    
+    static func == (lhs: MapAnnotationItem, rhs: MapAnnotationItem) -> Bool {
+        return coordinatesEqual(lhs.coordinate, rhs.coordinate) &&
+            lhs.kind == rhs.kind &&
+            lhs.isAscending == rhs.isAscending &&
+            lhs.status == rhs.status &&
+            lhs.lastUpdateTime == rhs.lastUpdateTime &&
+            lhs.altitude == rhs.altitude
     }
     
     @ViewBuilder
@@ -363,21 +380,21 @@ struct PredictionData: Equatable {
     static func == (lhs: PredictionData, rhs: PredictionData) -> Bool {
         let pathsEqual: Bool
         if let lhsPath = lhs.path, let rhsPath = rhs.path {
-            pathsEqual = lhsPath.elementsEqual(rhsPath) { $0.latitude == $1.latitude && $0.longitude == $1.longitude }
+            pathsEqual = lhsPath.elementsEqual(rhsPath, by: coordinatesEqual)
         } else {
             pathsEqual = lhs.path == nil && rhs.path == nil
         }
 
         let burstPointsEqual: Bool
         if let lhsBurst = lhs.burstPoint, let rhsBurst = rhs.burstPoint {
-            burstPointsEqual = lhsBurst.latitude == rhsBurst.latitude && lhsBurst.longitude == rhsBurst.longitude
+            burstPointsEqual = coordinatesEqual(lhsBurst, rhsBurst)
         } else {
             burstPointsEqual = lhs.burstPoint == nil && rhs.burstPoint == nil
         }
 
         let landingPointsEqual: Bool
         if let lhsLanding = lhs.landingPoint, let rhsLanding = rhs.landingPoint {
-            landingPointsEqual = lhsLanding.latitude == rhsLanding.latitude && lhsLanding.longitude == rhsLanding.longitude
+            landingPointsEqual = coordinatesEqual(lhsLanding, rhsLanding)
         } else {
             landingPointsEqual = lhs.landingPoint == nil && rhs.landingPoint == nil
         }
@@ -401,7 +418,7 @@ struct RouteData: Equatable {
     static func == (lhs: RouteData, rhs: RouteData) -> Bool {
         let pathsEqual: Bool
         if let lhsPath = lhs.path, let rhsPath = rhs.path {
-            pathsEqual = lhsPath.elementsEqual(rhsPath) { $0.latitude == $1.latitude && $0.longitude == $1.longitude }
+            pathsEqual = lhsPath.elementsEqual(rhsPath, by: coordinatesEqual)
         } else {
             pathsEqual = lhs.path == nil && rhs.path == nil
         }
