@@ -58,11 +58,6 @@ struct DataPanelView: View {
                         Text("Arrival: \(arrivalTimeString)")
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    GridRow { // New row for adjusted descent rate
-                        Text("Adj. Desc: \(predictionService.currentEffectiveDescentRate != nil ? String(format: "%.1f m/s", predictionService.currentEffectiveDescentRate!) : "N/A")")
-                            .frame(maxWidth: .infinity, alignment: .trailing) // Align to right
-                            .gridCellColumns(3) // Span all three columns
-                    }
                 }
                 .padding(.horizontal)
             }

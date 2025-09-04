@@ -74,20 +74,33 @@ final class PredictionService: NSObject, ObservableObject {
         var effectiveDescentRate = userSettings.descentRate // Start with user's setting
 
         // Automatic adjustment of descending speed
-        if telemetry.altitude < 15000 && telemetry.verticalSpeed < 0 {
+        if telemetry.verticalSpeed < 0 {
+            print("[DEBUG][PredictionService] Starting descent rate adjustment check: altitude=\(telemetry.altitude), verticalSpeed=\(telemetry.verticalSpeed), lastUpdateTime=\(String(describing: telemetry.lastUpdateTime))")
             // telemetry.lastUpdateTime is a Date?, so this usage is correct
             let currentTelemetryTime = telemetry.lastUpdateTime.map { Date(timeIntervalSince1970: $0) } ?? Date()
-            if let balloonTrackingService = balloonTrackingService,
-               let historicalPoint = findHistoricalPoint(in: balloonTrackingService.currentBalloonTrack, currentTelemetryTime: currentTelemetryTime) {
-                let exactTimeDifference = currentTelemetryTime.timeIntervalSince(historicalPoint.timestamp)
-
-                if exactTimeDifference > 0.1 { // Use a small threshold to avoid near-zero division
-                    let altitudeChange = historicalPoint.altitude - telemetry.altitude
-                    effectiveDescentRate = abs(altitudeChange / exactTimeDifference)
+            print("[DEBUG][PredictionService] currentTelemetryTime: \(currentTelemetryTime)")
+            if telemetry.altitude < 10000.0 {
+                if let balloonTrackingService = balloonTrackingService,
+                   let historicalPoint = findHistoricalPoint(in: balloonTrackingService.currentBalloonTrack, currentTelemetryTime: currentTelemetryTime) {
+                    print("[DEBUG][PredictionService] Found historicalPoint: timestamp=\(historicalPoint.timestamp), altitude=\(historicalPoint.altitude)")
+                    let exactTimeDifference = currentTelemetryTime.timeIntervalSince(historicalPoint.timestamp)
+                    print("[DEBUG][PredictionService] exactTimeDifference: \(exactTimeDifference)")
+                    if exactTimeDifference > 0.1 { // Use a small threshold to avoid near-zero division
+                        if historicalPoint.altitude > telemetry.altitude {
+                            let altitudeChange = historicalPoint.altitude - telemetry.altitude
+                            print("[DEBUG][PredictionService] Adjusting descent rate: historicAltitude=\(historicalPoint.altitude), currentAltitude=\(telemetry.altitude), newRate=\(abs(altitudeChange / exactTimeDifference))")
+                            effectiveDescentRate = abs(altitudeChange / exactTimeDifference)
+                        } else {
+                            print("[DEBUG][PredictionService] Skipping descent rate adjustment: historicAltitude <= currentAltitude")
+                        }
+                    }
                 }
+            } else {
+                print("[DEBUG][PredictionService] Altitude >= 10000m, skipping descent rate adjustment and using user settings' descent rate.")
             }
         }
         self.currentEffectiveDescentRate = effectiveDescentRate // Update the published property
+        print("[DEBUG][PredictionService] Set currentEffectiveDescentRate = \(self.currentEffectiveDescentRate ?? -1)")
 
         let urlString = "https://api.v2.sondehub.org/tawhiri?launch_latitude=\(telemetry.latitude)&launch_longitude=\(telemetry.longitude)&launch_altitude=\(telemetry.altitude)&launch_datetime=\(launchDatetime)&ascent_rate=\(userSettings.ascentRate)&descent_rate=\(effectiveDescentRate)&burst_altitude=\(adjustedBurstAltitude)"
         self.lastAPICallURL = urlString

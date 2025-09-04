@@ -35,18 +35,20 @@ final class BalloonTrackingService: ObservableObject {
     }
 
     func processTelemetryData(_ telemetryData: TelemetryData) {
-        if !hasReceivedFirstTelemetry {
-            hasReceivedFirstTelemetry = true
+        if currentBalloonName == nil || telemetryData.sondeName != currentBalloonName {
+            persistenceService.purgeAllTracks()
             let persistedTrack = persistenceService.loadTrackForCurrentSonde(sondeName: telemetryData.sondeName)
             if let track = persistedTrack {
                 self.currentBalloonTrack = track
                 print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] BalloonTrackingService: Loaded persisted track for \(telemetryData.sondeName) with \(self.currentBalloonTrack.count) points.")
             } else {
-                persistenceService.purgeAllTracks()
                 self.currentBalloonTrack = []
-                print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] BalloonTrackingService: Purged old tracks for new sonde: \(telemetryData.sondeName).")
+                print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] BalloonTrackingService: Purged old tracks and reset track for new sonde: \(telemetryData.sondeName).")
             }
+            telemetryPointCounter = 0
         }
+
+        self.currentBalloonName = telemetryData.sondeName
 
         let newBalloonTrackPoint = BalloonTrackPoint(telemetryData: telemetryData)
         self.currentBalloonTrack.append(newBalloonTrackPoint)
@@ -54,7 +56,6 @@ final class BalloonTrackingService: ObservableObject {
         if self.last5Telemetry.count > 5 {
             self.last5Telemetry.removeFirst()
         }
-        self.currentBalloonName = telemetryData.sondeName
         self.telemetryPointCounter += 1
 
         if telemetryPointCounter % 100 == 0 {
@@ -63,4 +64,3 @@ final class BalloonTrackingService: ObservableObject {
         }
     }
 }
-

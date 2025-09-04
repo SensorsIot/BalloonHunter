@@ -5,13 +5,13 @@ import Combine
 struct TrackingMapView: View {
     private let routeRecalculationTimer = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
     
+    @EnvironmentObject var userSettings: UserSettings
     @EnvironmentObject var annotationService: AnnotationService
     @EnvironmentObject var routeService: RouteCalculationService
     @EnvironmentObject var locationService: CurrentLocationService
     @EnvironmentObject var predictionService: PredictionService
     @EnvironmentObject var bleService: BLECommunicationService
     @EnvironmentObject var persistenceService: PersistenceService
-    @EnvironmentObject var userSettings: UserSettings
     @EnvironmentObject var balloonTrackingService: BalloonTrackingService
 
     @State private var showSettings = false
@@ -125,7 +125,8 @@ struct TrackingMapView: View {
                         .padding(.bottom, 8)
                     }
                     .overlay(alignment: .bottomTrailing) {
-                        if let rate = predictionService.currentEffectiveDescentRate {
+                        if let rate = predictionService.currentEffectiveDescentRate,
+                           abs(rate - userSettings.descentRate) > 0.01 {
                             Text("Adj. Desc: \(String(format: "%.1f m/s", rate))")
                                 .padding(.vertical, 8)
                                 .padding(.horizontal, 16)
