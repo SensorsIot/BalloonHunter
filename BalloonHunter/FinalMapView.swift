@@ -16,19 +16,9 @@ struct FinalMapView: View {
     // Track the timestamp when finalApproach started
     @State private var finalApproachStartTime: Date? = nil
 
+    // In finalApproach, only balloon annotation shown, no user annotation
     private var finalApproachAnnotations: [MapAnnotationItem] {
-        var annotations: [MapAnnotationItem] = []
-
-        if let userLocation = locationService.locationData {
-            let userCoordinate = CLLocationCoordinate2D(latitude: userLocation.latitude, longitude: userLocation.longitude)
-            annotations.append(MapAnnotationItem(coordinate: userCoordinate, kind: .user))
-        }
-
-        if let landedPos = landedBalloonPosition {
-            annotations.append(MapAnnotationItem(coordinate: landedPos, kind: .landed))
-        }
-
-        return annotations
+        landedBalloonPosition.map { [MapAnnotationItem(coordinate: $0, kind: .landed)] } ?? []
     }
     
     // Computed property to get filtered balloon track points from finalApproachStartTime
@@ -44,32 +34,64 @@ struct FinalMapView: View {
                 landedBalloonPosition: landedBalloonPosition,
                 trackCoordinates: finalApproachTrackCoordinates
             )
-            .edgesIgnoringSafeArea(.all)
-            .gesture(DragGesture().onEnded { value in
-                if value.translation.height < -50 { // Upward swipe
-                    showSettings = true
-                }
-            })
+            // Removed edgesIgnoringSafeArea(.all) to respect safe areas
+            // so map respects safe area insets naturally
 
-            VStack {
-                // Top area for heading and distance
-                HStack {
-                    Spacer()
-                    VStack {
-                        Text(String(format: "Heading: %.0f°", userHeading))
-                            .font(.headline)
-                        Text(String(format: "Distance: %.0f m", distanceToBalloon))
-                            .font(.headline)
-                    }
-                    Spacer()
+            VStack(alignment: .leading) {
+                Spacer()
+                VStack(alignment: .leading) {
+                    Text(String(format: "Distance: %.0f m", distanceToBalloon))
+                        .font(.system(size: 24, weight: .bold))
+                        .foregroundColor(.primary)
+                        .bold()
+                    Text(String(format: "Heading: %.0f°", userHeading))
+                        .font(.system(size: 24, weight: .bold))
+                        .foregroundColor(.primary)
+                        .bold()
                 }
-                .padding()
+                .padding(12)
                 .background(.ultraThinMaterial)
                 .cornerRadius(10)
-                .padding(.top, 50) // Adjust as needed to be in the top area
+                .padding([.leading, .bottom], 24)
+            }
+
+            // Settings button top leading
+            HStack {
+                Button {
+                    showSettings = true
+                } label: {
+                    Image(systemName: "gearshape")
+                        .imageScale(.large)
+                        .padding(8)
+                }
+                .background(.ultraThinMaterial)
+                .cornerRadius(8)
+                .padding(16)
 
                 Spacer()
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+
+            // Mute button top trailing
+            HStack {
+                Spacer()
+
+                Button {
+                    if let isMuted = bleService.latestTelemetry?.buzmute, isMuted {
+                        bleService.sendCommand(command: "o{mute=0}o")
+                    } else {
+                        bleService.sendCommand(command: "o{mute=1}o")
+                    }
+                } label: {
+                    Image(systemName: (bleService.latestTelemetry?.buzmute ?? false) ? "speaker.slash.fill" : "speaker.fill")
+                        .imageScale(.large)
+                        .padding(8)
+                }
+                .background(.ultraThinMaterial)
+                .cornerRadius(8)
+                .padding(.top, 16).padding(.trailing, 56)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
         }
         .sheet(isPresented: $showSettings) {
             SettingsView()
@@ -113,57 +135,26 @@ struct FinalMapView: View {
         if annotationService.appState == .finalApproach {
             return
         }
-        // Commented out auto-centering on landed balloon position to keep manual control in final approach
-        /*
-        if let landedPos = landedBalloonPosition {
-            region.center = landedPos
-        }
-        */
     }
 
     private func updateMapAndUI(userLocation: LocationData) {
         guard let landedPos = landedBalloonPosition else { return }
-
-        // Do not update region or annotations if in final approach mode
-        if annotationService.appState == .finalApproach {
-            // Still update distance only
-            let userCLLocation = CLLocation(latitude: userLocation.latitude, longitude: userLocation.longitude)
-            let balloonCLLocation = CLLocation(latitude: landedPos.latitude, longitude: landedPos.longitude)
-
-            distanceToBalloon = userCLLocation.distance(from: balloonCLLocation)
-
-            return
-        }
 
         let userCLLocation = CLLocation(latitude: userLocation.latitude, longitude: userLocation.longitude)
         let balloonCLLocation = CLLocation(latitude: landedPos.latitude, longitude: landedPos.longitude)
 
         distanceToBalloon = userCLLocation.distance(from: balloonCLLocation)
 
+        // In final approach mode, do not update annotationService annotations or region.
+        if annotationService.appState == .finalApproach {
+            return
+        }
+
         // Update annotations for AnnotationService only if not in final approach
         var newAnnotations: [MapAnnotationItem] = []
         newAnnotations.append(MapAnnotationItem(coordinate: userCLLocation.coordinate, kind: .user))
         newAnnotations.append(MapAnnotationItem(coordinate: landedPos, kind: .landed))
         annotationService.annotations = newAnnotations
-
-        // Do NOT update region (zoom or pan) in final approach mode to preserve manual control
-        // Previously region update code below is removed/commented out:
-
-        /*
-        // Calculate bounding rect for both user and balloon
-        let points = [userCLLocation.coordinate, landedPos]
-        let mapPoints = points.map { MKMapPoint($0) }
-        let minX = mapPoints.map { $0.x }.min() ?? 0.0
-        let maxX = mapPoints.map { $0.x }.max() ?? 0.0
-        let minY = mapPoints.map { $0.y }.min() ?? 0.0
-        let maxY = mapPoints.map { $0.y }.max() ?? 0.0
-        let boundingRect = MKMapRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
-
-        // Add some padding (10%) around the points
-        let paddingFactor = 0.1
-        let paddedRect = boundingRect.insetBy(dx: -boundingRect.size.width * paddingFactor, dy: -boundingRect.size.height * paddingFactor)
-        region = MKCoordinateRegion(paddedRect)
-        */
     }
 }
 
@@ -238,30 +229,49 @@ private struct FinalApproachMapView: UIViewRepresentable {
             uiView.addOverlay(polyline)
         }
 
-        // Update region and user tracking mode
-        // region is removed so we don't call setRegion here
+        // Set region and zoom with logic:
+        // If distance between user and balloon > 100m, fit both with margin
+        // Else, set region to 1km span centered on user
 
-        // Added code to set initial zoom to fit all annotations once
-        if !context.coordinator.hasSetInitialRegion,
-           let userAnno = annotations.first(where: { $0.kind == .user })?.coordinate,
-           let balloonAnno = annotations.first(where: { $0.kind == .landed })?.coordinate {
-            let userPoint = MKMapPoint(userAnno)
-            let balloonPoint = MKMapPoint(balloonAnno)
-            let minX = min(userPoint.x, balloonPoint.x)
-            let maxX = max(userPoint.x, balloonPoint.x)
-            let minY = min(userPoint.y, balloonPoint.y)
-            let maxY = max(userPoint.y, balloonPoint.y)
-            let deltaX = max(maxX - minX, 10) // at least 10m
-            let deltaY = max(maxY - minY, 10) // at least 10m
-            let marginX = max(deltaX * 0.25, 10) // 25% or ≥10m
-            let marginY = max(deltaY * 0.25, 10)
-            let mapRect = MKMapRect(
-                x: minX - marginX,
-                y: minY - marginY,
-                width: deltaX + 2 * marginX,
-                height: deltaY + 2 * marginY
-            )
-            uiView.setVisibleMapRect(mapRect, edgePadding: UIEdgeInsets(top: 40, left: 40, bottom: 40, right: 40), animated: false)
+        guard let userCoordinate = annotations.first(where: { $0.kind == .user })?.coordinate ?? locationFromMapView(uiView)?.coordinate else {
+            // If no user coordinate from annotations or location, do nothing for region
+            return
+        }
+        guard let balloonCoordinate = annotations.first(where: { $0.kind == .landed })?.coordinate else {
+            // If no balloon coordinate, do not adjust region
+            return
+        }
+
+        let userLocation = CLLocation(latitude: userCoordinate.latitude, longitude: userCoordinate.longitude)
+        let balloonLocation = CLLocation(latitude: balloonCoordinate.latitude, longitude: balloonCoordinate.longitude)
+        let distance = userLocation.distance(from: balloonLocation)
+
+        if !context.coordinator.hasSetInitialRegion {
+            if distance > 100 {
+                let userPoint = MKMapPoint(userCoordinate)
+                let balloonPoint = MKMapPoint(balloonCoordinate)
+                let minX = min(userPoint.x, balloonPoint.x)
+                let maxX = max(userPoint.x, balloonPoint.x)
+                let minY = min(userPoint.y, balloonPoint.y)
+                let maxY = max(userPoint.y, balloonPoint.y)
+                let deltaX = max(maxX - minX, 10) // at least 10m
+                let deltaY = max(maxY - minY, 10) // at least 10m
+                let marginX = max(deltaX * 0.25, 10) // 25% or ≥10m
+                let marginY = max(deltaY * 0.25, 10)
+                let mapRect = MKMapRect(
+                    x: minX - marginX,
+                    y: minY - marginY,
+                    width: deltaX + 2 * marginX,
+                    height: deltaY + 2 * marginY
+                )
+                uiView.setVisibleMapRect(mapRect, edgePadding: UIEdgeInsets(top: 40, left: 40, bottom: 40, right: 40), animated: false)
+            } else {
+                // Distance ≤ 100m, set 1km span centered on user
+                let region = MKCoordinateRegion(center: userCoordinate,
+                                                latitudinalMeters: 1000,
+                                                longitudinalMeters: 1000)
+                uiView.setRegion(region, animated: false)
+            }
             context.coordinator.hasSetInitialRegion = true
         }
 
@@ -270,34 +280,6 @@ private struct FinalApproachMapView: UIViewRepresentable {
         uiView.isRotateEnabled = true // Ensure rotation enabled on update
 
         // Removed custom camera/heading manipulation to let MapKit handle rotation and user placement natively
-
-        /*
-        // Fix user location at bottom-center
-        // This is a bit tricky with MKMapView's userTrackingMode.
-        // A common approach is to adjust the content inset or camera.
-        // For simplicity, we'll adjust the camera's center offset.
-        // This might need fine-tuning based on actual UI layout.
-        if userTrackingMode == .followWithHeading {
-            let userLocationPoint = uiView.convert(uiView.userLocation.coordinate, toPointTo: uiView)
-            let newCenterPoint = CGPoint(x: uiView.bounds.midX, y: uiView.bounds.height * 0.75) // 75% from top (25% from bottom)
-            let offset = CGPoint(x: newCenterPoint.x - userLocationPoint.x, y: newCenterPoint.y - userLocationPoint.y)
-            
-            var newCamera = uiView.camera
-            newCamera.centerCoordinate = uiView.convert(CGPoint(x: uiView.bounds.midX - offset.x, y: uiView.bounds.midY - offset.y), toCoordinateFrom: uiView)
-            uiView.setCamera(newCamera, animated: true)
-        }
-
-        // Set map camera heading using latest heading from coordinator
-        if userTrackingMode == .followWithHeading,
-           let userAnnotation = annotations.first(where: { $0.kind == .user }) {
-            let camera = MKMapCamera()
-            camera.centerCoordinate = userAnnotation.coordinate
-            camera.heading = context.coordinator.latestHeading ?? 0.0
-            camera.pitch = 0
-            camera.altitude = 500 // adjust to your preferred zoom
-            uiView.setCamera(camera, animated: true)
-        }
-        */
     }
 
     func makeCoordinator() -> Coordinator {
@@ -320,6 +302,10 @@ private struct FinalApproachMapView: UIViewRepresentable {
         }
 
         func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
+            // Use default user location annotation view for user location (blue dot)
+            if annotation is MKUserLocation {
+                return nil
+            }
             guard let annotation = annotation as? CustomMapAnnotation else { return nil }
 
             let identifier = "custom"
@@ -354,6 +340,11 @@ private struct FinalApproachMapView: UIViewRepresentable {
             }
         }
     }
+}
+
+// Helper to get user location from MKMapView if no annotation provided
+private func locationFromMapView(_ mapView: MKMapView) -> MKUserLocation? {
+    return mapView.userLocation
 }
 
 // Re-using CustomMapAnnotation and CustomAnnotationView from TrackingMapView for consistency

@@ -1,4 +1,3 @@
-
 import Foundation
 import Combine
 import SwiftUI
@@ -43,7 +42,6 @@ final class PredictionService: NSObject, ObservableObject {
     }
     func fetchPrediction(telemetry: TelemetryData, userSettings: UserSettings) async {
         if SharedAppState.shared.appState == .finalApproach {
-            print("[Debug][PredictionService][State: finalApproach] Skipping API call in final approach mode.")
             return
         }
         if let lastFetchTime = lastPredictionFetchTime {
