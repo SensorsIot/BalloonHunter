@@ -11,6 +11,7 @@ final class BalloonTrackingService: ObservableObject {
     var hasReceivedFirstTelemetry: Bool = false
     var currentBalloonName: String?
     var telemetryPointCounter: Int = 0
+    private(set) var last5Telemetry: [TelemetryData] = []
 
     private var persistenceService: PersistenceService
     private var bleService: BLECommunicationService
@@ -49,6 +50,10 @@ final class BalloonTrackingService: ObservableObject {
 
         let newBalloonTrackPoint = BalloonTrackPoint(telemetryData: telemetryData)
         self.currentBalloonTrack.append(newBalloonTrackPoint)
+        self.last5Telemetry.append(telemetryData)
+        if self.last5Telemetry.count > 5 {
+            self.last5Telemetry.removeFirst()
+        }
         self.currentBalloonName = telemetryData.sondeName
         self.telemetryPointCounter += 1
 
@@ -58,3 +63,4 @@ final class BalloonTrackingService: ObservableObject {
         }
     }
 }
+

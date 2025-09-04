@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine
 
 // MARK: - Device Settings View (Sheet)
 struct DeviceSettingsView: View {
@@ -496,6 +497,10 @@ struct SettingsView: View {
     @State private var tuneInitialFrequencyCorrection: Int = 0
     @State private var isSavingTune: Bool = false
     
+    // --- Added for AFC moving average and subscription ---
+    @State private var afcFrequencies: [Int] = []
+    @State private var tuneCancellable: AnyCancellable? = nil
+    
     private let sondeTypeMapping: [String: Int] = ["RS41": 1, "M20": 2, "M10": 3, "PILOT": 4, "DFM": 5]
     
     var body: some View {
@@ -524,8 +529,9 @@ struct SettingsView: View {
                         Button("Tune") { selectedTab = 1 }
                             .disabled(!bleService.isReadyForCommands)
                     } else { // Tune
-                        Button("Save") { saveTuneSettings() }
-                            .disabled(!bleService.isReadyForCommands || isSavingTune)
+                        Button("Reset") {
+                            saveTuneSettings(correctionValue: 0)
+                        }
                     }
                 }
             }
@@ -536,8 +542,10 @@ struct SettingsView: View {
                 if selectedTab == 0 {
                     saveSondeSettingsOnDismiss()
                 }
+                // Removed saveTuneSettings on disappear for Tune tab as per instructions
+                // No code here modifies selectedTab
             }
-            .sheet(isPresented: $isShowingDeviceSettings) {
+            .sheet(isPresented: $isShowingDeviceSettings, onDismiss: loadSondeSettings) {
                 DeviceSettingsView()
             }
             .alert("Restore original values?", isPresented: $showRestoreAlert) {
@@ -608,19 +616,24 @@ struct SettingsView: View {
     }
     
     // MARK: - Tune Settings Logic
+    
     private func loadTuneSettings() {
         tempTuneFrequencyCorrection = persistenceService.deviceSettings?.frequencyCorrection ?? 0
         tuneInitialFrequencyCorrection = tempTuneFrequencyCorrection
     }
     
-    private func saveTuneSettings() {
+    /// Send the frequency correction value to BLE and save it persistently.
+    private func saveTuneSettings(correctionValue: Int) {
         isSavingTune = true
-        bleService.sendCommand(command: "o{freqofs=\(tempTuneFrequencyCorrection)}o")
+        bleService.sendCommand(command: "o{freqofs=\(correctionValue)}o")
         if var devSettings = persistenceService.deviceSettings {
-            devSettings.frequencyCorrection = tempTuneFrequencyCorrection
+            devSettings.frequencyCorrection = correctionValue
             persistenceService.save(deviceSettings: devSettings)
         }
         isSavingTune = false
+        // Update tempTuneFrequencyCorrection so UI matches saved value
+        tempTuneFrequencyCorrection = correctionValue
+        tuneInitialFrequencyCorrection = correctionValue
     }
     
     // MARK: - Views
@@ -634,7 +647,7 @@ struct SettingsView: View {
                 }
                 Section(header: Text("Sonde Type & Frequency")) {
                     Picker("Sonde Type", selection: $tempDeviceSettings.sondeType) {
-                        ForEach(["RS41", "M20", "M10", "PILOT", "DFM"], id: \.self) { Text($0) }
+                        ForEach(["RS41", "M20", "M20", "PILOT", "DFM"], id: \.self) { Text($0) }
                     }
                     .disabled(true)
                     
@@ -691,17 +704,70 @@ struct SettingsView: View {
     }
     
     var tuneTab: some View {
-        Form {
-            Section(header: Text("AFC Calibration")) {
-                TextField("Correction", value: $tempTuneFrequencyCorrection, formatter: NumberFormatter())
-                    .keyboardType(.numberPad)
-                    .font(.title)
-                Button("Save") {
-                    saveTuneSettings()
+        let afcMovingAverage = afcFrequencies.isEmpty ? 0 : afcFrequencies.reduce(0, +) / afcFrequencies.count
+        
+        return Form {
+            Section(header: Text("Live AFC Value")) {
+                VStack(spacing: 15) {
+                    Text("\(afcMovingAverage) Hz")
+                        .font(.system(size: 30, weight: .bold, design: .monospaced))
+                        .padding(.vertical, 10)
+
+                    Button("Transfer") {
+                        tempTuneFrequencyCorrection = afcMovingAverage
+                    }
+                    .buttonStyle(.borderedProminent)
                 }
-                .buttonStyle(.borderedProminent)
-                .disabled(!bleService.isReadyForCommands || isSavingTune)
+                .frame(maxWidth: .infinity)
+            }
+            
+            Section(header: Text("Current Offset")) {
+                HStack {
+                    Text("Current:")
+                        .font(.system(size: 30, weight: .bold, design: .monospaced))
+                    Spacer()
+                    Text("\(tuneInitialFrequencyCorrection)")
+                        .font(.system(size: 30, weight: .bold, design: .monospaced))
+                }
+            }
+            
+            Section(header: Text("Calibration")) {
+                HStack {
+                    Text("New:")
+                        .font(.system(size: 30, weight: .bold, design: .monospaced))
+                        .fixedSize()
+                    TextField("", value: $tempTuneFrequencyCorrection, formatter: NumberFormatter())
+                        .keyboardType(.numberPad)
+                        .font(.system(size: 30, weight: .bold, design: .monospaced))
+                        .padding(.horizontal, 10)
+                    Spacer()
+                    Button("Save") {
+                        saveTuneSettings(correctionValue: tempTuneFrequencyCorrection)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!bleService.isReadyForCommands)
+                }
             }
         }
+        .onAppear {
+            loadTuneSettings()
+            tuneCancellable = bleService.telemetryData.sink { telemetry in
+                let afc = telemetry.afcFrequency
+                DispatchQueue.main.async {
+                    afcFrequencies.append(afc)
+                    if afcFrequencies.count > 20 {
+                        afcFrequencies.removeFirst()
+                    }
+                }
+            }
+        }
+        .onDisappear {
+            tuneCancellable?.cancel()
+            tuneCancellable = nil
+            afcFrequencies.removeAll()
+            // Removed any selectedTab = 0 here to prevent automatic tab switching
+        }
+        .tabItem { Label("Tune", systemImage: "slider.horizontal.3") }
     }
 }
+

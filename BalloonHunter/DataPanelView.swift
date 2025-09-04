@@ -24,11 +24,10 @@ struct DataPanelView: View {
                         Text(bleService.latestTelemetry?.sondeName ?? "N/A")
                             .frame(maxWidth: .infinity, alignment: .leading)
                         Button(action: {
-                            if bleService.latestTelemetry?.buzmute == true {
-                                bleService.sendCommand(command: "mute=0") // Unmute
-                            } else {
-                                bleService.sendCommand(command: "mute=1") // Mute
-                            }
+                            let newMuteState = !(bleService.latestTelemetry?.buzmute ?? false)
+                            bleService.latestTelemetry?.buzmute = newMuteState
+                            let command = "o{mute=\(newMuteState ? 1 : 0)}o"
+                            bleService.sendCommand(command: command)
                         }) {
                             Image(systemName: bleService.latestTelemetry?.buzmute == true ? "speaker.slash.fill" : "speaker.fill")
                                 .font(.system(size: 32))
@@ -99,17 +98,13 @@ struct DataPanelView: View {
 
     // MARK: - Helpers for smoothing
     
-    private var last5Telemetry: [TelemetryData] {
-        let track = balloonTrackingService.currentBalloonTrack
-        return track.suffix(5).map { TelemetryData(latitude: $0.latitude, longitude: $0.longitude, altitude: $0.altitude) }
-    }
     private var smoothedHorizontalSpeed: Double {
-        let speeds = last5Telemetry.compactMap { $0.horizontalSpeed }
+        let speeds = balloonTrackingService.last5Telemetry.compactMap { $0.horizontalSpeed }
         guard !speeds.isEmpty else { return bleService.latestTelemetry?.horizontalSpeed ?? 0 }
         return speeds.reduce(0, +) / Double(speeds.count)
     }
     private var smoothedVerticalSpeed: Double {
-        let speeds = last5Telemetry.compactMap { $0.verticalSpeed }
+        let speeds = balloonTrackingService.last5Telemetry.compactMap { $0.verticalSpeed }
         guard !speeds.isEmpty else { return bleService.latestTelemetry?.verticalSpeed ?? 0 }
         return speeds.reduce(0, +) / Double(speeds.count)
     }
