@@ -27,7 +27,7 @@ final class AnnotationService: ObservableObject {
     init(bleService: BLECommunicationService, balloonTrackingService: BalloonTrackingService) {
         self.bleService = bleService
         self.balloonTrackingService = balloonTrackingService
-        print("[DEBUG][AnnotationService][state: \(appState.rawValue)] AnnotationService init")
+        print("[DEBUG][AnnotationService] AnnotationService init")
         
         bleService.$telemetryAvailabilityState
             .receive(on: DispatchQueue.main)

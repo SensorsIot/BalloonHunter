@@ -25,6 +25,7 @@ struct TrackingMapView: View {
     @State private var lastRouteCalculationLocation: CLLocation?
     @State private var programmaticUpdateTrigger = 0
     @State private var isDirectionUp = false
+    @State private var hasFetchedInitialPrediction = false
 
     // State for polyline overlays
     @State private var balloonTrackPolyline: MKPolyline?
@@ -94,12 +95,12 @@ struct TrackingMapView: View {
                         setIsDirectionUp: { newValue in isDirectionUp = newValue },
                         onAnnotationTapped: { item in
                             if item.kind == .balloon {
-                                print("[DEBUG][TrackingMapView] Balloon annotation tapped.")
                                 guard let telemetry = bleService.latestTelemetry,
-                                      let userSettings = persistenceService.readPredictionParameters() else { return }
-                                Task {
-                                    await predictionService.fetchPrediction(telemetry: telemetry, userSettings: userSettings)
+                                      let userSettings = persistenceService.readPredictionParameters() else {
+                                    print("[DEBUG] onAnnotationTapped: missing telemetry or userSettings")
+                                    return
                                 }
+                                print("[DEBUG] Passing descent rate \(String(describing: balloonTrackingService.currentEffectiveDescentRate)) to PredictionService")
                             }
                         },
                         getUserLocationAndHeading: {
@@ -125,8 +126,7 @@ struct TrackingMapView: View {
                         .padding(.bottom, 8)
                     }
                     .overlay(alignment: .bottomTrailing) {
-                        if let rate = predictionService.currentEffectiveDescentRate,
-                           abs(rate - userSettings.descentRate) > 0.01 {
+                        if let rate = balloonTrackingService.currentEffectiveDescentRate {
                             Text("Adj. Desc: \(String(format: "%.1f m/s", rate))")
                                 .padding(.vertical, 8)
                                 .padding(.horizontal, 16)
@@ -158,20 +158,27 @@ struct TrackingMapView: View {
             }
             .onReceive(bleService.telemetryData) { _ in
                 updateStateAndCamera()
+                if !hasFetchedInitialPrediction {
+                    guard let telemetry = bleService.latestTelemetry,
+                          let userSettings = persistenceService.readPredictionParameters() else {
+                        print("[DEBUG] BLE telemetry update: missing telemetry or userSettings, skipping prediction fetch")
+                        return
+                    }
+                    hasFetchedInitialPrediction = true
+                    print("[DEBUG] Passing descent rate \(String(describing: balloonTrackingService.currentEffectiveDescentRate)) to PredictionService")
+                    Task { await predictionService.fetchPrediction(telemetry: telemetry, userSettings: userSettings, measuredDescentRate: abs(balloonTrackingService.currentEffectiveDescentRate ?? userSettings.descentRate)) }
+                }
             }
             .onReceive(predictionService.$predictionData) { _ in
                 updateStateAndCamera()
             }
-            .onReceive(routeService.$routeData) { routeData in
-                if routeData != nil, let userLocationData = locationService.locationData {
-                }
+            .onReceive(routeService.$routeData) { _ in
                 updateStateAndCamera()
             }
             .onChange(of: transportMode) { newValue in
                 routeService.routeData = nil
                 if let userLocationData = locationService.locationData,
                    let landingPoint = predictionService.predictionData?.landingPoint {
-                    print("[ROUTE DEBUG] Routing from (user: \(userLocationData.latitude),\(userLocationData.longitude)) to (landing: \(landingPoint.latitude),\(landingPoint.longitude)) transport: \(transportMode)")
                     routeService.calculateRoute(
                         from: CLLocationCoordinate2D(latitude: userLocationData.latitude, longitude: userLocationData.longitude),
                         to: landingPoint,
@@ -182,12 +189,14 @@ struct TrackingMapView: View {
             .onReceive(routeRecalculationTimer) { _ in
                 guard let userLocationData = locationService.locationData,
                       let landingPoint = predictionService.predictionData?.landingPoint,
-                      let lastCalcLocation = lastRouteCalculationLocation else { return }
+                      let lastCalcLocation = lastRouteCalculationLocation else {
+                    print("[DEBUG][routeRecalculationTimer] skipping: missing data")
+                    return
+                }
 
                 let currentUserLocation = CLLocation(latitude: userLocationData.latitude, longitude: userLocationData.longitude)
                 
                 if currentUserLocation.distance(from: lastCalcLocation) > 500 {
-                    print("[ROUTE DEBUG] Routing from (user: \(userLocationData.latitude),\(userLocationData.longitude)) to (landing: \(landingPoint.latitude),\(landingPoint.longitude)) transport: \(transportMode)")
                     routeService.calculateRoute(
                         from: currentUserLocation.coordinate,
                         to: landingPoint,
@@ -195,6 +204,7 @@ struct TrackingMapView: View {
                     )
                 }
             }
+            
             // Removed the .onChange(of: annotationService.appState) block as requested.
         }
     }

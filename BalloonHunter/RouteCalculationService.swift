@@ -9,7 +9,7 @@ import MapKit
 @MainActor
 final class RouteCalculationService: ObservableObject {
     init() {
-        print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] RouteCalculationService init")
+        print("[DEBUG] RouteCalculationService init")
     }
     @Published var routeData: RouteData? = nil
     func calculateRoute(
@@ -32,11 +32,11 @@ final class RouteCalculationService: ObservableObject {
         directions.calculate { [weak self] response, error in
             guard let self = self else { return }
             if let error = error {
-                print("[RouteCalculationService][State: \(SharedAppState.shared.appState.rawValue)] Route calculation error: \(error.localizedDescription)")
+                print("[RouteCalculationService] Route calculation error: \(error.localizedDescription)")
                 return
             }
             guard let route = response?.routes.first else {
-                print("[RouteCalculationService][State: \(SharedAppState.shared.appState.rawValue)] No route found.")
+                print("[RouteCalculationService] No route found.")
                 DispatchQueue.main.async {
                     self.routeData = nil
                 }

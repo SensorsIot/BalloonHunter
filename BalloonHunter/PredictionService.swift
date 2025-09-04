@@ -17,9 +17,9 @@ final class PredictionService: NSObject, ObservableObject {
         self.currentLocationService = currentLocationService
         self.balloonTrackingService = balloonTrackingService // Initialize new property
         super.init()
-        print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] PredictionService init: \(Unmanaged.passUnretained(self).toOpaque())")
+        print("[DEBUG] PredictionService init: \(Unmanaged.passUnretained(self).toOpaque())")
     }
-    
+
     @Published var predictionData: PredictionData? { didSet { } }
     @Published var lastAPICallURL: String? = nil
     @Published var isLoading: Bool = false
@@ -30,7 +30,6 @@ final class PredictionService: NSObject, ObservableObject {
     private var landingTime: Date? = nil
     private var lastPredictionFetchTime: Date?
     @Published var predictionStatus: PredictionStatus = .noValidPrediction
-    @Published var currentEffectiveDescentRate: Double? = nil // New property
 
     nonisolated private struct APIResponse: Codable {
         struct Prediction: Codable {
@@ -45,66 +44,41 @@ final class PredictionService: NSObject, ObservableObject {
         }
         let prediction: [Prediction]
     }
-    func fetchPrediction(telemetry: TelemetryData, userSettings: UserSettings) async {
+
+    /// Call this in response to explicit prediction triggers only (timer, UI, startup).
+    /// Performs the prediction fetch from the external API using telemetry and user settings.
+    func fetchPrediction(telemetry: TelemetryData, userSettings: UserSettings, measuredDescentRate: Double? = nil) async {
+        print("[DEBUG] fetchPrediction entered.")
         if SharedAppState.shared.appState == .finalApproach {
             return
         }
-        if let lastFetchTime = lastPredictionFetchTime {
-            let timeSinceLastFetch = Date().timeIntervalSince(lastFetchTime)
-            if timeSinceLastFetch < 30 {
-                return
-            }
-        }
-        lastPredictionFetchTime = Date()
         predictionStatus = .fetching
         isLoading = true
-        print("[Debug][PredictionService][State: \(SharedAppState.shared.appState.rawValue)] Fetching prediction...")
+        print("[Debug][PredictionService] Fetching prediction...")
+
         path = []
         burstPoint = nil
         landingPoint = nil
         landingTime = nil
+
         let dateFormatter = ISO8601DateFormatter()
         dateFormatter.formatOptions = [.withInternetDateTime]
         let launchDatetime = dateFormatter.string(from: Date().addingTimeInterval(60))
+        
+        print("[DEBUG][PredictionService] altitude: \(telemetry.altitude), measuredDescentRate: \(String(describing: measuredDescentRate)), userDescentRate: \(userSettings.descentRate)")
+        let useMeasured = (telemetry.altitude < 10000)
+        let measured = measuredDescentRate ?? userSettings.descentRate
+        let effectiveDescentRate = abs(useMeasured ? measured : userSettings.descentRate)
+        print("[DEBUG][PredictionService] useMeasured: \(useMeasured), measured: \(measured), effectiveDescentRate: \(effectiveDescentRate)")
+        
         var adjustedBurstAltitude = userSettings.burstAltitude
         if telemetry.verticalSpeed < 0 {
             adjustedBurstAltitude = telemetry.altitude + 10.0
         }
 
-        var effectiveDescentRate = userSettings.descentRate // Start with user's setting
-
-        // Automatic adjustment of descending speed
-        if telemetry.verticalSpeed < 0 {
-            print("[DEBUG][PredictionService] Starting descent rate adjustment check: altitude=\(telemetry.altitude), verticalSpeed=\(telemetry.verticalSpeed), lastUpdateTime=\(String(describing: telemetry.lastUpdateTime))")
-            // telemetry.lastUpdateTime is a Date?, so this usage is correct
-            let currentTelemetryTime = telemetry.lastUpdateTime.map { Date(timeIntervalSince1970: $0) } ?? Date()
-            print("[DEBUG][PredictionService] currentTelemetryTime: \(currentTelemetryTime)")
-            if telemetry.altitude < 10000.0 {
-                if let balloonTrackingService = balloonTrackingService,
-                   let historicalPoint = findHistoricalPoint(in: balloonTrackingService.currentBalloonTrack, currentTelemetryTime: currentTelemetryTime) {
-                    print("[DEBUG][PredictionService] Found historicalPoint: timestamp=\(historicalPoint.timestamp), altitude=\(historicalPoint.altitude)")
-                    let exactTimeDifference = currentTelemetryTime.timeIntervalSince(historicalPoint.timestamp)
-                    print("[DEBUG][PredictionService] exactTimeDifference: \(exactTimeDifference)")
-                    if exactTimeDifference > 0.1 { // Use a small threshold to avoid near-zero division
-                        if historicalPoint.altitude > telemetry.altitude {
-                            let altitudeChange = historicalPoint.altitude - telemetry.altitude
-                            print("[DEBUG][PredictionService] Adjusting descent rate: historicAltitude=\(historicalPoint.altitude), currentAltitude=\(telemetry.altitude), newRate=\(abs(altitudeChange / exactTimeDifference))")
-                            effectiveDescentRate = abs(altitudeChange / exactTimeDifference)
-                        } else {
-                            print("[DEBUG][PredictionService] Skipping descent rate adjustment: historicAltitude <= currentAltitude")
-                        }
-                    }
-                }
-            } else {
-                print("[DEBUG][PredictionService] Altitude >= 10000m, skipping descent rate adjustment and using user settings' descent rate.")
-            }
-        }
-        self.currentEffectiveDescentRate = effectiveDescentRate // Update the published property
-        print("[DEBUG][PredictionService] Set currentEffectiveDescentRate = \(self.currentEffectiveDescentRate ?? -1)")
-
         let urlString = "https://api.v2.sondehub.org/tawhiri?launch_latitude=\(telemetry.latitude)&launch_longitude=\(telemetry.longitude)&launch_altitude=\(telemetry.altitude)&launch_datetime=\(launchDatetime)&ascent_rate=\(userSettings.ascentRate)&descent_rate=\(effectiveDescentRate)&burst_altitude=\(adjustedBurstAltitude)"
         self.lastAPICallURL = urlString
-        print("[Debug][PredictionService][State: \(SharedAppState.shared.appState.rawValue)] API Call: \(urlString)")
+        print("[Debug][PredictionService] API Call: \(urlString)")
         guard let url = URL(string: urlString) else {
             isLoading = false
             return
@@ -138,7 +112,7 @@ final class PredictionService: NSObject, ObservableObject {
                         if let last = lastDescentPoint, let lat = last.latitude, let lon = last.longitude {
                             self.landingPoint = CLLocationCoordinate2D(latitude: lat, longitude: lon)
                             if lat == 0 && lon == 0 {
-                                print("[Debug][PredictionService][State: \(SharedAppState.shared.appState.rawValue)] Landing point is at (0,0) -- likely invalid")
+                                print("[Debug][PredictionService] Landing point is at (0,0) -- likely invalid")
                             }
                             if let dt = last.datetime {
                                 let formatter = ISO8601DateFormatter()
@@ -153,13 +127,13 @@ final class PredictionService: NSObject, ObservableObject {
                 if let landingPoint = self.landingPoint {
                     let newPredictionData = PredictionData(path: self.path, burstPoint: self.burstPoint, landingPoint: landingPoint, landingTime: self.landingTime)
                     self.predictionData = newPredictionData
-                    
+
                     self.predictionStatus = .success
                     if self.appInitializationFinished == false {
                         self.appInitializationFinished = true
                     }
                 } else {
-                    print("[Debug][PredictionService][State: \(SharedAppState.shared.appState.rawValue)] Prediction parsing finished, but no valid landing point found.")
+                    print("[Debug][PredictionService] Prediction parsing finished, but no valid landing point found.")
                     if case .fetching = self.predictionStatus {
                         self.predictionStatus = .noValidPrediction
                     }
@@ -168,46 +142,30 @@ final class PredictionService: NSObject, ObservableObject {
             }
         } catch {
             await MainActor.run { @MainActor in
-                print("[Debug][PredictionService][State: \(SharedAppState.shared.appState.rawValue)] Network or JSON parsing failed: \(error.localizedDescription)")
+                print("[Debug][PredictionService] Network or JSON parsing failed: \(error.localizedDescription)")
                 self.predictionStatus = .error(error.localizedDescription)
                 self.isLoading = false
             }
-            print("[Debug][PredictionService][State: \(SharedAppState.shared.appState.rawValue)] Prediction fetch failed with error: \(error.localizedDescription)")
+            print("[Debug][PredictionService] Prediction fetch failed with error: \(error.localizedDescription)")
             if let decodingError = error as? DecodingError {
                 switch decodingError {
                 case .dataCorrupted(let context):
-                    print("[Debug][PredictionService][State: \(SharedAppState.shared.appState.rawValue)] Data corrupted: \(context.debugDescription)")
+                    print("[Debug][PredictionService] Data corrupted: \(context.debugDescription)")
                     if let underlyingError = context.underlyingError {
-                        print("[Debug][PredictionService][State: \(SharedAppState.shared.appState.rawValue)] Underlying error: \(underlyingError.localizedDescription)")
+                        print("[Debug][PredictionService] Underlying error: \(underlyingError.localizedDescription)")
                     }
                 case .keyNotFound(let key, let context):
-                    print("[Debug][PredictionService][State: \(SharedAppState.shared.appState.rawValue)] Key '\(key)' not found: \(context.debugDescription)")
+                    print("[Debug][PredictionService] Key '\(key)' not found: \(context.debugDescription)")
                 case .valueNotFound(let type, let context):
-                    print("[Debug][PredictionService][State: \(SharedAppState.shared.appState.rawValue)] Value of type '\(type)' not found: \(context.debugDescription)")
+                    print("[Debug][PredictionService] Value of type '\(type)' not found: \(context.debugDescription)")
                 case .typeMismatch(let type, let context):
-                    print("[Debug][PredictionService][State: \(SharedAppState.shared.appState.rawValue)] Type mismatch for type '\(type)': \(context.debugDescription)")
+                    print("[Debug][PredictionService] Type mismatch for type '\(type)': \(context.debugDescription)")
                 @unknown default:
-                    print("[Debug][PredictionService][State: \(SharedAppState.shared.appState.rawValue)] Unknown decoding error: \(decodingError.localizedDescription)")
+                    print("[Debug][PredictionService] Unknown decoding error: \(decodingError.localizedDescription)")
                 }
             }
-            print("[Debug][PredictionService][State: \(SharedAppState.shared.appState.rawValue)] Return JSON: (Raw data not captured for logging in this scope)")
+            print("[Debug][PredictionService] Return JSON: (Raw data not captured for logging in this scope)")
         }
-    }
-
-    // Helper function for finding historical point
-    private func findHistoricalPoint(in track: [BalloonTrackPoint], currentTelemetryTime: Date) -> BalloonTrackPoint? {
-        guard !track.isEmpty else { return nil }
-
-        let oneMinuteAgo = currentTelemetryTime.addingTimeInterval(-60)
-
-        // Iterate backwards from the most recent point
-        for i in (0..<track.count).reversed() {
-            let point = track[i]
-            if point.timestamp < oneMinuteAgo {
-                return point // This is the first point older than 1 minute ago
-            }
-        }
-        return nil // No point found that is older than 1 minute ago
     }
 }
 

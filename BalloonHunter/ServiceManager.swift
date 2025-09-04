@@ -1,4 +1,3 @@
-
 import Foundation
 import Combine
 import SwiftUI
@@ -21,7 +20,7 @@ final class ServiceManager: ObservableObject {
     private var lastRouteCalculationTime: Date? = nil
 
     init() {
-        print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] ServiceManager init")
+        print("[DEBUG] ServiceManager init")
         self.persistenceService = PersistenceService()
         self.bleCommunicationService = BLECommunicationService(persistenceService: self.persistenceService)
         self.balloonTrackingService = BalloonTrackingService(persistenceService: self.persistenceService, bleService: self.bleCommunicationService)
@@ -68,7 +67,8 @@ final class ServiceManager: ObservableObject {
                       let userSettings = self.persistenceService.readPredictionParameters() else { return }
                 
                 if self.annotationService.appState != .startup {
-                    await self.predictionService.fetchPrediction(telemetry: telemetry, userSettings: userSettings)
+                    print("[DEBUG] Passing descent rate \(String(describing: self.balloonTrackingService.currentEffectiveDescentRate)) to PredictionService (ServiceManager timer)")
+                    await self.predictionService.fetchPrediction(telemetry: telemetry, userSettings: userSettings, measuredDescentRate: self.balloonTrackingService.currentEffectiveDescentRate)
                 }
             }
         }
@@ -105,3 +105,4 @@ final class ServiceManager: ObservableObject {
         )
     }
 }
+
