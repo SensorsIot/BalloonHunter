@@ -12,13 +12,37 @@ struct FinalMapView: View {
     @State private var landedBalloonPosition: CLLocationCoordinate2D? = nil
     @State private var userHeading: CLLocationDirection = 0.0
     @State private var distanceToBalloon: CLLocationDistance = 0.0
+    
+    // Track the timestamp when finalApproach started
+    @State private var finalApproachStartTime: Date? = nil
+
+    private var finalApproachAnnotations: [MapAnnotationItem] {
+        var annotations: [MapAnnotationItem] = []
+
+        if let userLocation = locationService.locationData {
+            let userCoordinate = CLLocationCoordinate2D(latitude: userLocation.latitude, longitude: userLocation.longitude)
+            annotations.append(MapAnnotationItem(coordinate: userCoordinate, kind: .user))
+        }
+
+        if let landedPos = landedBalloonPosition {
+            annotations.append(MapAnnotationItem(coordinate: landedPos, kind: .landed))
+        }
+
+        return annotations
+    }
+    
+    // Computed property to get filtered balloon track points from finalApproachStartTime
+    private var finalApproachTrackCoordinates: [CLLocationCoordinate2D] {
+        balloonTrackingService.currentBalloonTrack.map { CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude) }
+    }
 
     var body: some View {
         ZStack {
             FinalApproachMapView(
-                annotations: annotationService.annotations,
+                annotations: finalApproachAnnotations,
                 userTrackingMode: .followWithHeading,
-                landedBalloonPosition: landedBalloonPosition
+                landedBalloonPosition: landedBalloonPosition,
+                trackCoordinates: finalApproachTrackCoordinates
             )
             .edgesIgnoringSafeArea(.all)
             .gesture(DragGesture().onEnded { value in
@@ -62,6 +86,15 @@ struct FinalMapView: View {
                 updateMapAndUI(userLocation: userLocationData)
             }
         }
+        .onChange(of: annotationService.appState) { newState in
+            if newState == .finalApproach {
+                // Record the start time when final approach begins
+                finalApproachStartTime = Date()
+            } else {
+                // Clear the start time when leaving finalApproach mode
+                finalApproachStartTime = nil
+            }
+        }
     }
 
     private func updateLandedBalloonPosition(track: [BalloonTrackPoint]) {
@@ -93,17 +126,11 @@ struct FinalMapView: View {
 
         // Do not update region or annotations if in final approach mode
         if annotationService.appState == .finalApproach {
-            // Still update distance and annotations but no region update
+            // Still update distance only
             let userCLLocation = CLLocation(latitude: userLocation.latitude, longitude: userLocation.longitude)
             let balloonCLLocation = CLLocation(latitude: landedPos.latitude, longitude: landedPos.longitude)
 
             distanceToBalloon = userCLLocation.distance(from: balloonCLLocation)
-
-            // Update annotations for AnnotationService
-            var newAnnotations: [MapAnnotationItem] = []
-            newAnnotations.append(MapAnnotationItem(coordinate: userCLLocation.coordinate, kind: .user))
-            newAnnotations.append(MapAnnotationItem(coordinate: landedPos, kind: .landed)) // Using .landed for stable position
-            annotationService.annotations = newAnnotations
 
             return
         }
@@ -113,10 +140,10 @@ struct FinalMapView: View {
 
         distanceToBalloon = userCLLocation.distance(from: balloonCLLocation)
 
-        // Update annotations for AnnotationService
+        // Update annotations for AnnotationService only if not in final approach
         var newAnnotations: [MapAnnotationItem] = []
         newAnnotations.append(MapAnnotationItem(coordinate: userCLLocation.coordinate, kind: .user))
-        newAnnotations.append(MapAnnotationItem(coordinate: landedPos, kind: .landed)) // Using .landed for stable position
+        newAnnotations.append(MapAnnotationItem(coordinate: landedPos, kind: .landed))
         annotationService.annotations = newAnnotations
 
         // Do NOT update region (zoom or pan) in final approach mode to preserve manual control
@@ -146,6 +173,7 @@ private struct FinalApproachMapView: UIViewRepresentable {
     let annotations: [MapAnnotationItem]
     let userTrackingMode: MKUserTrackingMode
     let landedBalloonPosition: CLLocationCoordinate2D?
+    let trackCoordinates: [CLLocationCoordinate2D]
 
     func makeUIView(context: Context) -> MKMapView {
         let mapView = MKMapView()
@@ -154,6 +182,9 @@ private struct FinalApproachMapView: UIViewRepresentable {
         mapView.showsUserLocation = true
         mapView.userTrackingMode = userTrackingMode
         mapView.register(CustomAnnotationView.self, forAnnotationViewWithReuseIdentifier: "custom")
+        mapView.isRotateEnabled = true // Enable map rotation
+        mapView.isZoomEnabled = true
+        mapView.isScrollEnabled = false
         return mapView
     }
 
@@ -196,12 +227,51 @@ private struct FinalApproachMapView: UIViewRepresentable {
         if !annotationsToAdd.isEmpty {
             uiView.addAnnotations(annotationsToAdd)
         }
+        
+        // Remove old polyline overlays for balloon track
+        let existingPolylines = uiView.overlays.filter { $0 is MKPolyline }
+        uiView.removeOverlays(existingPolylines)
+
+        // Add new polyline overlay for the balloon track
+        if trackCoordinates.count > 1 {
+            let polyline = MKPolyline(coordinates: trackCoordinates, count: trackCoordinates.count)
+            uiView.addOverlay(polyline)
+        }
 
         // Update region and user tracking mode
         // region is removed so we don't call setRegion here
 
-        uiView.userTrackingMode = userTrackingMode
+        // Added code to set initial zoom to fit all annotations once
+        if !context.coordinator.hasSetInitialRegion,
+           let userAnno = annotations.first(where: { $0.kind == .user })?.coordinate,
+           let balloonAnno = annotations.first(where: { $0.kind == .landed })?.coordinate {
+            let userPoint = MKMapPoint(userAnno)
+            let balloonPoint = MKMapPoint(balloonAnno)
+            let minX = min(userPoint.x, balloonPoint.x)
+            let maxX = max(userPoint.x, balloonPoint.x)
+            let minY = min(userPoint.y, balloonPoint.y)
+            let maxY = max(userPoint.y, balloonPoint.y)
+            let deltaX = max(maxX - minX, 10) // at least 10m
+            let deltaY = max(maxY - minY, 10) // at least 10m
+            let marginX = max(deltaX * 0.25, 10) // 25% or ≥10m
+            let marginY = max(deltaY * 0.25, 10)
+            let mapRect = MKMapRect(
+                x: minX - marginX,
+                y: minY - marginY,
+                width: deltaX + 2 * marginX,
+                height: deltaY + 2 * marginY
+            )
+            uiView.setVisibleMapRect(mapRect, edgePadding: UIEdgeInsets(top: 40, left: 40, bottom: 40, right: 40), animated: false)
+            context.coordinator.hasSetInitialRegion = true
+        }
 
+        uiView.userTrackingMode = userTrackingMode
+        
+        uiView.isRotateEnabled = true // Ensure rotation enabled on update
+
+        // Removed custom camera/heading manipulation to let MapKit handle rotation and user placement natively
+
+        /*
         // Fix user location at bottom-center
         // This is a bit tricky with MKMapView's userTrackingMode.
         // A common approach is to adjust the content inset or camera.
@@ -216,6 +286,18 @@ private struct FinalApproachMapView: UIViewRepresentable {
             newCamera.centerCoordinate = uiView.convert(CGPoint(x: uiView.bounds.midX - offset.x, y: uiView.bounds.midY - offset.y), toCoordinateFrom: uiView)
             uiView.setCamera(newCamera, animated: true)
         }
+
+        // Set map camera heading using latest heading from coordinator
+        if userTrackingMode == .followWithHeading,
+           let userAnnotation = annotations.first(where: { $0.kind == .user }) {
+            let camera = MKMapCamera()
+            camera.centerCoordinate = userAnnotation.coordinate
+            camera.heading = context.coordinator.latestHeading ?? 0.0
+            camera.pitch = 0
+            camera.altitude = 500 // adjust to your preferred zoom
+            uiView.setCamera(camera, animated: true)
+        }
+        */
     }
 
     func makeCoordinator() -> Coordinator {
@@ -224,9 +306,13 @@ private struct FinalApproachMapView: UIViewRepresentable {
 
     class Coordinator: NSObject, MKMapViewDelegate {
         var parent: FinalApproachMapView
+        var latestHeading: CLLocationDirection?
+        var hasSetInitialRegion: Bool = false
 
         init(_ parent: FinalApproachMapView) {
             self.parent = parent
+            self.latestHeading = nil
+            super.init()
         }
 
         func mapView(_ mapView: MKMapView, regionDidChangeAnimated animated: Bool) {
@@ -248,6 +334,24 @@ private struct FinalApproachMapView: UIViewRepresentable {
                 view.setup(with: item)
             }
             return view
+        }
+        
+        // Renderer for polyline overlay
+        func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
+            if let polyline = overlay as? MKPolyline {
+                let renderer = MKPolylineRenderer(polyline: polyline)
+                renderer.strokeColor = UIColor.systemBlue.withAlphaComponent(0.7)
+                renderer.lineWidth = 3
+                return renderer
+            }
+            return MKOverlayRenderer(overlay: overlay)
+        }
+
+        // Update latestHeading when user heading changes via didUpdateLocations or other delegate methods
+        func mapView(_ mapView: MKMapView, didUpdate userLocation: MKUserLocation) {
+            if let heading = userLocation.heading?.trueHeading, heading >= 0 {
+                self.latestHeading = heading
+            }
         }
     }
 }

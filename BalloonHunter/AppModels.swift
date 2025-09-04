@@ -236,11 +236,13 @@ struct BalloonTrackPoint: Codable, Equatable {
     var latitude: Double
     var longitude: Double
     var altitude: Double
+    var timestamp: Date
 
     init(telemetryData: TelemetryData) {
         self.latitude = telemetryData.latitude
         self.longitude = telemetryData.longitude
         self.altitude = telemetryData.altitude
+        self.timestamp = telemetryData.lastUpdateTime != nil ? Date(timeIntervalSince1970: telemetryData.lastUpdateTime!) : Date() // Use the time from telemetryData if possible
     }
 }
 
