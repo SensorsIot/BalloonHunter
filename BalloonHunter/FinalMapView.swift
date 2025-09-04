@@ -27,35 +27,7 @@ struct FinalMapView: View {
     }
 
     var body: some View {
-        ZStack {
-            FinalApproachMapView(
-                annotations: finalApproachAnnotations,
-                userTrackingMode: .followWithHeading,
-                landedBalloonPosition: landedBalloonPosition,
-                trackCoordinates: finalApproachTrackCoordinates
-            )
-            // Removed edgesIgnoringSafeArea(.all) to respect safe areas
-            // so map respects safe area insets naturally
-
-            VStack(alignment: .leading) {
-                Spacer()
-                VStack(alignment: .leading) {
-                    Text(String(format: "Distance: %.0f m", distanceToBalloon))
-                        .font(.system(size: 24, weight: .bold))
-                        .foregroundColor(.primary)
-                        .bold()
-                    Text(String(format: "Heading: %.0f°", userHeading))
-                        .font(.system(size: 24, weight: .bold))
-                        .foregroundColor(.primary)
-                        .bold()
-                }
-                .padding(12)
-                .background(.ultraThinMaterial)
-                .cornerRadius(10)
-                .padding([.leading, .bottom], 24)
-            }
-
-            // Settings button top leading
+        VStack(spacing: 0) {
             HStack {
                 Button {
                     showSettings = true
@@ -66,22 +38,22 @@ struct FinalMapView: View {
                 }
                 .background(.ultraThinMaterial)
                 .cornerRadius(8)
-                .padding(16)
 
                 Spacer()
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
 
-            // Mute button top trailing
-            HStack {
+                Button("Tracking") {
+                    annotationService.setAppState(.longRangeTracking)
+                }
+                .buttonStyle(.bordered)
+                .tint(.blue)
+
                 Spacer()
 
                 Button {
-                    if let isMuted = bleService.latestTelemetry?.buzmute, isMuted {
-                        bleService.sendCommand(command: "o{mute=0}o")
-                    } else {
-                        bleService.sendCommand(command: "o{mute=1}o")
-                    }
+                    let newMuteState = !(bleService.latestTelemetry?.buzmute ?? false)
+                    bleService.latestTelemetry?.buzmute = newMuteState
+                    let command = "o{mute=\(newMuteState ? 1 : 0)}o"
+                    bleService.sendCommand(command: command)
                 } label: {
                     Image(systemName: (bleService.latestTelemetry?.buzmute ?? false) ? "speaker.slash.fill" : "speaker.fill")
                         .imageScale(.large)
@@ -89,9 +61,32 @@ struct FinalMapView: View {
                 }
                 .background(.ultraThinMaterial)
                 .cornerRadius(8)
-                .padding(.top, 16).padding(.trailing, 56)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+            .padding(.horizontal, 16)
+            .padding(.top, 16)
+
+            ZStack {
+                FinalApproachMapView(
+                    annotations: finalApproachAnnotations,
+                    userTrackingMode: .followWithHeading,
+                    landedBalloonPosition: landedBalloonPosition,
+                    trackCoordinates: finalApproachTrackCoordinates
+                )
+
+                VStack(alignment: .leading) {
+                    Spacer()
+                    VStack(alignment: .leading) {
+                        Text(String(format: "Distance: %.0f m", distanceToBalloon))
+                            .font(.system(size: 24, weight: .bold))
+                            .foregroundColor(.primary)
+                            .bold()
+                    }
+                    .padding(12)
+                    .background(.ultraThinMaterial)
+                    .cornerRadius(10)
+                    .padding([.leading, .bottom], 24)
+                }
+            }
         }
         .sheet(isPresented: $showSettings) {
             SettingsView()
@@ -175,7 +170,8 @@ private struct FinalApproachMapView: UIViewRepresentable {
         mapView.register(CustomAnnotationView.self, forAnnotationViewWithReuseIdentifier: "custom")
         mapView.isRotateEnabled = true // Enable map rotation
         mapView.isZoomEnabled = true
-        mapView.isScrollEnabled = false
+        mapView.isScrollEnabled = true
+        mapView.isPitchEnabled = false
         return mapView
     }
 
@@ -268,8 +264,8 @@ private struct FinalApproachMapView: UIViewRepresentable {
             } else {
                 // Distance ≤ 100m, set 1km span centered on user
                 let region = MKCoordinateRegion(center: userCoordinate,
-                                                latitudinalMeters: 1000,
-                                                longitudinalMeters: 1000)
+                                                latitudinalMeters: 100,
+                                                longitudinalMeters: 100)
                 uiView.setRegion(region, animated: false)
             }
             context.coordinator.hasSetInitialRegion = true

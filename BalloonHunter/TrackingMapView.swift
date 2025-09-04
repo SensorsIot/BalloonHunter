@@ -24,7 +24,7 @@ struct TrackingMapView: View {
     @State private var didPerformInitialZoom = false
     @State private var lastRouteCalculationLocation: CLLocation?
     @State private var programmaticUpdateTrigger = 0
-    
+    @State private var isDirectionUp = false
 
     // State for polyline overlays
     @State private var balloonTrackPolyline: MKPolyline?
@@ -41,23 +41,45 @@ struct TrackingMapView: View {
                     } label: {
                         Image(systemName: "gearshape")
                             .imageScale(.large)
-                            .foregroundColor(.primary)
                             .padding(8)
                     }
+                    .background(.ultraThinMaterial)
+                    .cornerRadius(8)
+
                     Spacer()
-                    Picker("Transport Mode", selection: $transportMode) {
+
+                    Picker("Mode", selection: $transportMode) {
                         Text("Car").tag(TransportationMode.car)
                         Text("Bike").tag(TransportationMode.bike)
                     }
                     .pickerStyle(.segmented)
-                    .background(.thinMaterial)
-                    .cornerRadius(8)
-                    .padding(.horizontal, 18)
+                    .frame(width: 160)
+
                     Spacer()
-                    // Add an invisible spacer with same width as button to keep Picker centered
-                    // This keeps the Picker visually centered between leading and trailing edges
-                    Color.clear.frame(width: 44, height: 44)
+
+                    Button("Closeup") {
+                        annotationService.setAppState(.finalApproach)
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.blue)
+
+                    Spacer()
+
+                    Button {
+                        let newMuteState = !(bleService.latestTelemetry?.buzmute ?? false)
+                        bleService.latestTelemetry?.buzmute = newMuteState
+                        let command = "o{mute=\(newMuteState ? 1 : 0)}o"
+                        bleService.sendCommand(command: command)
+                    } label: {
+                        Image(systemName: (bleService.latestTelemetry?.buzmute ?? false) ? "speaker.slash.fill" : "speaker.fill")
+                            .imageScale(.large)
+                            .padding(8)
+                    }
+                    .background(.ultraThinMaterial)
+                    .cornerRadius(8)
                 }
+                .padding(.horizontal, 16)
+                .padding(.top, 16)
                 // No top padding, only minimal horizontal padding from Picker
 
                 ZStack {
@@ -68,6 +90,8 @@ struct TrackingMapView: View {
                         predictionPath: predictionPathPolyline,
                         userRoute: userRoutePolyline,
                         programmaticUpdateTrigger: programmaticUpdateTrigger,
+                        isDirectionUp: isDirectionUp,
+                        setIsDirectionUp: { newValue in isDirectionUp = newValue },
                         onAnnotationTapped: { item in
                             if item.kind == .balloon {
                                 print("[DEBUG][TrackingMapView] Balloon annotation tapped.")
@@ -77,9 +101,29 @@ struct TrackingMapView: View {
                                     await predictionService.fetchPrediction(telemetry: telemetry, userSettings: userSettings)
                                 }
                             }
+                        },
+                        getUserLocationAndHeading: {
+                            guard let location = locationService.locationData else { return nil }
+                            let heading = location.heading
+                            return (CLLocationCoordinate2D(latitude: location.latitude, longitude: location.longitude), heading)
                         }
                     )
                     .frame(height: geometry.size.height * 0.7)
+                    .overlay(alignment: .bottom) {
+                        Button {
+                            withAnimation {
+                                isDirectionUp.toggle()
+                            }
+                        } label: {
+                            Text(isDirectionUp ? "North Up" : "Direction Up")
+                                .font(.headline)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 8)
+                                .background(.ultraThinMaterial)
+                                .cornerRadius(8)
+                        }
+                        .padding(.bottom, 8)
+                    }
                 }
             }
             .safeAreaInset(edge: .bottom, alignment: .center) {
@@ -111,14 +155,15 @@ struct TrackingMapView: View {
                 }
                 updateStateAndCamera()
             }
-            .onChange(of: transportMode) {
+            .onChange(of: transportMode) { newValue in
                 routeService.routeData = nil
                 if let userLocationData = locationService.locationData,
                    let landingPoint = predictionService.predictionData?.landingPoint {
+                    print("[ROUTE DEBUG] Routing from (user: \(userLocationData.latitude),\(userLocationData.longitude)) to (landing: \(landingPoint.latitude),\(landingPoint.longitude)) transport: \(transportMode)")
                     routeService.calculateRoute(
                         from: CLLocationCoordinate2D(latitude: userLocationData.latitude, longitude: userLocationData.longitude),
                         to: landingPoint,
-                        transportType: transportMode
+                        transportType: newValue
                     )
                 }
             }
@@ -130,7 +175,7 @@ struct TrackingMapView: View {
                 let currentUserLocation = CLLocation(latitude: userLocationData.latitude, longitude: userLocationData.longitude)
                 
                 if currentUserLocation.distance(from: lastCalcLocation) > 500 {
-                    
+                    print("[ROUTE DEBUG] Routing from (user: \(userLocationData.latitude),\(userLocationData.longitude)) to (landing: \(landingPoint.latitude),\(landingPoint.longitude)) transport: \(transportMode)")
                     routeService.calculateRoute(
                         from: currentUserLocation.coordinate,
                         to: landingPoint,
@@ -267,13 +312,28 @@ private struct MapView: UIViewRepresentable {
     let predictionPath: MKPolyline?
     let userRoute: MKPolyline?
     let programmaticUpdateTrigger: Int
+    let isDirectionUp: Bool
+    let setIsDirectionUp: (Bool) -> Void
     let onAnnotationTapped: (MapAnnotationItem) -> Void
+    let getUserLocationAndHeading: (() -> (CLLocationCoordinate2D, CLLocationDirection)?)  // Added closure property
 
     func makeUIView(context: Context) -> MKMapView {
         let mapView = MKMapView()
         mapView.delegate = context.coordinator
         mapView.mapType = .standard // Changed map style to standard for roads only
         mapView.register(CustomAnnotationView.self, forAnnotationViewWithReuseIdentifier: "custom")
+
+        // Remove default double-tap (zoom) gesture recognizer
+        if let recognizers = mapView.gestureRecognizers {
+            for recognizer in recognizers {
+                if let tap = recognizer as? UITapGestureRecognizer, tap.numberOfTapsRequired == 2 {
+                    mapView.removeGestureRecognizer(tap)
+                }
+            }
+        }
+
+        // Removed longPressGestureRecognizer setup as per instructions
+
         return mapView
     }
 
@@ -400,6 +460,9 @@ private struct MapView: UIViewRepresentable {
             uiView.showAnnotations(uiView.annotations, animated: true)
             context.coordinator.lastUpdateTrigger = programmaticUpdateTrigger
         }
+
+        // Handle changes in isDirectionUp by updating camera heading accordingly
+        context.coordinator.updateCameraHeading(isDirectionUp: isDirectionUp, mapView: uiView, getUserLocationAndHeading: getUserLocationAndHeading)
     }
 
     func makeCoordinator() -> Coordinator {
@@ -472,6 +535,29 @@ private struct MapView: UIViewRepresentable {
                   let item = annotation.item else { return }
             parent.onAnnotationTapped(item)
         }
+
+        func updateCameraHeading(isDirectionUp: Bool, mapView: MKMapView, getUserLocationAndHeading: () -> (CLLocationCoordinate2D, CLLocationDirection)?) {
+            let currentCamera = mapView.camera
+            let centerCoordinate = currentCamera.centerCoordinate
+            let distance = currentCamera.centerCoordinateDistance
+            let pitch = currentCamera.pitch
+            var heading: CLLocationDirection = 0
+
+            if isDirectionUp {
+                if let (_, userHeading) = getUserLocationAndHeading() {
+                    heading = userHeading
+                }
+            } else {
+                heading = 0
+            }
+
+            if abs(currentCamera.heading - heading) > 0.1 {
+                let newCamera = MKMapCamera(lookingAtCenter: centerCoordinate, fromDistance: distance, pitch: pitch, heading: heading)
+                mapView.setCamera(newCamera, animated: true)
+            }
+        }
+
+        // Removed handleLongPress(_:) method as per instructions
     }
 }
 
@@ -530,3 +616,4 @@ private class CustomAnnotationView: MKAnnotationView {
         }
     }
 }
+

@@ -17,6 +17,11 @@ final class AnnotationService: ObservableObject {
             SharedAppState.shared.appState = appState
         }
     }
+    
+    public func setAppState(_ newState: AppState) {
+        self.appState = newState
+    }
+    
     @Published var annotations: [MapAnnotationItem] = []
 
     init(bleService: BLECommunicationService, balloonTrackingService: BalloonTrackingService) {
@@ -107,25 +112,7 @@ final class AnnotationService: ObservableObject {
                 appState = .longRangeTracking
             }
         case .longRangeTracking:
-            guard let userLoc = userLocation,
-                  let tel = telemetry,
-                  telemetryHistory.count >= 10 else {
-                break
-            }
-
-            let last10Telemetry = telemetryHistory.suffix(10)
-            let isBalloonStable = last10Telemetry.allSatisfy { $0.verticalSpeed < 1 && $0.horizontalSpeed < 5 }
-
-            if isBalloonStable {
-                 let userCLLocation = CLLocation(latitude: userLoc.latitude, longitude: userLoc.longitude)
-                 let balloonCLLocation = CLLocation(latitude: tel.latitude, longitude: tel.longitude)
-                 let distance = userCLLocation.distance(from: balloonCLLocation)
-                 let isUserClose = distance < 1000
-
-                if isUserClose {
-                    appState = .finalApproach
-                }
-            }
+            break
         case .finalApproach:
             break
         }
@@ -161,13 +148,15 @@ final class AnnotationService: ObservableObject {
             let isAscending = tel.verticalSpeed >= 0
             let balloonCoordinate = CLLocationCoordinate2D(latitude: tel.latitude, longitude: tel.longitude)
 
-            let balloonAnnotation = currentAnnotationMap[.balloon] ?? MapAnnotationItem(coordinate: CLLocationCoordinate2D(), kind: .balloon)
-            balloonAnnotation.coordinate = balloonCoordinate
-            balloonAnnotation.isAscending = isAscending
-            balloonAnnotation.lastUpdateTime = lastTelemetryUpdateTime
-            balloonAnnotation.altitude = tel.altitude
-            newAnnotations.append(balloonAnnotation)
-            currentAnnotationMap.removeValue(forKey: .balloon)
+            if isAscending {
+                let balloonAnnotation = currentAnnotationMap[.balloon] ?? MapAnnotationItem(coordinate: CLLocationCoordinate2D(), kind: .balloon)
+                balloonAnnotation.coordinate = balloonCoordinate
+                balloonAnnotation.isAscending = isAscending
+                balloonAnnotation.lastUpdateTime = lastTelemetryUpdateTime
+                balloonAnnotation.altitude = tel.altitude
+                newAnnotations.append(balloonAnnotation)
+                currentAnnotationMap.removeValue(forKey: .balloon)
+            }
 
             if isAscending, let burst = prediction?.burstPoint {
                 let burstAnnotation = currentAnnotationMap[.burst] ?? MapAnnotationItem(coordinate: CLLocationCoordinate2D(), kind: .burst)
@@ -194,3 +183,4 @@ final class AnnotationService: ObservableObject {
         self.annotations = newAnnotations
     }
 }
+

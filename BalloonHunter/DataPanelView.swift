@@ -12,6 +12,8 @@ struct DataPanelView: View {
 
     var body: some View {
         GeometryReader { geometry in // Added GeometryReader
+            let columnWidth: CGFloat = 120
+
             VStack {
                 // Table 1: 4 columns
                 Grid(alignment: .leading, horizontalSpacing: 5, verticalSpacing: 10) {
@@ -22,19 +24,9 @@ struct DataPanelView: View {
                         Text(bleService.latestTelemetry?.probeType ?? "N/A")
                             .frame(maxWidth: .infinity)
                         Text(bleService.latestTelemetry?.sondeName ?? "N/A")
+                            .frame(width: columnWidth, alignment: .leading)
+                        Text("Alt: \(bleService.latestTelemetry != nil ? "\(Int(bleService.latestTelemetry!.altitude)) m" : "N/A")")
                             .frame(maxWidth: .infinity, alignment: .leading)
-                        Button(action: {
-                            let newMuteState = !(bleService.latestTelemetry?.buzmute ?? false)
-                            bleService.latestTelemetry?.buzmute = newMuteState
-                            let command = "o{mute=\(newMuteState ? 1 : 0)}o"
-                            bleService.sendCommand(command: command)
-                        }) {
-                            Image(systemName: bleService.latestTelemetry?.buzmute == true ? "speaker.slash.fill" : "speaker.fill")
-                                .font(.system(size: 32))
-                                .frame(minWidth: 60, minHeight: 60)
-                                .contentShape(Rectangle())
-                        }
-                        .gridCellAnchor(.trailing)
                     }
                 }
                 .padding(.horizontal)
@@ -45,7 +37,7 @@ struct DataPanelView: View {
                         Text("\(String(format: "%.3f", bleService.latestTelemetry?.frequency ?? 0.0)) MHz")
                             .frame(maxWidth: .infinity, alignment: .leading)
                         Text("RSSI: \(signalStrengthString) dB") // Reverted to dB
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .frame(width: columnWidth, alignment: .leading)
                         Text("Batt: \(batteryPercentageString)%")
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
@@ -176,3 +168,4 @@ struct DataPanelView: View {
 #Preview {
     DataPanelView()
 }
+

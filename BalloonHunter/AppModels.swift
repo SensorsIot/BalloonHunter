@@ -312,10 +312,10 @@ final class MapAnnotationItem: ObservableObject, Identifiable, Equatable {
                 .font(.title)
         case .balloon:
             let color: Color = {
-                if let lastUpdate = lastUpdateTime, Date().timeIntervalSince(lastUpdate) <= 3 {
-                    return .green
+                if let isAscending = isAscending {
+                    return isAscending ? .green : .red
                 } else {
-                    return .red
+                    return .gray // Default or unknown state
                 }
             }()
             ZStack(alignment: .top) { // Use ZStack to layer image and text
@@ -343,8 +343,8 @@ final class MapAnnotationItem: ObservableObject, Identifiable, Equatable {
                 .foregroundColor(.purple)
                 .font(.title)
         case .landed:
-            Image(systemName: "mappin.circle.fill")
-                .foregroundColor(.red)
+            Image(systemName: "balloon.fill")
+                .foregroundColor(.blue)
                 .font(.title)
         }
     }
