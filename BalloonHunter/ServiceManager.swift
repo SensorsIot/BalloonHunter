@@ -27,7 +27,7 @@ final class ServiceManager: ObservableObject {
         self.balloonTrackingService = BalloonTrackingService(persistenceService: self.persistenceService, bleService: self.bleCommunicationService)
         self.currentLocationService = CurrentLocationService()
         self.routeCalculationService = RouteCalculationService()
-        self.predictionService = PredictionService()
+        self.predictionService = PredictionService(routeCalculationService: self.routeCalculationService, currentLocationService: self.currentLocationService, balloonTrackingService: self.balloonTrackingService)
         self.annotationService = AnnotationService(bleService: self.bleCommunicationService, balloonTrackingService: self.balloonTrackingService)
         self.bleCommunicationService.annotationService = self.annotationService
         self.bleCommunicationService.predictionService = self.predictionService

@@ -148,15 +148,13 @@ final class AnnotationService: ObservableObject {
             let isAscending = tel.verticalSpeed >= 0
             let balloonCoordinate = CLLocationCoordinate2D(latitude: tel.latitude, longitude: tel.longitude)
 
-            if isAscending {
-                let balloonAnnotation = currentAnnotationMap[.balloon] ?? MapAnnotationItem(coordinate: CLLocationCoordinate2D(), kind: .balloon)
-                balloonAnnotation.coordinate = balloonCoordinate
-                balloonAnnotation.isAscending = isAscending
-                balloonAnnotation.lastUpdateTime = lastTelemetryUpdateTime
-                balloonAnnotation.altitude = tel.altitude
-                newAnnotations.append(balloonAnnotation)
-                currentAnnotationMap.removeValue(forKey: .balloon)
-            }
+            let balloonAnnotation = currentAnnotationMap[.balloon] ?? MapAnnotationItem(coordinate: CLLocationCoordinate2D(), kind: .balloon)
+            balloonAnnotation.coordinate = balloonCoordinate
+            balloonAnnotation.isAscending = isAscending
+            balloonAnnotation.lastUpdateTime = lastTelemetryUpdateTime
+            balloonAnnotation.altitude = tel.altitude
+            newAnnotations.append(balloonAnnotation)
+            currentAnnotationMap.removeValue(forKey: .balloon)
 
             if isAscending, let burst = prediction?.burstPoint {
                 let burstAnnotation = currentAnnotationMap[.burst] ?? MapAnnotationItem(coordinate: CLLocationCoordinate2D(), kind: .burst)
@@ -165,12 +163,7 @@ final class AnnotationService: ObservableObject {
                 currentAnnotationMap.removeValue(forKey: .burst)
             }
 
-            if tel.verticalSpeed < 0 {
-                let landedAnnotation = currentAnnotationMap[.landed] ?? MapAnnotationItem(coordinate: CLLocationCoordinate2D(), kind: .landed)
-                landedAnnotation.coordinate = balloonCoordinate
-                newAnnotations.append(landedAnnotation)
-                currentAnnotationMap.removeValue(forKey: .landed)
-            }
+            
 
             if let landing = prediction?.landingPoint {
                 let landingAnnotation = currentAnnotationMap[.landing] ?? MapAnnotationItem(coordinate: CLLocationCoordinate2D(), kind: .landing)

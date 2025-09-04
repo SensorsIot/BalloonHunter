@@ -124,6 +124,17 @@ struct TrackingMapView: View {
                         }
                         .padding(.bottom, 8)
                     }
+                    .overlay(alignment: .bottomTrailing) {
+                        if let rate = predictionService.currentEffectiveDescentRate {
+                            Text("Adj. Desc: \(String(format: "%.1f m/s", rate))")
+                                .padding(.vertical, 8)
+                                .padding(.horizontal, 16)
+                                .background(.ultraThinMaterial)
+                                .cornerRadius(12)
+                                .shadow(radius: 2)
+                                .padding([.trailing, .bottom], 24)
+                        }
+                    }
                 }
             }
             .safeAreaInset(edge: .bottom, alignment: .center) {
