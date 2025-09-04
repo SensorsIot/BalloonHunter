@@ -8,10 +8,6 @@ struct FinalMapView: View {
     @EnvironmentObject var bleService: BLECommunicationService
     @EnvironmentObject var balloonTrackingService: BalloonTrackingService
 
-    @State private var region = MKCoordinateRegion(
-        center: CLLocationCoordinate2D(latitude: 47.3769, longitude: 8.5417),
-        span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01) // Very zoomed in
-    )
     @State private var showSettings = false
     @State private var landedBalloonPosition: CLLocationCoordinate2D? = nil
     @State private var userHeading: CLLocationDirection = 0.0
@@ -20,7 +16,6 @@ struct FinalMapView: View {
     var body: some View {
         ZStack {
             FinalApproachMapView(
-                region: $region,
                 annotations: annotationService.annotations,
                 userTrackingMode: .followWithHeading,
                 landedBalloonPosition: landedBalloonPosition
@@ -81,10 +76,37 @@ struct FinalMapView: View {
             latitude: sumLat / Double(last100Points.count),
             longitude: sumLon / Double(last100Points.count)
         )
+        // Do not update region when in final approach mode
+        if annotationService.appState == .finalApproach {
+            return
+        }
+        // Commented out auto-centering on landed balloon position to keep manual control in final approach
+        /*
+        if let landedPos = landedBalloonPosition {
+            region.center = landedPos
+        }
+        */
     }
 
     private func updateMapAndUI(userLocation: LocationData) {
         guard let landedPos = landedBalloonPosition else { return }
+
+        // Do not update region or annotations if in final approach mode
+        if annotationService.appState == .finalApproach {
+            // Still update distance and annotations but no region update
+            let userCLLocation = CLLocation(latitude: userLocation.latitude, longitude: userLocation.longitude)
+            let balloonCLLocation = CLLocation(latitude: landedPos.latitude, longitude: landedPos.longitude)
+
+            distanceToBalloon = userCLLocation.distance(from: balloonCLLocation)
+
+            // Update annotations for AnnotationService
+            var newAnnotations: [MapAnnotationItem] = []
+            newAnnotations.append(MapAnnotationItem(coordinate: userCLLocation.coordinate, kind: .user))
+            newAnnotations.append(MapAnnotationItem(coordinate: landedPos, kind: .landed)) // Using .landed for stable position
+            annotationService.annotations = newAnnotations
+
+            return
+        }
 
         let userCLLocation = CLLocation(latitude: userLocation.latitude, longitude: userLocation.longitude)
         let balloonCLLocation = CLLocation(latitude: landedPos.latitude, longitude: landedPos.longitude)
@@ -97,6 +119,10 @@ struct FinalMapView: View {
         newAnnotations.append(MapAnnotationItem(coordinate: landedPos, kind: .landed)) // Using .landed for stable position
         annotationService.annotations = newAnnotations
 
+        // Do NOT update region (zoom or pan) in final approach mode to preserve manual control
+        // Previously region update code below is removed/commented out:
+
+        /*
         // Calculate bounding rect for both user and balloon
         let points = [userCLLocation.coordinate, landedPos]
         let mapPoints = points.map { MKMapPoint($0) }
@@ -110,13 +136,13 @@ struct FinalMapView: View {
         let paddingFactor = 0.1
         let paddedRect = boundingRect.insetBy(dx: -boundingRect.size.width * paddingFactor, dy: -boundingRect.size.height * paddingFactor)
         region = MKCoordinateRegion(paddedRect)
+        */
     }
 }
 
 // MARK: - FinalApproachMapView UIViewRepresentable
 
 private struct FinalApproachMapView: UIViewRepresentable {
-    @Binding var region: MKCoordinateRegion
     let annotations: [MapAnnotationItem]
     let userTrackingMode: MKUserTrackingMode
     let landedBalloonPosition: CLLocationCoordinate2D?
@@ -172,7 +198,8 @@ private struct FinalApproachMapView: UIViewRepresentable {
         }
 
         // Update region and user tracking mode
-        uiView.setRegion(region, animated: true)
+        // region is removed so we don't call setRegion here
+
         uiView.userTrackingMode = userTrackingMode
 
         // Fix user location at bottom-center
@@ -203,7 +230,7 @@ private struct FinalApproachMapView: UIViewRepresentable {
         }
 
         func mapView(_ mapView: MKMapView, regionDidChangeAnimated animated: Bool) {
-            parent.region = mapView.region
+            // region state is removed so no update to parent.region here
         }
 
         func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {

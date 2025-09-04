@@ -1,4 +1,3 @@
-
 import Foundation
 import Combine
 import SwiftUI
@@ -140,6 +139,10 @@ final class AnnotationService: ObservableObject {
         prediction: PredictionData?,
         lastTelemetryUpdateTime: Date?
     ) {
+        guard appState != .finalApproach else {
+            return
+        }
+
         var currentAnnotationMap: [MapAnnotationItem.AnnotationKind: MapAnnotationItem] = [:]
         for annotation in self.annotations {
             currentAnnotationMap[annotation.kind] = annotation
