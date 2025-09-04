@@ -6,6 +6,7 @@ struct DataPanelView: View {
     @EnvironmentObject var predictionService: PredictionService
     @EnvironmentObject var routeService: RouteCalculationService
     @EnvironmentObject var locationService: CurrentLocationService
+    @EnvironmentObject var balloonTrackingService: BalloonTrackingService
 
     @State private var lastRouteCalculationTime: Date? = nil
 
@@ -17,6 +18,7 @@ struct DataPanelView: View {
                     GridRow {
                         Image(systemName: bleService.connectionStatus == .connected ? "antenna.radiowaves.left.and.right" : "antenna.radiowaves.left.and.right.slash")
                             .foregroundColor(bleService.connectionStatus == .connected ? .green : .red)
+                            .font(.system(size: 32))
                         Text(bleService.latestTelemetry?.probeType ?? "N/A")
                             .frame(maxWidth: .infinity)
                         Text(bleService.latestTelemetry?.sondeName ?? "N/A")
@@ -29,6 +31,7 @@ struct DataPanelView: View {
                             }
                         }) {
                             Image(systemName: bleService.latestTelemetry?.buzmute == true ? "speaker.slash.fill" : "speaker.fill")
+                                .font(.system(size: 32))
                                 .frame(minWidth: 60, minHeight: 60)
                                 .contentShape(Rectangle())
                         }
@@ -48,10 +51,10 @@ struct DataPanelView: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     GridRow {
-                        Text("V: \(verticalSpeedAvgString) m/s")
+                        Text("V: \(String(format: "%.1f", smoothedVerticalSpeed)) m/s")
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .foregroundColor((bleService.latestTelemetry?.verticalSpeed ?? 0) >= 0 ? .green : .red)
-                        Text("H: \(horizontalSpeedString) km/h")
+                        Text("H: \(String(format: "%.1f", smoothedHorizontalSpeed)) km/h")
                             .frame(maxWidth: .infinity, alignment: .leading)
                         Text("Dist: \(distanceString) km")
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -67,6 +70,7 @@ struct DataPanelView: View {
                 }
                 .padding(.horizontal)
             }
+            .padding(.top, -10) // Reduced top padding
             .font(.system(size: 18)) // Apply font size to the VStack
             .frame(maxWidth: .infinity, maxHeight: .infinity) // Fill available space
             .background(Color(.systemGray6))
@@ -91,6 +95,23 @@ struct DataPanelView: View {
                 lastRouteCalculationTime = Date()
             }
         }
+    }
+
+    // MARK: - Helpers for smoothing
+    
+    private var last5Telemetry: [TelemetryData] {
+        let track = balloonTrackingService.currentBalloonTrack
+        return track.suffix(5).map { TelemetryData(latitude: $0.latitude, longitude: $0.longitude, altitude: $0.altitude) }
+    }
+    private var smoothedHorizontalSpeed: Double {
+        let speeds = last5Telemetry.compactMap { $0.horizontalSpeed }
+        guard !speeds.isEmpty else { return bleService.latestTelemetry?.horizontalSpeed ?? 0 }
+        return speeds.reduce(0, +) / Double(speeds.count)
+    }
+    private var smoothedVerticalSpeed: Double {
+        let speeds = last5Telemetry.compactMap { $0.verticalSpeed }
+        guard !speeds.isEmpty else { return bleService.latestTelemetry?.verticalSpeed ?? 0 }
+        return speeds.reduce(0, +) / Double(speeds.count)
     }
 
     // MARK: - Computed properties and helpers

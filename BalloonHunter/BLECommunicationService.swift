@@ -1,0 +1,324 @@
+import Foundation
+import Combine
+import SwiftUI
+import CoreBluetooth
+import CoreLocation
+import MapKit
+
+@MainActor
+final class BLECommunicationService: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeripheralDelegate {
+
+    private var centralManager: CBCentralManager!
+    private var persistenceService: PersistenceService
+    private var connectedPeripheral: CBPeripheral?
+    private var writeCharacteristic: CBCharacteristic?
+
+    weak var annotationService: AnnotationService?
+    weak var predictionService: PredictionService?
+    weak var currentLocationService: CurrentLocationService?
+
+    private let UART_SERVICE_UUID = CBUUID(string: "53797269-614D-6972-6B6F-44616C6D6F6E")
+    private let UART_RX_CHARACTERISTIC_UUID = CBUUID(string: "53797267-614D-6972-6B6F-44616C6D6F8E")
+    private let UART_TX_CHARACTERISTIC_UUID = CBUUID(string: "53797268-614D-6972-6B6F-44616C6D6F7E")
+
+    private var hasSentReadSettingsCommand = false
+
+    // Buffer to accumulate incoming BLE data fragments until a full message is received
+    private var incomingBLEBuffer: Data = Data()
+
+    @Published var telemetryAvailabilityState: Bool = false
+
+    init(persistenceService: PersistenceService) {
+        self.persistenceService = persistenceService
+        super.init()
+        centralManager = CBCentralManager(delegate: self, queue: nil)
+        print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] BLECommunicationService init")
+
+        Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                await self?.updateTelemetryAvailabilityState()
+            }
+        }
+    }
+
+    private func updateTelemetryAvailabilityState() async {
+        guard let lastUpdate = lastTelemetryUpdateTime else {
+            if telemetryAvailabilityState != false {
+                telemetryAvailabilityState = false
+            }
+            return
+        }
+        let interval = Date().timeIntervalSince(lastUpdate)
+        let isAvailable = interval <= 3.0
+        if telemetryAvailabilityState != isAvailable {
+            telemetryAvailabilityState = isAvailable
+            if isAvailable {
+                print("[BLECommunicationService] Telemetry GAINED: lastTelemetryUpdateTime within 3 seconds.")
+            } else {
+                print("[BLECommunicationService] Telemetry LOST: lastTelemetryUpdateTime older than 3 seconds.")
+            }
+        }
+    }
+
+    private func checkTelemetryAvailability(_ newTelemetry: TelemetryData?) {
+    }
+
+    func centralManagerDidUpdateState(_ central: CBCentralManager) {
+        print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] Central Manager did update state: \(central.state.rawValue)")
+        switch central.state {
+        case .poweredOn:
+            print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] BLE is powered on. Starting scan...")
+            centralManager.scanForPeripherals(withServices: nil, options: nil)
+        case .poweredOff:
+            print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] BLE is powered off.")
+            connectionStatus = .disconnected
+        case .resetting:
+            print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] BLE is resetting.")
+        case .unauthorized:
+            print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] BLE is unauthorized.")
+        case .unknown:
+            print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] BLE state is unknown.")
+        case .unsupported:
+            print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] BLE is unsupported.")
+        @unknown default:
+            print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] Unknown BLE state.")
+        }
+    }
+
+    func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral, advertisementData: [String : Any], rssi RSSI: NSNumber) {
+        print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] Did discover peripheral: \(peripheral.name ?? "Unknown") (UUID: \(peripheral.identifier.uuidString)), RSSI: \(RSSI)")
+
+        if let peripheralName = advertisementData[CBAdvertisementDataLocalNameKey] as? String {
+            if peripheralName.contains("MySondy") {
+                print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] Found MySondy: \(peripheralName). Stopping scan and connecting...")
+                centralManager.stopScan()
+                connectedPeripheral = peripheral
+                connectionStatus = .connecting
+                centralManager.connect(peripheral, options: nil)
+            }
+        }
+    }
+
+    func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
+        print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] Successfully connected to peripheral: \(peripheral.name ?? "Unknown")")
+        connectionStatus = .connected
+        connectedPeripheral = peripheral
+        peripheral.delegate = self
+        print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] Discovering services for peripheral: \(peripheral.name ?? "Unknown") with UUID: \(UART_SERVICE_UUID.uuidString)")
+        peripheral.discoverServices([UART_SERVICE_UUID])
+    }
+
+    func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
+        print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] Failed to connect to peripheral: \(peripheral.name ?? "Unknown"). Error: \(error?.localizedDescription ?? "Unknown error")")
+        connectionStatus = .disconnected
+    }
+
+    func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
+        print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] Disconnected from peripheral: \(peripheral.name ?? "Unknown"). Error: \(error?.localizedDescription ?? "No error")")
+        connectionStatus = .disconnected
+        connectedPeripheral = nil
+        print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] Restarting scan after disconnection...")
+        centralManager.scanForPeripherals(withServices: nil, options: nil)
+    }
+
+    func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
+        if let error = error {
+            print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] Error discovering services for \(peripheral.name ?? "Unknown"): \(error.localizedDescription)")
+            return
+        }
+        guard let services = peripheral.services else {
+            print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] No services found for \(peripheral.name ?? "Unknown").")
+            return
+        }
+        print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] Discovered \(services.count) service(s) for \(peripheral.name ?? "Unknown").")
+        for service in services {
+            if service.uuid == UART_SERVICE_UUID {
+                print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] Found UART Service. Discovering characteristics for service: \(service.uuid.uuidString) with RX: \(UART_RX_CHARACTERISTIC_UUID.uuidString) and TX: \(UART_TX_CHARACTERISTIC_UUID.uuidString)")
+                peripheral.discoverCharacteristics([UART_RX_CHARACTERISTIC_UUID, UART_TX_CHARACTERISTIC_UUID], for: service)
+            } else {
+                print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] Skipping non-UART service: \(service.uuid.uuidString)")
+            }
+        }
+        if services.allSatisfy({ $0.uuid != UART_SERVICE_UUID }) {
+            print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] UART Service not found among discovered services. Is the BLE device advertising the correct service?")
+        }
+    }
+
+    func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
+        if let error = error {
+            print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] Error discovering characteristics for service \(service.uuid.uuidString): \(error.localizedDescription)")
+            return
+        }
+        guard let characteristics = service.characteristics else {
+            print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] No characteristics found for service \(service.uuid.uuidString).")
+            return
+        }
+        print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] Discovered \(characteristics.count) characteristic(s) for service \(service.uuid.uuidString).")
+        for characteristic in characteristics {
+            if characteristic.uuid == UART_RX_CHARACTERISTIC_UUID {
+                print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] Found UART RX Characteristic. Checking notify property...")
+                if characteristic.properties.contains(.notify) {
+                    peripheral.setNotifyValue(true, for: characteristic)
+                    print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] Set notify value to true for RX characteristic.")
+                } else {
+                    print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] UART RX Characteristic does not have notify property.")
+                }
+            } else if characteristic.uuid == UART_TX_CHARACTERISTIC_UUID {
+                print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] Found UART TX Characteristic. Checking write properties...")
+                if characteristic.properties.contains(.write) {
+                    self.writeCharacteristic = characteristic
+                    print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] Assigned TX characteristic for writing (write).")
+                } else if characteristic.properties.contains(.writeWithoutResponse) {
+                    self.writeCharacteristic = characteristic
+                    print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] Assigned TX characteristic for writing (writeWithoutResponse).")
+                } else {
+                    print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] UART TX Characteristic does not have write or writeWithoutResponse properties.")
+                }
+            }
+        }
+        if writeCharacteristic == nil {
+            isReadyForCommands = false
+        }
+    }
+
+    func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
+        if let error = error {
+            print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] Error updating value for characteristic \(characteristic.uuid.uuidString): \(error.localizedDescription)") // Re-added debug print
+            return
+        }
+        guard let data = characteristic.value else {
+            print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] No data received for characteristic \(characteristic.uuid.uuidString).") // Re-added debug print
+            return
+        }
+        if let string = String(data: data, encoding: .utf8) {
+            self.parse(message: string)
+        } else {
+            print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] Could not decode data to UTF8 string for characteristic \(characteristic.uuid.uuidString). Raw data: \(data.hexEncodedString())") // Re-added debug print
+        }
+    }
+
+    func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {
+        if error != nil {
+            _ = error
+        }
+    }
+
+    func peripheral(_ peripheral: CBPeripheral, didUpdateNotificationStateFor characteristic: CBCharacteristic, error: Error?) {
+        if error != nil {
+            _ = error
+        } else {
+        }
+    }
+
+    @Published var isReadyForCommands = false
+
+    private func parse(message: String) {
+        print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] Raw BLE message received: \(message)") // Re-added debug print
+        if !isReadyForCommands {
+            isReadyForCommands = true
+            print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] First BLE message received. isReadyForCommands is now true.")
+        }
+        
+        let components = message.components(separatedBy: "/")
+        guard components.count > 1 else {
+            print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] Parse: Message too short or invalid format: \(message)")
+            return
+        }
+        let messageType = components[0]
+        if messageType == "3" {
+            var deviceSettings = DeviceSettings()
+            deviceSettings.parse(message: message)
+            persistenceService.save(deviceSettings: deviceSettings)
+            
+            triggerPredictionIfPossible()
+            
+        } else {
+            var telemetryData = TelemetryData()
+            telemetryData.parse(message: message)
+            if telemetryData.latitude == 0.0 && telemetryData.longitude == 0.0 {
+                print("[BLECommunicationService] Ignoring telemetry with (0,0) coordinates (likely invalid).")
+                return
+            }
+            self.latestTelemetry = telemetryData
+
+            self.lastTelemetryUpdateTime = Date()
+            self.telemetryData.send(telemetryData)
+
+            if !hasSentReadSettingsCommand && isReadyForCommands {
+                print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] First type 1 message parsed and TX ready. Reading settings...")
+                readSettings()
+                hasSentReadSettingsCommand = true
+            }
+
+            triggerPredictionIfPossible()
+        }
+    }
+    @Published var latestTelemetry: TelemetryData? = nil {
+        didSet {
+        }
+    }
+    @Published var deviceSettings: DeviceSettings = .default
+    @Published var connectionStatus: ConnectionStatus = .disconnected
+    @Published var telemetryData = PassthroughSubject<TelemetryData, Never>()
+    @Published var lastTelemetryUpdateTime: Date? = nil
+
+    func readSettings() {
+        sendCommand(command: "o{?}o")
+    }
+
+    func sendCommand(command: String) {
+        if !isReadyForCommands {
+            print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] sendCommand blocked: TX characteristic not ready. Wait until BLE connection and discovery complete. Check previous debug output for service and characteristic discovery issues.")
+            return
+        }
+        guard let peripheral = connectedPeripheral else {
+            print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] sendCommand Error: Not connected to a peripheral.")
+            return
+        }
+        guard let characteristic = writeCharacteristic else {
+            print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] sendCommand Error: Write characteristic not found.")
+            return
+        }
+        guard let data = command.data(using: .utf8) else {
+            print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] sendCommand Error: Could not convert command string to data.")
+            return
+        }
+        print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] Sending command: \(command) (Raw Data: \(data.hexEncodedString()))")
+        peripheral.writeValue(data, for: characteristic, type: .withResponse)
+    }
+    
+    func disconnect() {
+        print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] Disconnect: Attempting to disconnect from peripheral.")
+        if let connectedPeripheral = connectedPeripheral {
+            centralManager.cancelPeripheralConnection(connectedPeripheral)
+        }
+        centralManager.stopScan()
+        connectionStatus = .disconnected
+    }
+
+    func sendSettingsCommand(frequency: Double, probeType: Int) {
+        let formattedCommand = String(format: "o{f=%.2f/tipo=%d}o", frequency, probeType)
+        print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] sendSettingsCommand: Sending command: \(formattedCommand)")
+        sendCommand(command: formattedCommand)
+    }
+    
+    private func triggerPredictionIfPossible() {
+        guard let latestTelemetry = latestTelemetry else {
+            return
+        }
+        let predictionParams = persistenceService.readPredictionParameters()
+        
+        guard let userSettings = predictionParams else {
+            return
+        }
+        Task { @MainActor in
+            await self.predictionService?.fetchPrediction(telemetry: latestTelemetry, userSettings: userSettings)
+        }
+    }
+}
+
+extension Data {
+    func hexEncodedString() -> String {
+        return map { String(format: "%02hhx", $0) }.joined()
+    }
+}

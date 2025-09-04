@@ -231,8 +231,8 @@ struct TelemetryData: Identifiable, Equatable {
     }
 }
 
-// A struct that serves as a lightweight, serializable representation of telemetry data
-struct TelemetryTransferData: Codable, Equatable {
+// A struct that serves as a lightweight, serializable representation of a balloon track point
+struct BalloonTrackPoint: Codable, Equatable {
     var latitude: Double
     var longitude: Double
     var altitude: Double
@@ -251,13 +251,13 @@ struct SondeSettingsTransferData: Codable, Equatable {
 }
 
 // A Identifiable struct used to represent markers on the map.
-struct MapAnnotationItem: Identifiable, Equatable {
-    var coordinate: CLLocationCoordinate2D
-    var kind: AnnotationKind
-    var isAscending: Bool? = nil
-    var status: AnnotationStatus = .fresh
-    var lastUpdateTime: Date? = nil
-    var altitude: Double? = nil
+final class MapAnnotationItem: ObservableObject, Identifiable, Equatable {
+    @Published var coordinate: CLLocationCoordinate2D
+    @Published var kind: AnnotationKind
+    @Published var isAscending: Bool? = nil
+    @Published var status: AnnotationStatus = .fresh
+    @Published var lastUpdateTime: Date? = nil
+    @Published var altitude: Double? = nil
 
     enum AnnotationKind: Equatable {
         case user
@@ -273,9 +273,16 @@ struct MapAnnotationItem: Identifiable, Equatable {
     }
     
     var id: String {
-        String(format: "%@_%.5f_%.5f", String(describing: kind), coordinate.latitude, coordinate.longitude)
+        switch kind {
+        case .user: return "user_annotation"
+        case .balloon: return "balloon_annotation"
+        case .burst: return "burst_annotation"
+        case .landing: return "landing_annotation"
+        case .landed: return "landed_annotation"
+        }
     }
     
+    // For classes, Equatable needs to compare content, not just references.
     static func == (lhs: MapAnnotationItem, rhs: MapAnnotationItem) -> Bool {
         return coordinatesEqual(lhs.coordinate, rhs.coordinate) &&
             lhs.kind == rhs.kind &&
@@ -283,6 +290,15 @@ struct MapAnnotationItem: Identifiable, Equatable {
             lhs.status == rhs.status &&
             lhs.lastUpdateTime == rhs.lastUpdateTime &&
             lhs.altitude == rhs.altitude
+    }
+
+    init(coordinate: CLLocationCoordinate2D, kind: AnnotationKind, isAscending: Bool? = nil, status: AnnotationStatus = .fresh, lastUpdateTime: Date? = nil, altitude: Double? = nil) {
+        self.coordinate = coordinate
+        self.kind = kind
+        self.isAscending = isAscending
+        self.status = status
+        self.lastUpdateTime = lastUpdateTime
+        self.altitude = altitude
     }
     
     @ViewBuilder
@@ -312,8 +328,8 @@ struct MapAnnotationItem: Identifiable, Equatable {
                         .shadow(color: .black.opacity(0.85), radius: 4, x: 0, y: 2)
                         .minimumScaleFactor(0.4)
                         .lineLimit(1)
-                        .frame(width: 54, height: 40)
-                        .position(x: 38, y: 34) // Center within 76x76 balloon
+                        .frame(width: 54, height: 40, alignment: .center)
+                        .position(x: 44, y: 34) // Center within 76x76 balloon (adjusted x from 38 to 44)
                 }
             }
         case .burst:
@@ -444,18 +460,13 @@ struct AFCData {
 
 // Ensured ObservableObject conformance and class type for SwiftUI compatibility.
 final class AppSettings: ObservableObject {
-    init() {
-        print("[DEBUG] AppSettings init")
-    }
     @Published var deviceSettings: DeviceSettings = .default
 }
 
 // Ensured ObservableObject conformance and class type for SwiftUI compatibility.
 final class UserSettings: ObservableObject, Codable { // Added Codable
-    required init() {
-        print("[DEBUG] UserSettings init")
-    }
-    
+    init() { } // Default initializer
+
     required init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         burstAltitude = try container.decode(Double.self, forKey: .burstAltitude)

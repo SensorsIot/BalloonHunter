@@ -2,11 +2,7 @@ import SwiftUI
 
 /// The main map container that switches between tracking and final approach phases.
 struct MasterMapView: View {
-    @EnvironmentObject var annotationService: AnnotationService
-
-    init() {
-        print("[DEBUG][MasterMapView] MasterMapView initialized")
-    }
+    @EnvironmentObject private var annotationService: AnnotationService
 
     var body: some View {
         ZStack {
@@ -25,8 +21,9 @@ struct MasterMapView: View {
 #Preview {
     let persistenceService = PersistenceService()
     let bleService = BLECommunicationService(persistenceService: persistenceService)
+    let balloonTrackingService = BalloonTrackingService(persistenceService: persistenceService, bleService: bleService)
     MasterMapView()
-        .environmentObject(AnnotationService(bleService: bleService))
+        .environmentObject(AnnotationService(bleService: bleService, balloonTrackingService: balloonTrackingService))
         .environmentObject(bleService)
         .environmentObject(persistenceService)
 }

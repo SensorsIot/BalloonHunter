@@ -33,6 +33,7 @@ Your role: act as a competent Swift programmer to complete this project accordin
 
 import SwiftUI
 import Combine
+import UIKit // Import UIKit for UIApplication
 
 @main
 struct BalloonHunterApp: App {
@@ -52,6 +53,11 @@ struct BalloonHunterApp: App {
                     serviceManager.currentLocationService.requestPermission()
                     serviceManager.currentLocationService.startUpdating()
                 }
+                .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in
+                    // Centralize save-on-close logic in PersistenceService
+                    serviceManager.persistenceService.saveOnAppClose(balloonTrackingService: serviceManager.balloonTrackingService)
+                    print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] BalloonHunterApp: Called saveOnAppClose on app resign active.")
+                }
                 .environmentObject(serviceManager.bleCommunicationService)
                 .environmentObject(serviceManager.predictionService)
                 .environmentObject(serviceManager.routeCalculationService)
@@ -60,6 +66,7 @@ struct BalloonHunterApp: App {
                 .environmentObject(userSettings)
                 .environmentObject(serviceManager.annotationService)
                 .environmentObject(serviceManager.persistenceService)
+                .environmentObject(serviceManager.balloonTrackingService)
                 .environmentObject(serviceManager)
         }
     }

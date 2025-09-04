@@ -3,6 +3,8 @@ import MapKit
 import Combine
 
 struct TrackingMapView: View {
+    private let routeRecalculationTimer = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
+    
     @EnvironmentObject var annotationService: AnnotationService
     @EnvironmentObject var routeService: RouteCalculationService
     @EnvironmentObject var locationService: CurrentLocationService
@@ -10,6 +12,7 @@ struct TrackingMapView: View {
     @EnvironmentObject var bleService: BLECommunicationService
     @EnvironmentObject var persistenceService: PersistenceService
     @EnvironmentObject var userSettings: UserSettings
+    @EnvironmentObject var balloonTrackingService: BalloonTrackingService
 
     @State private var showSettings = false
     @State private var transportMode: TransportationMode = .car
@@ -21,7 +24,7 @@ struct TrackingMapView: View {
     @State private var didPerformInitialZoom = false
     @State private var lastRouteCalculationLocation: CLLocation?
     @State private var programmaticUpdateTrigger = 0
-    private let routeRecalculationTimer = Timer.publish(every: 60, on: .main, in: .common).autoconnect()
+    
 
     // State for polyline overlays
     @State private var balloonTrackPolyline: MKPolyline?
@@ -70,7 +73,9 @@ struct TrackingMapView: View {
                                 print("[DEBUG][TrackingMapView] Balloon annotation tapped.")
                                 guard let telemetry = bleService.latestTelemetry,
                                       let userSettings = persistenceService.readPredictionParameters() else { return }
-                                predictionService.fetchPrediction(telemetry: telemetry, userSettings: userSettings)
+                                Task {
+                                    await predictionService.fetchPrediction(telemetry: telemetry, userSettings: userSettings)
+                                }
                             }
                         }
                     )
@@ -103,21 +108,19 @@ struct TrackingMapView: View {
             }
             .onReceive(routeService.$routeData) { routeData in
                 if routeData != nil, let userLocationData = locationService.locationData {
-                    self.lastRouteCalculationLocation = CLLocation(latitude: userLocationData.latitude, longitude: userLocationData.longitude)
-                    print("[DEBUG][TrackingMapView] Route updated. Stored user location for distance check.")
                 }
                 updateStateAndCamera()
             }
             .onChange(of: transportMode) {
-                guard let userLocation = locationService.locationData,
-                      let landingPoint = predictionService.predictionData?.landingPoint else { return }
-                print("[DEBUG][TrackingMapView] Transport mode changed. Recalculating route.")
                 routeService.routeData = nil
-                routeService.calculateRoute(
-                    from: CLLocationCoordinate2D(latitude: userLocation.latitude, longitude: userLocation.longitude),
-                    to: landingPoint,
-                    transportType: transportMode
-                )
+                if let userLocationData = locationService.locationData,
+                   let landingPoint = predictionService.predictionData?.landingPoint {
+                    routeService.calculateRoute(
+                        from: CLLocationCoordinate2D(latitude: userLocationData.latitude, longitude: userLocationData.longitude),
+                        to: landingPoint,
+                        transportType: transportMode
+                    )
+                }
             }
             .onReceive(routeRecalculationTimer) { _ in
                 guard let userLocationData = locationService.locationData,
@@ -127,7 +130,7 @@ struct TrackingMapView: View {
                 let currentUserLocation = CLLocation(latitude: userLocationData.latitude, longitude: userLocationData.longitude)
                 
                 if currentUserLocation.distance(from: lastCalcLocation) > 500 {
-                    print("[DEBUG][TrackingMapView] User moved > 500m. Recalculating route.")
+                    
                     routeService.calculateRoute(
                         from: currentUserLocation.coordinate,
                         to: landingPoint,
@@ -146,24 +149,19 @@ struct TrackingMapView: View {
             userLocation: locationService.locationData,
             prediction: predictionService.predictionData,
             route: routeService.routeData,
-            telemetryHistory: bleService.currentSondeTrack.map { TelemetryData(latitude: $0.latitude, longitude: $0.longitude, altitude: $0.altitude) },
+            telemetryHistory: balloonTrackingService.currentBalloonTrack.map { TelemetryData(latitude: $0.latitude, longitude: $0.longitude, altitude: $0.altitude) },
             lastTelemetryUpdateTime: bleService.lastTelemetryUpdateTime
         )
 
         // Update polylines
-        let trackPoints = bleService.currentSondeTrack.map { CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude) }
-        print("[DEBUG][TrackingMapView] Historic track points count: \(trackPoints.count)")
-        for (index, point) in trackPoints.enumerated() {
-            print("[DEBUG][TrackingMapView] Historic track point \(index): lat=\(point.latitude), lon=\(point.longitude)")
-        }
+        let trackPoints = balloonTrackingService.currentBalloonTrack.map { CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude) }
+        
         if !trackPoints.isEmpty {
             let polyline = MKPolyline(coordinates: trackPoints, count: trackPoints.count)
             polyline.title = "balloonTrack"
             self.balloonTrackPolyline = polyline
-            print("[DEBUG][TrackingMapView] balloonTrackPolyline created: \(self.balloonTrackPolyline != nil)")
         } else {
             self.balloonTrackPolyline = nil
-            print("[DEBUG][TrackingMapView] balloonTrackPolyline set to nil (no track points).")
         }
 
         if let predictionPath = predictionService.predictionData?.path, !predictionPath.isEmpty {
@@ -212,9 +210,6 @@ struct TrackingMapView: View {
 
         guard !points.isEmpty else { return }
 
-        // Commented out manual calculation and setting of region
-        // We now rely on MapView's showAnnotations to handle zoom-to-fit with animation
-        /*
         var minLat = points[0].latitude
         var maxLat = points[0].latitude
         var minLon = points[0].longitude
@@ -245,8 +240,18 @@ struct TrackingMapView: View {
         )
         
         self.region = MKCoordinateRegion(center: center, span: span)
-        */
     }
+}
+
+/// Compares two MKPolyline objects for equality by checking their coordinates.
+private func polylinesEqual(lhs: MKPolyline, rhs: MKPolyline) -> Bool {
+    guard lhs.pointCount == rhs.pointCount else { return false }
+    let lhsCoords = lhs.coordinates
+    let rhsCoords = rhs.coordinates
+    for (a, b) in zip(lhsCoords, rhsCoords) {
+        if a.latitude != b.latitude || a.longitude != b.longitude { return false }
+    }
+    return true
 }
 
 // MARK: - MapView UIViewRepresentable
@@ -267,44 +272,133 @@ private struct MapView: UIViewRepresentable {
     func makeUIView(context: Context) -> MKMapView {
         let mapView = MKMapView()
         mapView.delegate = context.coordinator
+        mapView.mapType = .standard // Changed map style to standard for roads only
         mapView.register(CustomAnnotationView.self, forAnnotationViewWithReuseIdentifier: "custom")
         return mapView
     }
 
     func updateUIView(_ uiView: MKMapView, context: Context) {
-        // Removed automatic region update to allow user to move the map freely without the view resetting the region.
-        // if regionsAreDifferent(uiView.region, region) {
-        //     uiView.setRegion(region, animated: true)
-        // }
-
-        // Update annotations FIRST, so they are available for showAnnotations
-        uiView.removeAnnotations(uiView.annotations)
-        let newAnnotations = annotations.map { item -> CustomMapAnnotation in
-            let annotation = CustomMapAnnotation()
-            annotation.coordinate = item.coordinate
-            annotation.item = item
-            return annotation
+        // --- Update Annotations ---
+        // Get current annotations on the map view
+        let existingMapAnnotations = uiView.annotations.compactMap { $0 as? CustomMapAnnotation }
+        var existingMapAnnotationMap = [String: CustomMapAnnotation]()
+        for annotation in existingMapAnnotations {
+            if let id = annotation.item?.id { // Use the stable ID from MapAnnotationItem
+                existingMapAnnotationMap[id] = annotation
+            }
         }
-        uiView.addAnnotations(newAnnotations)
 
-        // Update overlays
-        uiView.removeOverlays(uiView.overlays)
-        var overlaysToAdd: [MKOverlay] = []
-        if let balloonTrack = balloonTrack {
-            overlaysToAdd.append(balloonTrack)
-            print("[DEBUG][MapView] Adding balloonTrack to overlaysToAdd.")
+        var annotationsToAdd = [CustomMapAnnotation]()
+        var annotationsToRemove = [MKAnnotation]()
+
+        // Determine which annotations to add, update, or remove
+        let newAnnotationItemsMap = Dictionary(uniqueKeysWithValues: annotations.map { ($0.id, $0) })
+
+        for newItem in annotations {
+            if let existingAnnotation = existingMapAnnotationMap[newItem.id] {
+                // Annotation exists, update its properties
+                existingAnnotation.coordinate = newItem.coordinate
+                existingAnnotation.item = newItem // Update the item reference
+            } else {
+                // New annotation
+                let annotation = CustomMapAnnotation()
+                annotation.coordinate = newItem.coordinate
+                annotation.item = newItem
+                annotationsToAdd.append(annotation)
+            }
         }
-        if let predictionPath = predictionPath { overlaysToAdd.append(predictionPath) }
-        if let userRoute = userRoute { overlaysToAdd.append(userRoute) }
-        uiView.addOverlays(overlaysToAdd)
+
+        for existingAnnotation in existingMapAnnotations {
+            if let id = existingAnnotation.item?.id, newAnnotationItemsMap[id] == nil {
+                // Annotation no longer in new data, mark for removal
+                annotationsToRemove.append(existingAnnotation)
+            }
+        }
+
+        // Perform updates
+        if !annotationsToRemove.isEmpty {
+            uiView.removeAnnotations(annotationsToRemove)
+        }
+        if !annotationsToAdd.isEmpty {
+            uiView.addAnnotations(annotationsToAdd)
+        }
+        // For annotationsToUpdate, their properties are already updated in place.
+        // MKMapView will automatically reflect changes to coordinate if the annotation object is the same.
+
+
+        // --- Update Overlays ---
+        // Keep track of current overlays on the map view
+        let existingMapOverlays = uiView.overlays.compactMap { $0 as? MKPolyline }
+        var existingMapOverlayMap = [String: MKPolyline]()
+        for overlay in existingMapOverlays {
+            if let title = overlay.title {
+                existingMapOverlayMap[title] = overlay
+            }
+        }
+
+        var overlaysToAdd = [MKPolyline]()
+        var overlaysToRemove = [MKOverlay]()
+
+        // Process balloonTrackPolyline
+        if let newBalloonTrack = balloonTrack {
+            if let existing = existingMapOverlayMap["balloonTrack"], polylinesEqual(lhs: existing, rhs: newBalloonTrack) {
+                // Same polyline, no change needed
+            } else {
+                if let existing = existingMapOverlayMap["balloonTrack"] {
+                    overlaysToRemove.append(existing)
+                }
+                overlaysToAdd.append(newBalloonTrack)
+            }
+        } else {
+            if let existing = existingMapOverlayMap["balloonTrack"] {
+                overlaysToRemove.append(existing)
+            }
+        }
+
+        // Process predictionPathPolyline
+        if let newPredictionPath = predictionPath {
+            if let existing = existingMapOverlayMap["predictionPath"], polylinesEqual(lhs: existing, rhs: newPredictionPath) {
+                // Same polyline, no change needed
+            } else {
+                if let existing = existingMapOverlayMap["predictionPath"] {
+                    overlaysToRemove.append(existing)
+                }
+                overlaysToAdd.append(newPredictionPath)
+            }
+        } else {
+            if let existing = existingMapOverlayMap["predictionPath"] {
+                overlaysToRemove.append(existing)
+            }
+        }
+
+        // Process userRoutePolyline
+        if let newUserRoute = userRoute {
+            if let existing = existingMapOverlayMap["userRoute"], polylinesEqual(lhs: existing, rhs: newUserRoute) {
+                // Same polyline, no change needed
+            } else {
+                if let existing = existingMapOverlayMap["userRoute"] {
+                    overlaysToRemove.append(existing)
+                }
+                overlaysToAdd.append(newUserRoute)
+            }
+        } else {
+            if let existing = existingMapOverlayMap["userRoute"] {
+                overlaysToRemove.append(existing)
+            }
+        }
+
+        // Perform updates
+        if !overlaysToRemove.isEmpty {
+            uiView.removeOverlays(overlaysToRemove)
+        }
+        if !overlaysToAdd.isEmpty {
+            uiView.addOverlays(overlaysToAdd)
+        }
 
         // If the programmaticUpdateTrigger changed, call showAnnotations to zoom and center map to all annotations.
-        // This ensures the map zooms to fit all annotations smoothly at specific update points.
         if context.coordinator.lastUpdateTrigger != programmaticUpdateTrigger {
-            // This will animate the map to show all annotations
             uiView.showAnnotations(uiView.annotations, animated: true)
             context.coordinator.lastUpdateTrigger = programmaticUpdateTrigger
-            print("[DEBUG][MapView] programmaticUpdateTrigger changed; called showAnnotations.")
         }
     }
 
@@ -321,9 +415,7 @@ private struct MapView: UIViewRepresentable {
         }
 
         func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
-            print("[DEBUG][MapView] rendererFor overlay called.")
             if let polyline = overlay as? MKPolyline {
-                print("[DEBUG][MapView] Polyline title: \(polyline.title ?? "nil")")
                 let renderer = MKPolylineRenderer(polyline: polyline)
                 switch polyline.title {
                 case "balloonTrack":
@@ -383,12 +475,33 @@ private struct MapView: UIViewRepresentable {
     }
 }
 
+private struct AnnotationHostingView: View {
+    @ObservedObject var item: MapAnnotationItem
+
+    var body: some View {
+        // Directly use the item.view property here
+        item.view
+    }
+}
+
+// End of AnnotationHostingView definition.
+
 private class CustomAnnotationView: MKAnnotationView {
-    private var hostingController: UIHostingController<AnyView>?
+    private var hostingController: UIHostingController<AnnotationHostingView>? // Use a specific hosting view
+    private var currentItem: MapAnnotationItem?
 
     override init(annotation: MKAnnotation?, reuseIdentifier: String?) {
         super.init(annotation: annotation, reuseIdentifier: reuseIdentifier)
-        self.frame = CGRect(x: 0, y: 0, width: 50, height: 50)
+        self.frame = CGRect(x: 0, y: 0, width: 90, height: 90)
+        self.backgroundColor = .clear
+
+        // Initialize hostingController once with a placeholder item
+        let initialItem = MapAnnotationItem(coordinate: CLLocationCoordinate2D(), kind: .user) // Placeholder
+        let newHostingController = UIHostingController(rootView: AnnotationHostingView(item: initialItem))
+        newHostingController.view.backgroundColor = .clear
+        self.addSubview(newHostingController.view)
+        newHostingController.view.frame = self.bounds
+        self.hostingController = newHostingController
     }
 
     required init?(coder aDecoder: NSCoder) {
@@ -396,25 +509,24 @@ private class CustomAnnotationView: MKAnnotationView {
     }
 
     func setup(with item: MapAnnotationItem) {
-        hostingController?.view.removeFromSuperview()
-        hostingController = nil
-
-        let swiftUIView = AnyView(item.view)
-        let newHostingController = UIHostingController(rootView: swiftUIView)
+        let newHostingController = UIHostingController(rootView: AnnotationHostingView(item: item))
         newHostingController.view.backgroundColor = .clear
+        // Remove any previous hostingController's view from superview
+        self.hostingController?.view.removeFromSuperview()
         self.addSubview(newHostingController.view)
         newHostingController.view.frame = self.bounds
         self.hostingController = newHostingController
+        self.currentItem = item
     }
-}
 
-// MARK: - Helper function to compare map regions
-
-private func regionsAreDifferent(_ lhs: MKCoordinateRegion, _ rhs: MKCoordinateRegion) -> Bool {
-    let latDiff = abs(lhs.center.latitude - rhs.center.latitude)
-    let lonDiff = abs(lhs.center.longitude - rhs.center.longitude)
-    let latDeltaDiff = abs(lhs.span.latitudeDelta - rhs.span.latitudeDelta)
-    let lonDeltaDiff = abs(lhs.span.longitudeDelta - rhs.span.longitudeDelta)
-    let tolerance = 0.0001
-    return latDiff > tolerance || lonDiff > tolerance || latDeltaDiff > tolerance || lonDeltaDiff > tolerance
+    override var annotation: MKAnnotation? {
+        didSet {
+            if let customAnnotation = annotation as? CustomMapAnnotation, let item = customAnnotation.item {
+                // Only call setup if the item reference has actually changed
+                if self.currentItem !== item {
+                    setup(with: item)
+                }
+            }
+        }
+    }
 }
