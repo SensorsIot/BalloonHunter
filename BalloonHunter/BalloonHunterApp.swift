@@ -43,7 +43,7 @@ struct BalloonHunterApp: App {
 
     var body: some Scene {
         WindowGroup {
-            MasterMapView()
+            TrackingMapView()
                 .onAppear {
                     if let persisted = serviceManager.persistenceService.readPredictionParameters() {
                         userSettings.burstAltitude = persisted.burstAltitude

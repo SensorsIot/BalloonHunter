@@ -26,6 +26,7 @@ struct TrackingMapView: View {
     @State private var programmaticUpdateTrigger = 0
     @State private var isDirectionUp = false
     @State private var hasFetchedInitialPrediction = false
+    @State private var showPrediction = true
 
     // State for polyline overlays
     @State private var balloonTrackPolyline: MKPolyline?
@@ -58,11 +59,28 @@ struct TrackingMapView: View {
 
                     Spacer()
 
-                    Button("Closeup") {
-                        annotationService.setAppState(.finalApproach)
+                    Button {
+                        showPrediction.toggle()
+                    } label: {
+                        Image(systemName: showPrediction ? "eye.fill" : "eye.slash.fill")
+                            .imageScale(.large)
+                            .padding(8)
                     }
-                    .buttonStyle(.bordered)
-                    .tint(.blue)
+                    .background(.ultraThinMaterial)
+                    .cornerRadius(8)
+
+                    if predictionService.predictionData?.landingPoint == nil {
+                        Button("Landing Point") {
+                            Task {
+                                if let telemetry = bleService.latestTelemetry,
+                                   let userSettings = persistenceService.readPredictionParameters() {
+                                    await predictionService.fetchPrediction(telemetry: telemetry, userSettings: userSettings)
+                                }
+                            }
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(.blue)
+                    }
 
                     Spacer()
 
@@ -88,7 +106,7 @@ struct TrackingMapView: View {
                         region: $region,
                         annotations: annotationService.annotations,
                         balloonTrack: balloonTrackPolyline,
-                        predictionPath: predictionPathPolyline,
+                        predictionPath: showPrediction ? predictionPathPolyline : nil,
                         userRoute: userRoutePolyline,
                         programmaticUpdateTrigger: programmaticUpdateTrigger,
                         isDirectionUp: isDirectionUp,
@@ -110,31 +128,31 @@ struct TrackingMapView: View {
                         }
                     )
                     .frame(height: geometry.size.height * 0.7)
-                    .overlay(alignment: .bottom) {
+                    .overlay(alignment: .bottomLeading) {
+                        Button("Overview") {
+                            updateCameraToFitAllPoints()
+                        }
+                        .font(.headline)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(.ultraThinMaterial)
+                        .cornerRadius(8)
+                        .padding([.leading, .bottom], 8)
+                    }
+                    .overlay(alignment: .bottomTrailing) {
                         Button {
                             withAnimation {
                                 isDirectionUp.toggle()
                             }
                         } label: {
-                            Text(isDirectionUp ? "North Up" : "Direction Up")
+                            Text(isDirectionUp ? "Heading" : "Free")
                                 .font(.headline)
                                 .padding(.horizontal, 12)
                                 .padding(.vertical, 8)
                                 .background(.ultraThinMaterial)
                                 .cornerRadius(8)
                         }
-                        .padding(.bottom, 8)
-                    }
-                    .overlay(alignment: .bottomTrailing) {
-                        if let rate = balloonTrackingService.currentEffectiveDescentRate {
-                            Text("Adj. Desc: \(String(format: "%.1f m/s", rate))")
-                                .padding(.vertical, 8)
-                                .padding(.horizontal, 16)
-                                .background(.ultraThinMaterial)
-                                .cornerRadius(12)
-                                .shadow(radius: 2)
-                                .padding([.trailing, .bottom], 24)
-                        }
+                        .padding([.trailing, .bottom], 8)
                     }
                 }
             }
@@ -242,7 +260,18 @@ struct TrackingMapView: View {
         if let routePath = routeService.routeData?.path, !routePath.isEmpty {
             let polyline = MKPolyline(coordinates: routePath, count: routePath.count)
             polyline.title = "userRoute"
-            self.userRoutePolyline = polyline
+            if let userLocation = locationService.locationData,
+               let balloonLocation = bleService.latestTelemetry {
+                let userCLLocation = CLLocation(latitude: userLocation.latitude, longitude: userLocation.longitude)
+                let balloonCLLocation = CLLocation(latitude: balloonLocation.latitude, longitude: balloonLocation.longitude)
+                if userCLLocation.distance(from: balloonCLLocation) < 100 {
+                    self.userRoutePolyline = nil
+                } else {
+                    self.userRoutePolyline = polyline
+                }
+            } else {
+                self.userRoutePolyline = polyline
+            }
         } else {
             self.userRoutePolyline = nil
         }

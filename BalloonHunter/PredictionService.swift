@@ -49,9 +49,7 @@ final class PredictionService: NSObject, ObservableObject {
     /// Performs the prediction fetch from the external API using telemetry and user settings.
     func fetchPrediction(telemetry: TelemetryData, userSettings: UserSettings, measuredDescentRate: Double? = nil) async {
         print("[DEBUG] fetchPrediction entered.")
-        if SharedAppState.shared.appState == .finalApproach {
-            return
-        }
+        
         predictionStatus = .fetching
         isLoading = true
         print("[Debug][PredictionService] Fetching prediction...")

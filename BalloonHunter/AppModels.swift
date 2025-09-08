@@ -12,7 +12,6 @@ func coordinatesEqual(_ lhs: CLLocationCoordinate2D, _ rhs: CLLocationCoordinate
 enum AppState: String {
     case startup
     case longRangeTracking
-    case finalApproach
 }
 
 class SharedAppState {

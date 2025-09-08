@@ -113,8 +113,7 @@ final class AnnotationService: ObservableObject {
             }
         case .longRangeTracking:
             break
-        case .finalApproach:
-            break
+        
         }
         
         updateAnnotations(telemetry: telemetry, userLocation: userLocation, prediction: prediction, lastTelemetryUpdateTime: lastTelemetryUpdateTime)
@@ -126,9 +125,7 @@ final class AnnotationService: ObservableObject {
         prediction: PredictionData?,
         lastTelemetryUpdateTime: Date?
     ) {
-        guard appState != .finalApproach else {
-            return
-        }
+        
 
         var currentAnnotationMap: [MapAnnotationItem.AnnotationKind: MapAnnotationItem] = [:]
         for annotation in self.annotations {
@@ -144,7 +141,7 @@ final class AnnotationService: ObservableObject {
             currentAnnotationMap.removeValue(forKey: .user)
         }
 
-        if let tel = telemetry, (self.appState == .longRangeTracking || self.appState == .finalApproach) {
+        if let tel = telemetry, (self.appState == .longRangeTracking) {
             let isAscending = tel.verticalSpeed >= 0
             let balloonCoordinate = CLLocationCoordinate2D(latitude: tel.latitude, longitude: tel.longitude)
 
