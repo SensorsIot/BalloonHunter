@@ -67,6 +67,7 @@ struct BalloonHunterApp: App {
                 .environmentObject(serviceManager.annotationService)
                 .environmentObject(serviceManager.persistenceService)
                 .environmentObject(serviceManager.balloonTrackingService)
+                .environmentObject(serviceManager.landingPointService)
                 .environmentObject(serviceManager)
         }
     }

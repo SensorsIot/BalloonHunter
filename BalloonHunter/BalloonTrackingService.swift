@@ -9,6 +9,26 @@ import MapKit
 final class BalloonTrackingService: ObservableObject {
     @Published var currentBalloonTrack: [BalloonTrackPoint] = []
     @Published var currentEffectiveDescentRate: Double? = nil
+    @Published var isLanded = false
+    @Published var landedPosition: CLLocationCoordinate2D? = nil
+    
+    /// Exposes the latest telemetry in a safe, encapsulated way.
+    var latestTelemetry: TelemetryData? {
+        bleService.latestTelemetry
+    }
+    
+    // Balloon is considered flying if recent telemetry received and smoothed vertical >=2 m/s or horizontal >=2 km/h
+    var isBalloonFlying: Bool {
+        guard let last = last5Telemetry.last, let lastUpdate = last.lastUpdateTime,
+              Date().timeIntervalSince(Date(timeIntervalSince1970: lastUpdate)) < 3
+        else { return false }
+        // Use last20 values if sufficient, else fallback to last
+        let vCount = last20VerticalSpeeds.count
+        let hCount = last20HorizontalSpeeds.count
+        let smoothedV = vCount >= 5 ? last20VerticalSpeeds.reduce(0, +) / Double(vCount) : last.verticalSpeed
+        let smoothedH = hCount >= 5 ? last20HorizontalSpeeds.reduce(0, +) / Double(hCount) : last.horizontalSpeed
+        return abs(smoothedV) >= 2 || abs(smoothedH) >= 2
+    }
     
     var hasReceivedFirstTelemetry: Bool = false
     var currentBalloonName: String?
@@ -24,6 +44,9 @@ final class BalloonTrackingService: ObservableObject {
     
     private var recentDescentRates: [Double] = []
     private let descentRateSmoothingWindow = 20
+    private var last100Positions: [CLLocationCoordinate2D] = []
+    private var last20VerticalSpeeds: [Double] = []
+    private var last20HorizontalSpeeds: [Double] = []
     
     init(persistenceService: PersistenceService, bleService: BLECommunicationService) {
         self.persistenceService = persistenceService
@@ -105,6 +128,34 @@ final class BalloonTrackingService: ObservableObject {
         if telemetryPointCounter % 100 == 0 {
             persistenceService.saveCurrentBalloonTrack(sondeName: telemetryData.sondeName, track: self.currentBalloonTrack)
             print("[DEBUG] BalloonTrackingService: Saved current balloon track for \(telemetryData.sondeName) (\(self.currentBalloonTrack.count) points) due to 100-point trigger.")
+        }
+
+        // Landing detection logic
+        if let lastUpdateTime = telemetryData.lastUpdateTime, Date().timeIntervalSince(Date(timeIntervalSince1970: lastUpdateTime)) < 3 {
+            last20VerticalSpeeds.append(telemetryData.verticalSpeed)
+            if last20VerticalSpeeds.count > 20 {
+                last20VerticalSpeeds.removeFirst()
+            }
+            let smoothedVerticalSpeed = last20VerticalSpeeds.reduce(0, +) / Double(last20VerticalSpeeds.count)
+
+            last20HorizontalSpeeds.append(telemetryData.horizontalSpeed)
+            if last20HorizontalSpeeds.count > 20 {
+                last20HorizontalSpeeds.removeFirst()
+            }
+            let smoothedHorizontalSpeed = last20HorizontalSpeeds.reduce(0, +) / Double(last20HorizontalSpeeds.count)
+
+            if smoothedVerticalSpeed < 2 && smoothedHorizontalSpeed < 2 {
+                isLanded = true
+                last100Positions.append(CLLocationCoordinate2D(latitude: telemetryData.latitude, longitude: telemetryData.longitude))
+                if last100Positions.count > 100 {
+                    last100Positions.removeFirst()
+                }
+                let avgLat = last100Positions.map { $0.latitude }.reduce(0, +) / Double(last100Positions.count)
+                let avgLon = last100Positions.map { $0.longitude }.reduce(0, +) / Double(last100Positions.count)
+                landedPosition = CLLocationCoordinate2D(latitude: avgLat, longitude: avgLon)
+            } else {
+                isLanded = false
+            }
         }
     }
     

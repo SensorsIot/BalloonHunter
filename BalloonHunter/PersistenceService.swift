@@ -5,6 +5,20 @@ import CoreBluetooth
 import CoreLocation
 import MapKit
 
+struct CodableCoordinate: Codable {
+    var latitude: Double
+    var longitude: Double
+
+    init(coordinate: CLLocationCoordinate2D) {
+        self.latitude = coordinate.latitude
+        self.longitude = coordinate.longitude
+    }
+
+    var coordinate: CLLocationCoordinate2D {
+        CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
+    }
+}
+
 @MainActor
 final class PersistenceService: ObservableObject {
     @Published var deviceSettings: DeviceSettings? = nil
@@ -21,6 +35,8 @@ final class PersistenceService: ObservableObject {
 
     private let tracksUserDefaultsKey = "balloonTracks"
     private var internalTracks: [String: [BalloonTrackPoint]] = [:]
+    private let landingPointsUserDefaultsKey = "landingPoints"
+    private var internalLandingPoints: [String: CodableCoordinate] = [:]
 
     func save(deviceSettings: DeviceSettings) {
         self.deviceSettings = deviceSettings
@@ -52,6 +68,24 @@ final class PersistenceService: ObservableObject {
             UserDefaults.standard.set(encoded, forKey: tracksUserDefaultsKey)
         } else {
             print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] PersistenceService: Failed to encode internalTracks for purging.")
+        }
+    }
+
+    func saveLandingPoint(sondeName: String, coordinate: CLLocationCoordinate2D) {
+        internalLandingPoints[sondeName] = CodableCoordinate(coordinate: coordinate)
+        if let encoded = try? JSONEncoder().encode(internalLandingPoints) {
+            UserDefaults.standard.set(encoded, forKey: landingPointsUserDefaultsKey)
+        }
+    }
+
+    func loadLandingPoint(sondeName: String) -> CLLocationCoordinate2D? {
+        return internalLandingPoints[sondeName]?.coordinate
+    }
+
+    func clearLandingPoint(sondeName: String) {
+        internalLandingPoints.removeValue(forKey: sondeName)
+        if let encoded = try? JSONEncoder().encode(internalLandingPoints) {
+            UserDefaults.standard.set(encoded, forKey: landingPointsUserDefaultsKey)
         }
     }
 
@@ -87,6 +121,10 @@ final class PersistenceService: ObservableObject {
             print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] PersistenceService: No tracks found in UserDefaults, initializing empty.")
         }
 
-        let fileManager = FileManager.default
+        if let savedLandingPointsData = UserDefaults.standard.data(forKey: landingPointsUserDefaultsKey) {
+            if let decodedLandingPoints = try? JSONDecoder().decode([String: CodableCoordinate].self, from: savedLandingPointsData) {
+                self.internalLandingPoints = decodedLandingPoints
+            }
+        }
     }
 }

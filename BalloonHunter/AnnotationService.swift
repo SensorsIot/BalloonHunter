@@ -9,6 +9,7 @@ import MapKit
 final class AnnotationService: ObservableObject {
     let bleService: BLECommunicationService
     let balloonTrackingService: BalloonTrackingService
+    let landingPointService: LandingPointService
     
     private var cancellables = Set<AnyCancellable>()
     
@@ -24,9 +25,10 @@ final class AnnotationService: ObservableObject {
     
     @Published var annotations: [MapAnnotationItem] = []
 
-    init(bleService: BLECommunicationService, balloonTrackingService: BalloonTrackingService) {
+    init(bleService: BLECommunicationService, balloonTrackingService: BalloonTrackingService, landingPointService: LandingPointService) {
         self.bleService = bleService
         self.balloonTrackingService = balloonTrackingService
+        self.landingPointService = landingPointService
         print("[DEBUG][AnnotationService] AnnotationService init")
         
         bleService.$telemetryAvailabilityState
@@ -42,6 +44,13 @@ final class AnnotationService: ObservableObject {
                 self?.updateAnnotationsBasedOnTrack()
             }
             .store(in: &cancellables)
+
+        landingPointService.$validLandingPoint
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.updateAnnotationsBasedOnTrack()
+            }
+            .store(in: &cancellables)
     }
     
     private func handleTelemetryAvailabilityChanged(_ isAvailable: Bool) {
@@ -49,10 +58,6 @@ final class AnnotationService: ObservableObject {
             let telemetry = bleService.latestTelemetry
             let userLocation = bleService.currentLocationService?.locationData
             let prediction = bleService.predictionService?.predictionData
-            let route = bleService.predictionService?.routeCalculationService?.routeData
-            let telemetryHistory = balloonTrackingService.currentBalloonTrack.map {
-                TelemetryData(latitude: $0.latitude, longitude: $0.longitude, altitude: $0.altitude)
-            }
             let lastUpdateTime = bleService.lastTelemetryUpdateTime
             
             updateAnnotations(
@@ -159,15 +164,13 @@ final class AnnotationService: ObservableObject {
                 newAnnotations.append(burstAnnotation)
                 currentAnnotationMap.removeValue(forKey: .burst)
             }
+        }
 
-            
-
-            if let landing = prediction?.landingPoint {
-                let landingAnnotation = currentAnnotationMap[.landing] ?? MapAnnotationItem(coordinate: CLLocationCoordinate2D(), kind: .landing)
-                landingAnnotation.coordinate = landing
-                newAnnotations.append(landingAnnotation)
-                currentAnnotationMap.removeValue(forKey: .landing)
-            }
+        if let landing = landingPointService.validLandingPoint {
+            let landingAnnotation = currentAnnotationMap[.landing] ?? MapAnnotationItem(coordinate: CLLocationCoordinate2D(), kind: .landing)
+            landingAnnotation.coordinate = landing
+            newAnnotations.append(landingAnnotation)
+            currentAnnotationMap.removeValue(forKey: .landing)
         }
 
         self.annotations = newAnnotations

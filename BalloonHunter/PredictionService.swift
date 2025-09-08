@@ -12,12 +12,16 @@ final class PredictionService: NSObject, ObservableObject {
     weak var currentLocationService: CurrentLocationService?
     weak var balloonTrackingService: BalloonTrackingService? // New property
 
-    init(routeCalculationService: RouteCalculationService, currentLocationService: CurrentLocationService, balloonTrackingService: BalloonTrackingService) {
-        self.routeCalculationService = routeCalculationService
+    weak var persistenceService: PersistenceService?
+    private var userSettings: UserSettings // Added UserSettings
+
+    init(currentLocationService: CurrentLocationService, balloonTrackingService: BalloonTrackingService, persistenceService: PersistenceService, userSettings: UserSettings) {
         self.currentLocationService = currentLocationService
         self.balloonTrackingService = balloonTrackingService // Initialize new property
+        self.persistenceService = persistenceService
+        self.userSettings = userSettings // Initialize UserSettings
         super.init()
-        print("[DEBUG] PredictionService init: \(Unmanaged.passUnretained(self).toOpaque())")
+        print("[DEBUG] PredictionService init: \(Unmanaged.passUnretained(self).toOpaque()))")
     }
 
     @Published var predictionData: PredictionData? { didSet { } }
@@ -28,8 +32,8 @@ final class PredictionService: NSObject, ObservableObject {
     private var burstPoint: CLLocationCoordinate2D? = nil
     private var landingPoint: CLLocationCoordinate2D? = nil
     private var landingTime: Date? = nil
-    private var lastPredictionFetchTime: Date?
     @Published var predictionStatus: PredictionStatus = .noValidPrediction
+    private var lastPeriodicPredictionTime: Date? = nil
 
     nonisolated private struct APIResponse: Codable {
         struct Prediction: Codable {
@@ -49,10 +53,13 @@ final class PredictionService: NSObject, ObservableObject {
     /// Performs the prediction fetch from the external API using telemetry and user settings.
     func fetchPrediction(telemetry: TelemetryData, userSettings: UserSettings, measuredDescentRate: Double? = nil) async {
         print("[DEBUG] fetchPrediction entered.")
+        self.lastPeriodicPredictionTime = Date()
         
         predictionStatus = .fetching
         isLoading = true
         print("[Debug][PredictionService] Fetching prediction...")
+
+        persistenceService?.clearLandingPoint(sondeName: telemetry.sondeName)
 
         path = []
         burstPoint = nil
@@ -123,6 +130,7 @@ final class PredictionService: NSObject, ObservableObject {
                 self.path = ascentPoints + descentPoints
 
                 if let landingPoint = self.landingPoint {
+                    self.persistenceService?.saveLandingPoint(sondeName: telemetry.sondeName, coordinate: landingPoint)
                     let newPredictionData = PredictionData(path: self.path, burstPoint: self.burstPoint, landingPoint: landingPoint, landingTime: self.landingTime)
                     self.predictionData = newPredictionData
 
@@ -165,5 +173,6 @@ final class PredictionService: NSObject, ObservableObject {
             print("[Debug][PredictionService] Return JSON: (Raw data not captured for logging in this scope)")
         }
     }
+    
+    
 }
-

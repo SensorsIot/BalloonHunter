@@ -3,7 +3,7 @@ import MapKit
 import Combine
 
 struct TrackingMapView: View {
-    private let routeRecalculationTimer = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
+    
     
     @EnvironmentObject var userSettings: UserSettings
     @EnvironmentObject var annotationService: AnnotationService
@@ -13,6 +13,7 @@ struct TrackingMapView: View {
     @EnvironmentObject var bleService: BLECommunicationService
     @EnvironmentObject var persistenceService: PersistenceService
     @EnvironmentObject var balloonTrackingService: BalloonTrackingService
+    @EnvironmentObject var landingPointService: LandingPointService
 
     @State private var showSettings = false
     @State private var transportMode: TransportationMode = .car
@@ -22,7 +23,7 @@ struct TrackingMapView: View {
     )
     @State private var initialRegionSet = false
     @State private var didPerformInitialZoom = false
-    @State private var lastRouteCalculationLocation: CLLocation?
+    @State private var lastRouteCalculationTime: Date?
     @State private var programmaticUpdateTrigger = 0
     @State private var isDirectionUp = false
     @State private var hasFetchedInitialPrediction = false
@@ -32,6 +33,7 @@ struct TrackingMapView: View {
     @State private var balloonTrackPolyline: MKPolyline?
     @State private var predictionPathPolyline: MKPolyline?
     @State private var userRoutePolyline: MKPolyline?
+    @State private var mapView: MKMapView? = nil
 
     var body: some View {
         GeometryReader { geometry in
@@ -51,11 +53,11 @@ struct TrackingMapView: View {
                     Spacer()
 
                     Picker("Mode", selection: $transportMode) {
-                        Text("Car").tag(TransportationMode.car)
-                        Text("Bike").tag(TransportationMode.bike)
+                        Image(systemName: "car.fill").tag(TransportationMode.car)
+                        Image(systemName: "bicycle").tag(TransportationMode.bike)
                     }
                     .pickerStyle(.segmented)
-                    .frame(width: 160)
+                    .frame(width: 100)
 
                     Spacer()
 
@@ -69,7 +71,7 @@ struct TrackingMapView: View {
                     .background(.ultraThinMaterial)
                     .cornerRadius(8)
 
-                    if predictionService.predictionData?.landingPoint == nil {
+                    if landingPointService.validLandingPoint == nil {
                         Button("Landing Point") {
                             Task {
                                 if let telemetry = bleService.latestTelemetry,
@@ -81,6 +83,16 @@ struct TrackingMapView: View {
                         .buttonStyle(.bordered)
                         .tint(.blue)
                     }
+
+                    Button {
+                        readLandingPointFromClipboard()
+                    } label: {
+                        Image(systemName: "doc.on.clipboard")
+                            .imageScale(.large)
+                            .padding(8)
+                    }
+                    .background(.ultraThinMaterial)
+                    .cornerRadius(8)
 
                     Spacer()
 
@@ -113,24 +125,57 @@ struct TrackingMapView: View {
                         setIsDirectionUp: { newValue in isDirectionUp = newValue },
                         onAnnotationTapped: { item in
                             if item.kind == .balloon {
-                                guard let telemetry = bleService.latestTelemetry,
-                                      let userSettings = persistenceService.readPredictionParameters() else {
-                                    print("[DEBUG] onAnnotationTapped: missing telemetry or userSettings")
-                                    return
+                                Task {
+                                    if let telemetry = bleService.latestTelemetry,
+                                       let userSettings = persistenceService.readPredictionParameters() {
+                                        await predictionService.fetchPrediction(telemetry: telemetry, userSettings: userSettings)
+                                    }
                                 }
-                                print("[DEBUG] Passing descent rate \(String(describing: balloonTrackingService.currentEffectiveDescentRate)) to PredictionService")
                             }
                         },
                         getUserLocationAndHeading: {
                             guard let location = locationService.locationData else { return nil }
                             let heading = location.heading
                             return (CLLocationCoordinate2D(latitude: location.latitude, longitude: location.longitude), heading)
+                        },
+                        getMapView: { mapView in
+                            self.mapView = mapView
                         }
                     )
                     .frame(height: geometry.size.height * 0.7)
                     .overlay(alignment: .bottomLeading) {
                         Button("Overview") {
-                            updateCameraToFitAllPoints()
+                            // Instead of updateCameraToFitAllPoints(), showAnnotations with annotationsForZoom
+                            var annotationsForZoom: [MKAnnotation] = []
+                            if let userLocation = locationService.locationData {
+                                let userAnnotation = MKPointAnnotation()
+                                userAnnotation.coordinate = CLLocationCoordinate2D(latitude: userLocation.latitude, longitude: userLocation.longitude)
+                                annotationsForZoom.append(userAnnotation)
+                            }
+                            if let landing = landingPointService.validLandingPoint {
+                                let landingAnnotation = MKPointAnnotation()
+                                landingAnnotation.coordinate = landing
+                                annotationsForZoom.append(landingAnnotation)
+                            }
+                            if balloonTrackingService.isBalloonFlying {
+                                if let predictionPath = predictionService.predictionData?.path {
+                                    for coord in predictionPath {
+                                        let ann = MKPointAnnotation()
+                                        ann.coordinate = coord
+                                        annotationsForZoom.append(ann)
+                                    }
+                                }
+                                if let routePath = routeService.routeData?.path {
+                                    for coord in routePath {
+                                        let ann = MKPointAnnotation()
+                                        ann.coordinate = coord
+                                        annotationsForZoom.append(ann)
+                                    }
+                                }
+                            }
+                            if !annotationsForZoom.isEmpty, let mapView = mapView {
+                                mapView.showAnnotations(annotationsForZoom, animated: true)
+                            }
                         }
                         .font(.headline)
                         .padding(.horizontal, 12)
@@ -167,12 +212,29 @@ struct TrackingMapView: View {
             .sheet(isPresented: $showSettings) {
                 SettingsView()
             }
+            
             .onReceive(locationService.$locationData) { locationData in
                 if !initialRegionSet, let locationData = locationData {
-                    region.center = CLLocationCoordinate2D(latitude: locationData.latitude, longitude: locationData.longitude)
+                    region = MKCoordinateRegion(
+                        center: CLLocationCoordinate2D(latitude: locationData.latitude, longitude: locationData.longitude),
+                        span: MKCoordinateSpan(latitudeDelta: 0.225, longitudeDelta: 0.225) // 25km span
+                    )
                     initialRegionSet = true
                 }
                 updateStateAndCamera()
+
+                if let userLocationData = locationData,
+                   let landingPoint = landingPointService.validLandingPoint {
+                    let now = Date()
+                    if lastRouteCalculationTime == nil || now.timeIntervalSince(lastRouteCalculationTime ?? Date(timeIntervalSince1970: 0)) >= 60 {
+                        routeService.calculateRoute(
+                            from: CLLocationCoordinate2D(latitude: userLocationData.latitude, longitude: userLocationData.longitude),
+                            to: landingPoint,
+                            transportType: transportMode
+                        )
+                        lastRouteCalculationTime = now
+                    }
+                }
             }
             .onReceive(bleService.telemetryData) { _ in
                 updateStateAndCamera()
@@ -183,7 +245,7 @@ struct TrackingMapView: View {
                         return
                     }
                     hasFetchedInitialPrediction = true
-                    print("[DEBUG] Passing descent rate \(String(describing: balloonTrackingService.currentEffectiveDescentRate)) to PredictionService")
+                    print("[DEBUG] Passing descent rate \(balloonTrackingService.currentEffectiveDescentRate ?? 0.0) to PredictionService")
                     Task { await predictionService.fetchPrediction(telemetry: telemetry, userSettings: userSettings, measuredDescentRate: abs(balloonTrackingService.currentEffectiveDescentRate ?? userSettings.descentRate)) }
                 }
             }
@@ -193,35 +255,19 @@ struct TrackingMapView: View {
             .onReceive(routeService.$routeData) { _ in
                 updateStateAndCamera()
             }
-            .onChange(of: transportMode) { newValue in
+            
+            .onChange(of: transportMode) {
                 routeService.routeData = nil
                 if let userLocationData = locationService.locationData,
-                   let landingPoint = predictionService.predictionData?.landingPoint {
+                   let landingPoint = landingPointService.validLandingPoint {
                     routeService.calculateRoute(
                         from: CLLocationCoordinate2D(latitude: userLocationData.latitude, longitude: userLocationData.longitude),
-                        to: landingPoint,
-                        transportType: newValue
-                    )
-                }
-            }
-            .onReceive(routeRecalculationTimer) { _ in
-                guard let userLocationData = locationService.locationData,
-                      let landingPoint = predictionService.predictionData?.landingPoint,
-                      let lastCalcLocation = lastRouteCalculationLocation else {
-                    print("[DEBUG][routeRecalculationTimer] skipping: missing data")
-                    return
-                }
-
-                let currentUserLocation = CLLocation(latitude: userLocationData.latitude, longitude: userLocationData.longitude)
-                
-                if currentUserLocation.distance(from: lastCalcLocation) > 500 {
-                    routeService.calculateRoute(
-                        from: currentUserLocation.coordinate,
                         to: landingPoint,
                         transportType: transportMode
                     )
                 }
             }
+            
             
             // Removed the .onChange(of: annotationService.appState) block as requested.
         }
@@ -277,66 +323,99 @@ struct TrackingMapView: View {
         }
 
         // Then, update the camera
-        if annotationService.appState == .startup {
-            updateCameraToFitAllPoints()
-        } else if annotationService.appState == .longRangeTracking && !didPerformInitialZoom {
-            updateCameraToFitAllPoints()
-            // Increment trigger to notify MapView to update after overlays and annotations are updated.
-            programmaticUpdateTrigger += 1
-            didPerformInitialZoom = true
-        }
-    }
-
-    private func updateCameraToFitAllPoints() {
-        let relevantAnnotations = annotationService.annotations.filter {
-            $0.kind == .user || $0.kind == .balloon || $0.kind == .landing
-        }
-        var points: [CLLocationCoordinate2D] = relevantAnnotations.map { $0.coordinate }
-
-        // Add points from polylines
-        if let trackPoly = balloonTrackPolyline {
-            points.append(contentsOf: trackPoly.coordinates)
-        }
-        if let predPoly = predictionPathPolyline {
-            points.append(contentsOf: predPoly.coordinates)
-        }
-        if let userRoutePoly = userRoutePolyline {
-            points.append(contentsOf: userRoutePoly.coordinates)
-        }
-
-        guard !points.isEmpty else { return }
-
-        var minLat = points[0].latitude
-        var maxLat = points[0].latitude
-        var minLon = points[0].longitude
-        var maxLon = points[0].longitude
-
-        for point in points {
-            minLat = min(minLat, point.latitude)
-            maxLat = max(maxLat, point.latitude)
-            minLon = min(minLon, point.longitude)
-            maxLon = max(maxLon, point.longitude)
-        }
-
-        let center = CLLocationCoordinate2D(
-            latitude: (minLat + maxLat) / 2,
-            longitude: (minLon + maxLon) / 2
-        )
-
-        // Ensure the span is not too small, providing a buffer
-        // Increased buffer multiplier to 1.7 for a wider margin
-        // Set minimum deltas to 0.05 (~5 km at equator) to avoid over-zooming on close points
-        // This approach approximates the effective 'showAnnotations' behavior of MKMapView
-        let latitudeDelta = max((maxLat - minLat) * 1.7, 0.05)
-        let longitudeDelta = max((maxLon - minLon) * 1.7, 0.05)
-
-        let span = MKCoordinateSpan(
-            latitudeDelta: latitudeDelta,
-            longitudeDelta: longitudeDelta
-        )
         
-        self.region = MKCoordinateRegion(center: center, span: span)
+        var annotationsForZoom: [MKAnnotation] = []
+        if let userLocation = locationService.locationData {
+            let userAnnotation = MKPointAnnotation()
+            userAnnotation.coordinate = CLLocationCoordinate2D(latitude: userLocation.latitude, longitude: userLocation.longitude)
+            annotationsForZoom.append(userAnnotation)
+        }
+        if let landing = landingPointService.validLandingPoint {
+            let landingAnnotation = MKPointAnnotation()
+            landingAnnotation.coordinate = landing
+            annotationsForZoom.append(landingAnnotation)
+        }
+        if balloonTrackingService.isBalloonFlying {
+            if let predictionPath = predictionService.predictionData?.path {
+                for coord in predictionPath {
+                    let ann = MKPointAnnotation()
+                    ann.coordinate = coord
+                    annotationsForZoom.append(ann)
+                }
+            }
+            if let routePath = routeService.routeData?.path {
+                for coord in routePath {
+                    let ann = MKPointAnnotation()
+                    ann.coordinate = coord
+                    annotationsForZoom.append(ann)
+                }
+            }
+        }
+        
+        // Debug output preserved from previous zoom logic:
+        if let userLocation = locationService.locationData {
+            print("[DEBUG][ZOOM] userLocation: \(userLocation.latitude), \(userLocation.longitude)")
+        } else {
+            print("[DEBUG][ZOOM] userLocation: nil")
+        }
+        if let landing = landingPointService.validLandingPoint {
+            print("[DEBUG][ZOOM] landingPoint: \(landing.latitude), \(landing.longitude)")
+        } else {
+            print("[DEBUG][ZOOM] landingPoint: nil")
+        }
+        print("[DEBUG][ZOOM] isBalloonFlying: \(balloonTrackingService.isBalloonFlying)")
+        print("[DEBUG][ZOOM] zoomCoordinates count: \(annotationsForZoom.count)")
+        for (index, annotation) in annotationsForZoom.enumerated() {
+            print("[DEBUG][ZOOM] zoomCoordinates[\(index)]: lat=\(annotation.coordinate.latitude), lon=\(annotation.coordinate.longitude)")
+        }
+        
+        if !annotationsForZoom.isEmpty, let mapView = mapView {
+            mapView.showAnnotations(annotationsForZoom, animated: true)
+            return
+        }
+        
+//        Removed custom manual camera/region calculation and updateCameraToFitAllPoints calls.
     }
+
+    
+
+    private func readLandingPointFromClipboard() {
+        if let clipboardString = UIPasteboard.general.string {
+            print("Clipboard string: \(clipboardString)")
+            let components = clipboardString.components(separatedBy: "route=")
+            if components.count > 1 {
+                let routeComponent = components[1]
+                let routeParts = routeComponent.components(separatedBy: "%3B")
+                if routeParts.count > 1 {
+                    let destination = routeParts[1]
+                    print("Destination string: \(destination)")
+                    let coords = destination.components(separatedBy: "%2C")
+                    print("Coords array: \(coords)")
+                    if coords.count == 2,
+                       let lat = Double(coords[0]),
+                       let lonString = coords[1].components(separatedBy: "#").first,
+                       let lon = Double(lonString) {
+                        let coordinate = CLLocationCoordinate2D(latitude: lat, longitude: lon)
+                        print("Parsed coordinate: \(coordinate)")
+                        persistenceService.saveLandingPoint(sondeName: "manual_override", coordinate: coordinate)
+                        // Optionally, you can also update the prediction data to reflect this change immediately
+                        let newPredictionData = PredictionData(landingPoint: coordinate)
+                        predictionService.predictionData = newPredictionData
+                    } else {
+                        print("Could not parse coordinates from clipboard")
+                    }
+                } else {
+                    print("Could not parse route parts from clipboard")
+                }
+            } else {
+                print("Could not find route component in clipboard string")
+            }
+        } else {
+            print("Clipboard is empty")
+        }
+    }
+
+    
 }
 
 /// Compares two MKPolyline objects for equality by checking their coordinates.
@@ -366,7 +445,8 @@ private struct MapView: UIViewRepresentable {
     let isDirectionUp: Bool
     let setIsDirectionUp: (Bool) -> Void
     let onAnnotationTapped: (MapAnnotationItem) -> Void
-    let getUserLocationAndHeading: (() -> (CLLocationCoordinate2D, CLLocationDirection)?)  // Added closure property
+    let getUserLocationAndHeading: (() -> (CLLocationCoordinate2D, CLLocationDirection)?)
+    let getMapView: (MKMapView) -> Void
 
     func makeUIView(context: Context) -> MKMapView {
         let mapView = MKMapView()
@@ -384,7 +464,7 @@ private struct MapView: UIViewRepresentable {
         }
 
         // Removed longPressGestureRecognizer setup as per instructions
-
+        getMapView(mapView)
         return mapView
     }
 
@@ -508,7 +588,16 @@ private struct MapView: UIViewRepresentable {
 
         // If the programmaticUpdateTrigger changed, call showAnnotations to zoom and center map to all annotations.
         if context.coordinator.lastUpdateTrigger != programmaticUpdateTrigger {
-            uiView.showAnnotations(uiView.annotations, animated: true)
+            let annotationsForDebug = uiView.annotations
+            print("[DEBUG] Calling showAnnotations with the following annotations:")
+            for annotation in annotationsForDebug {
+                if let title = annotation.title {
+                    print("\tAnnotation: \(annotation), title: \(title) coordinate: \(annotation.coordinate)")
+                } else {
+                    print("\tAnnotation: \(annotation), coordinate: \(annotation.coordinate)")
+                }
+            }
+            uiView.showAnnotations(annotationsForDebug, animated: true)
             context.coordinator.lastUpdateTrigger = programmaticUpdateTrigger
         }
 

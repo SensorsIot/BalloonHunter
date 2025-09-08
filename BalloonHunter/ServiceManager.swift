@@ -14,9 +14,10 @@ final class ServiceManager: ObservableObject {
     let routeCalculationService: RouteCalculationService
     let predictionService: PredictionService
     let annotationService: AnnotationService
+    let landingPointService: LandingPointService
 
     private var cancellables = Set<AnyCancellable>()
-    private var predictionTimer: Timer?
+    
     private var lastRouteCalculationTime: Date? = nil
 
     init() {
@@ -25,15 +26,15 @@ final class ServiceManager: ObservableObject {
         self.bleCommunicationService = BLECommunicationService(persistenceService: self.persistenceService)
         self.balloonTrackingService = BalloonTrackingService(persistenceService: self.persistenceService, bleService: self.bleCommunicationService)
         self.currentLocationService = CurrentLocationService()
-        self.routeCalculationService = RouteCalculationService()
-        self.predictionService = PredictionService(routeCalculationService: self.routeCalculationService, currentLocationService: self.currentLocationService, balloonTrackingService: self.balloonTrackingService)
-        self.annotationService = AnnotationService(bleService: self.bleCommunicationService, balloonTrackingService: self.balloonTrackingService)
+        self.predictionService = PredictionService(currentLocationService: self.currentLocationService, balloonTrackingService: self.balloonTrackingService, persistenceService: self.persistenceService, userSettings: self.persistenceService.userSettings)
+        self.landingPointService = LandingPointService(balloonTrackingService: self.balloonTrackingService, predictionService: self.predictionService, persistenceService: self.persistenceService)
+        self.routeCalculationService = RouteCalculationService(landingPointService: self.landingPointService, currentLocationService: self.currentLocationService)
+        self.annotationService = AnnotationService(bleService: self.bleCommunicationService, balloonTrackingService: self.balloonTrackingService, landingPointService: self.landingPointService)
         self.bleCommunicationService.annotationService = self.annotationService
         self.bleCommunicationService.predictionService = self.predictionService
         self.bleCommunicationService.currentLocationService = self.currentLocationService
 
         self.predictionService.routeCalculationService = self.routeCalculationService
-        self.predictionService.currentLocationService = self.currentLocationService
 
         bleCommunicationService.$latestTelemetry
             .sink { [weak self] _ in Task { await self?.propagateStateUpdates() } }
@@ -55,24 +56,10 @@ final class ServiceManager: ObservableObject {
             .sink { [weak self] _ in Task { await self?.propagateStateUpdates() } }
             .store(in: &cancellables)
         
-        setupTimers()
+
     }
 
-    private func setupTimers() {
-        predictionTimer = Timer.scheduledTimer(withTimeInterval: 60.0, repeats: true) { [weak self] _ in
-            Task { @MainActor in
-                guard let self = self else { return }
-                print("[DEBUG][ServiceManager] 60s timer fired. Fetching prediction.")
-                guard let telemetry = self.bleCommunicationService.latestTelemetry,
-                      let userSettings = self.persistenceService.readPredictionParameters() else { return }
-                
-                if self.annotationService.appState != .startup {
-                    print("[DEBUG] Passing descent rate \(String(describing: self.balloonTrackingService.currentEffectiveDescentRate)) to PredictionService (ServiceManager timer)")
-                    await self.predictionService.fetchPrediction(telemetry: telemetry, userSettings: userSettings, measuredDescentRate: self.balloonTrackingService.currentEffectiveDescentRate)
-                }
-            }
-        }
-    }
+    
 
     func propagateStateUpdates() async {
         let telemetry = bleCommunicationService.latestTelemetry
@@ -83,17 +70,7 @@ final class ServiceManager: ObservableObject {
             TelemetryData(latitude: $0.latitude, longitude: $0.longitude, altitude: $0.altitude)
         }
 
-        if let userLoc = userLocation, let landingPoint = prediction?.landingPoint {
-            let now = Date()
-            if lastRouteCalculationTime == nil || now.timeIntervalSince(lastRouteCalculationTime!) >= 60 {
-                await self.routeCalculationService.calculateRoute(
-                    from: CLLocationCoordinate2D(latitude: userLoc.latitude, longitude: userLoc.longitude),
-                    to: landingPoint,
-                    transportType: .car
-                )
-                self.lastRouteCalculationTime = now
-            }
-        }
+        
 
         annotationService.updateState(
             telemetry: telemetry,
