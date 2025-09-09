@@ -25,6 +25,7 @@ final class ServiceManager: ObservableObject {
     lazy var predictionPolicy = PredictionPolicy(serviceManager: self, predictionService: self.predictionService, policyScheduler: self.policyScheduler, predictionCache: self.predictionCache)
     lazy var routingPolicy = RoutingPolicy(serviceManager: self, routeCalculationService: self.routeCalculationService, policyScheduler: self.policyScheduler, routingCache: self.routingCache)
     lazy var cameraPolicy = CameraPolicy(serviceManager: self, policyScheduler: self.policyScheduler)
+    lazy var startupCoordinator = StartupCoordinator(serviceManager: self)
 
     private var cancellables = Set<AnyCancellable>()
     

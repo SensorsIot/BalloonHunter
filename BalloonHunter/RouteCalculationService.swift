@@ -30,6 +30,7 @@ final class RouteCalculationService: ObservableObject {
         transportType: TransportationMode = .car,
         version: Int
     ) {
+        appLog("RouteCalculationService: Starting route calculation from \(from) to \(to) via \(transportType)", category: .service, level: .info)
         let request = MKDirections.Request()
         request.source = MKMapItem(placemark: MKPlacemark(coordinate: from))
         request.destination = MKMapItem(placemark: MKPlacemark(coordinate: to))
@@ -80,6 +81,7 @@ final class RouteCalculationService: ObservableObject {
                 self.healthStatus = .healthy
                 self.failureCount = 0
                 self.retryDelay = 1.0
+                appLog("RouteCalculationService: Route calculation completed - Distance: \(String(format: "%.1f", route.distance/1000))km, Travel time: \(String(format: "%.1f", travelTime/60))min", category: .service, level: .info)
             }
         }
     }

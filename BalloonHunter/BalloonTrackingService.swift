@@ -4,6 +4,7 @@ import SwiftUI
 import CoreBluetooth
 import CoreLocation
 import MapKit
+import os
 
 @MainActor
 final class BalloonTrackingService: ObservableObject {
@@ -43,17 +44,35 @@ final class BalloonTrackingService: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
     
     private var recentDescentRates: [Double] = []
+    private var last20DescentRates: [Double] = []
     private let descentRateSmoothingWindow = 20
     private var last100Positions: [CLLocationCoordinate2D] = []
     private var last20VerticalSpeeds: [Double] = []
     private var last20HorizontalSpeeds: [Double] = []
-    private let smoothingWindowSize = 5 // New constant for smoothing window size
+    private let smoothingWindowSize = 5 // For general use
+    private let landingDetectionSmoothingWindow = 20 // For landing detection smoothing
+    
+    var smoothedDescentRate: Double? {
+        if last20DescentRates.count >= 3 {
+            return last20DescentRates.reduce(0, +) / Double(last20DescentRates.count)
+        }
+        return nil
+    }
     
     init(persistenceService: PersistenceService, bleService: BLECommunicationService) {
         self.persistenceService = persistenceService
         self.bleService = bleService
         print("[DEBUG] BalloonTrackingService init")
         setupSubscriptions()
+        loadPersistedDataAtStartup()
+    }
+    
+    /// Load any persisted balloon data at startup
+    private func loadPersistedDataAtStartup() {
+        // Try to load any existing track data from persistence
+        // Note: We don't know the sonde name yet, so we can't load specific tracks
+        // But we can prepare the service for when telemetry arrives
+        appLog("BalloonTrackingService ready to load persisted data on first telemetry", category: .service, level: .info)
     }
     
     private func setupSubscriptions() {
@@ -74,14 +93,15 @@ final class BalloonTrackingService: ObservableObject {
     
     func processTelemetryData(_ telemetryData: TelemetryData) {
         if currentBalloonName == nil || telemetryData.sondeName != currentBalloonName {
+            appLog("BalloonTrackingService: New sonde detected - \(telemetryData.sondeName), switching from \(currentBalloonName ?? "none")", category: .service, level: .info)
             persistenceService.purgeAllTracks()
             let persistedTrack = persistenceService.loadTrackForCurrentSonde(sondeName: telemetryData.sondeName)
             if let track = persistedTrack {
                 self.currentBalloonTrack = track
-                print("[DEBUG] BalloonTrackingService: Loaded persisted track for \(telemetryData.sondeName) with \(self.currentBalloonTrack.count) points.")
+                appLog("BalloonTrackingService: Loaded persisted track for \(telemetryData.sondeName) with \(self.currentBalloonTrack.count) points", category: .service, level: .info)
             } else {
                 self.currentBalloonTrack = []
-                print("[DEBUG] BalloonTrackingService: Purged old tracks and reset track for new sonde: \(telemetryData.sondeName).")
+                appLog("BalloonTrackingService: No persisted track found - starting fresh track for \(telemetryData.sondeName)", category: .service, level: .info)
             }
             telemetryPointCounter = 0
         }
@@ -114,11 +134,19 @@ final class BalloonTrackingService: ObservableObject {
                     if recentDescentRates.count > descentRateSmoothingWindow {
                         recentDescentRates.removeFirst()
                     }
-                    let smoothedDescentRate = recentDescentRates.reduce(0, +) / Double(recentDescentRates.count)
-                    currentEffectiveDescentRate = smoothedDescentRate
                     
+                    // Append to last20DescentRates for smoothing
+                    last20DescentRates.append(descentRate)
+                    if last20DescentRates.count > descentRateSmoothingWindow {
+                        last20DescentRates.removeFirst()
+                    }
                     
-                
+                    // Update currentEffectiveDescentRate with smoothed value or fall back
+                    if let smooth = smoothedDescentRate {
+                        currentEffectiveDescentRate = smooth
+                    } else {
+                        currentEffectiveDescentRate = descentRate
+                    }
                 }
             } else {
                 
@@ -131,22 +159,25 @@ final class BalloonTrackingService: ObservableObject {
             print("[DEBUG] BalloonTrackingService: Saved current balloon track for \(telemetryData.sondeName) (\(self.currentBalloonTrack.count) points) due to 100-point trigger.")
         }
 
-        // Landing detection logic
+        // Landing detection logic with proper smoothing and thresholds
         if let lastUpdateTime = telemetryData.lastUpdateTime, Date().timeIntervalSince(Date(timeIntervalSince1970: lastUpdateTime)) < 3 {
+            // Use 20-value smoothing for landing detection as specified
             last20VerticalSpeeds.append(telemetryData.verticalSpeed)
-            if last20VerticalSpeeds.count > smoothingWindowSize {
+            if last20VerticalSpeeds.count > landingDetectionSmoothingWindow {
                 last20VerticalSpeeds.removeFirst()
             }
-            let smoothedVerticalSpeed = last20VerticalSpeeds.reduce(0, +) / Double(last20VerticalSpeeds.count)
+            let smoothedVerticalSpeed = abs(last20VerticalSpeeds.reduce(0, +) / Double(last20VerticalSpeeds.count))
 
             last20HorizontalSpeeds.append(telemetryData.horizontalSpeed)
-            if last20HorizontalSpeeds.count > smoothingWindowSize {
+            if last20HorizontalSpeeds.count > landingDetectionSmoothingWindow {
                 last20HorizontalSpeeds.removeFirst()
             }
-            let smoothedHorizontalSpeed = last20HorizontalSpeeds.reduce(0, +) / Double(last20HorizontalSpeeds.count)
+            let smoothedHorizontalSpeedKmH = last20HorizontalSpeeds.reduce(0, +) / Double(last20HorizontalSpeeds.count)
 
-            if smoothedVerticalSpeed < 2 && smoothedHorizontalSpeed < 2 {
+            // Check landing conditions: vertical < 2 m/s AND horizontal < 2 km/h
+            if smoothedVerticalSpeed < 2.0 && smoothedHorizontalSpeedKmH < 2.0 {
                 isLanded = true
+                // Update landed position with smoothed (100 positions)
                 last100Positions.append(CLLocationCoordinate2D(latitude: telemetryData.latitude, longitude: telemetryData.longitude))
                 if last100Positions.count > 100 {
                     last100Positions.removeFirst()

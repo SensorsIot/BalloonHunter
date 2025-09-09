@@ -13,6 +13,7 @@ final class AnnotationService: ObservableObject {
     let landingPointService: LandingPointService
     
     private var cancellables = Set<AnyCancellable>()
+    private var lastAnnotationUpdateTime: Date? = nil
     
     @Published private(set) var appState: AppState = .startup {
         didSet {
@@ -42,14 +43,14 @@ final class AnnotationService: ObservableObject {
         balloonTrackingService.$currentBalloonTrack
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
-                self?.updateAnnotationsBasedOnTrack()
+                self?.throttledUpdateAnnotations()
             }
             .store(in: &cancellables)
 
         landingPointService.$validLandingPoint
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
-                self?.updateAnnotationsBasedOnTrack()
+                self?.throttledUpdateAnnotations()
             }
             .store(in: &cancellables)
     }
@@ -76,6 +77,13 @@ final class AnnotationService: ObservableObject {
         }
     }
 
+    private func throttledUpdateAnnotations() {
+        let now = Date()
+        if let last = lastAnnotationUpdateTime, now.timeIntervalSince(last) < 2.0 { return } // Throttle to 2 seconds
+        lastAnnotationUpdateTime = now
+        updateAnnotationsBasedOnTrack()
+    }
+    
     private func updateAnnotationsBasedOnTrack() {
         let telemetry = bleService.latestTelemetry
         let userLocation = bleService.currentLocationService?.locationData
@@ -131,8 +139,6 @@ final class AnnotationService: ObservableObject {
         prediction: PredictionData?,
         lastTelemetryUpdateTime: Date?
     ) {
-        appLog("updateAnnotations called.", category: .ui, level: .debug)
-
         var currentAnnotationMap: [MapAnnotationItem.AnnotationKind: MapAnnotationItem] = [:]
         for annotation in self.annotations {
             currentAnnotationMap[annotation.kind] = annotation
@@ -145,7 +151,6 @@ final class AnnotationService: ObservableObject {
             userAnnotation.coordinate = CLLocationCoordinate2D(latitude: userLoc.latitude, longitude: userLoc.longitude)
             newAnnotations.append(userAnnotation)
             currentAnnotationMap.removeValue(forKey: .user)
-            appLog("User annotation added/updated.", category: .ui, level: .debug)
         }
 
         if let tel = telemetry, (self.appState == .longRangeTracking) {
@@ -159,30 +164,34 @@ final class AnnotationService: ObservableObject {
             balloonAnnotation.altitude = tel.altitude
             newAnnotations.append(balloonAnnotation)
             currentAnnotationMap.removeValue(forKey: .balloon)
-            appLog("Balloon annotation added/updated. Ascending: \(isAscending)", category: .ui, level: .debug)
 
-            if isAscending, let burst = prediction?.burstPoint {
+            // Only show burst point if prediction service says it should be visible
+            if let predictionService = bleService.predictionService, predictionService.isBurstMarkerVisible, let burst = prediction?.burstPoint {
                 let burstAnnotation = currentAnnotationMap[.burst] ?? MapAnnotationItem(coordinate: CLLocationCoordinate2D(), kind: .burst)
                 burstAnnotation.coordinate = burst
                 newAnnotations.append(burstAnnotation)
                 currentAnnotationMap.removeValue(forKey: .burst)
-                appLog("Burst annotation added/updated.", category: .ui, level: .debug)
             }
         }
 
-        if let landing = landingPointService.validLandingPoint {
+        // Show landing point only if balloon hasn't landed yet
+        if balloonTrackingService.isLanded {
+            // If balloon has landed, show landed annotation at the balloon's actual position
+            if let tel = telemetry {
+                let landedAnnotation = currentAnnotationMap[.landed] ?? MapAnnotationItem(coordinate: CLLocationCoordinate2D(), kind: .landed)
+                landedAnnotation.coordinate = CLLocationCoordinate2D(latitude: tel.latitude, longitude: tel.longitude)
+                newAnnotations.append(landedAnnotation)
+                currentAnnotationMap.removeValue(forKey: .landed)
+            }
+        } else if let landing = landingPointService.validLandingPoint {
+            // Only show predicted landing point if balloon hasn't landed
             let landingAnnotation = currentAnnotationMap[.landing] ?? MapAnnotationItem(coordinate: CLLocationCoordinate2D(), kind: .landing)
             landingAnnotation.coordinate = landing
             newAnnotations.append(landingAnnotation)
             currentAnnotationMap.removeValue(forKey: .landing)
-            appLog("Landing annotation added/updated.", category: .ui, level: .debug)
         }
 
         self.annotations = newAnnotations
-        appLog("Total annotations after update: \(self.annotations.count)", category: .ui, level: .debug)
-        for annotation in newAnnotations {
-            appLog("  Annotation kind: \(annotation.kind), coordinate: \(annotation.coordinate.latitude), \(annotation.coordinate.longitude)", category: .ui, level: .debug)
-        }
     }
 }
 

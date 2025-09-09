@@ -363,113 +363,92 @@ struct DeviceSettingsView: View {
         // Pins
         if deviceSettingsCopy.oledSDA != initialDeviceSettings.oledSDA {
             let command = "o{oled_sda=\(deviceSettingsCopy.oledSDA)}o"
-            print("BLE Command: \(command)")
             bleService.sendCommand(command: command)
         }
         if deviceSettingsCopy.oledSCL != initialDeviceSettings.oledSCL {
             let command = "o{oled_scl=\(deviceSettingsCopy.oledSCL)}o"
-            print("BLE Command: \(command)")
             bleService.sendCommand(command: command)
         }
         if deviceSettingsCopy.oledRST != initialDeviceSettings.oledRST {
             let command = "o{oled_rst=\(deviceSettingsCopy.oledRST)}o"
-            print("BLE Command: \(command)")
             bleService.sendCommand(command: command)
         }
         if deviceSettingsCopy.ledPin != initialDeviceSettings.ledPin {
             let command = "o{led_pout=\(deviceSettingsCopy.ledPin)}o"
-            print("BLE Command: \(command)")
             bleService.sendCommand(command: command)
         }
         if deviceSettingsCopy.buzPin != initialDeviceSettings.buzPin {
             let command = "o{buz_pin=\(deviceSettingsCopy.buzPin)}o"
-            print("BLE Command: \(command)")
             bleService.sendCommand(command: command)
         }
         
         // Battery
         if deviceSettingsCopy.batPin != initialDeviceSettings.batPin {
             let command = "o{battery=\(deviceSettingsCopy.batPin)}o"
-            print("BLE Command: \(command)")
             bleService.sendCommand(command: command)
         }
         if deviceSettingsCopy.batMin != initialDeviceSettings.batMin {
             let command = "o{vBatMin=\(deviceSettingsCopy.batMin)}o"
-            print("BLE Command: \(command)")
             bleService.sendCommand(command: command)
         }
         if deviceSettingsCopy.batMax != initialDeviceSettings.batMax {
             let command = "o{vBatMax=\(deviceSettingsCopy.batMax)}o"
-            print("BLE Command: \(command)")
             bleService.sendCommand(command: command)
         }
         if deviceSettingsCopy.batType != initialDeviceSettings.batType {
             let command = "o{vBatType=\(deviceSettingsCopy.batType)}o"
-            print("BLE Command: \(command)")
             bleService.sendCommand(command: command)
         }
         
         // Radio Settings
         if deviceSettingsCopy.callSign != initialDeviceSettings.callSign {
             let command = "o{myCall=\(deviceSettingsCopy.callSign)}o"
-            print("BLE Command: \(command)")
             bleService.sendCommand(command: command)
         }
         if deviceSettingsCopy.RS41Bandwidth != initialDeviceSettings.RS41Bandwidth {
             let command = "o{rs41.rxbw=\(deviceSettingsCopy.RS41Bandwidth)}o"
-            print("BLE Command: \(command)")
             bleService.sendCommand(command: command)
         }
         if deviceSettingsCopy.M20Bandwidth != initialDeviceSettings.M20Bandwidth {
             let command = "o{m20.rxbw=\(deviceSettingsCopy.M20Bandwidth)}o"
-            print("BLE Command: \(command)")
             bleService.sendCommand(command: command)
         }
         if deviceSettingsCopy.M10Bandwidth != initialDeviceSettings.M10Bandwidth {
             let command = "o{m10.rxbw=\(deviceSettingsCopy.M10Bandwidth)}o"
-            print("BLE Command: \(command)")
             bleService.sendCommand(command: command)
         }
         if deviceSettingsCopy.PILOTBandwidth != initialDeviceSettings.PILOTBandwidth {
             let command = "o{pilot.rxbw=\(deviceSettingsCopy.PILOTBandwidth)}o"
-            print("BLE Command: \(command)")
             bleService.sendCommand(command: command)
         }
         if deviceSettingsCopy.DFMBandwidth != initialDeviceSettings.DFMBandwidth {
             let command = "o{dfm.rxbw=\(deviceSettingsCopy.DFMBandwidth)}o"
-            print("BLE Command: \(command)")
             bleService.sendCommand(command: command)
         }
 
         // Other Settings
         if deviceSettingsCopy.lcdType != initialDeviceSettings.lcdType {
             let command = "o{lcd=\(deviceSettingsCopy.lcdType)}o"
-            print("BLE Command: \(command)")
             bleService.sendCommand(command: command)
         }
         if deviceSettingsCopy.bluetoothStatus != initialDeviceSettings.bluetoothStatus {
             let command = "o{blu=\(deviceSettingsCopy.bluetoothStatus)}o"
-            print("BLE Command: \(command)")
             bleService.sendCommand(command: command)
         }
         if deviceSettingsCopy.lcdStatus != initialDeviceSettings.lcdStatus {
             let command = "o{lcdOn=\(deviceSettingsCopy.lcdStatus)}o"
-            print("BLE Command: \(command)")
             bleService.sendCommand(command: command)
         }
         if deviceSettingsCopy.serialSpeed != initialDeviceSettings.serialSpeed {
             let command = "o{baud=\(deviceSettingsCopy.serialSpeed)}o"
-            print("BLE Command: \(command)")
             bleService.sendCommand(command: command)
         }
         if deviceSettingsCopy.serialPort != initialDeviceSettings.serialPort {
             let command = "o{com=\(deviceSettingsCopy.serialPort)}o"
-            print("BLE Command: \(command)")
             bleService.sendCommand(command: command)
         }
         if deviceSettingsCopy.aprsName != initialDeviceSettings.aprsName {
             let command = "o{aprsName=\(deviceSettingsCopy.aprsName)}o"
-            print("BLE Command: \(command)")
             bleService.sendCommand(command: command)
         }
     }
@@ -581,7 +560,6 @@ struct SettingsView: View {
         let probeType = tempDeviceSettings.sondeType
         let probeTypeNumber = sondeTypeMapping[probeType] ?? 0
         let commandString = "o{f=\(String(format: "%.2f", frequency))/tipo=\(probeTypeNumber)}o"
-        print("BLE Command: \(commandString)")
         bleService.sendCommand(command: commandString)
         
         tempDeviceSettings.frequency = frequency

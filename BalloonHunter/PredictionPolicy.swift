@@ -139,7 +139,7 @@ class PredictionPolicy {
         }
 
         // Generate cache key
-        let cacheKey = await PredictionCache.makeKey(
+        let cacheKey = PredictionCache.makeKey(
             balloonID: telemetry.sondeName,
             coordinate: CLLocationCoordinate2D(latitude: telemetry.latitude, longitude: telemetry.longitude),
             altitude: telemetry.altitude,
@@ -163,7 +163,7 @@ class PredictionPolicy {
             return
         }
 
-        await policyScheduler.cooldown(key: "prediction", cooldownDuration: cooldownDuration, operation: { async {
+        await policyScheduler.cooldown(key: "prediction", cooldownDuration: cooldownDuration, operation: {
             guard let userSettings = self.serviceManager.persistenceService.readPredictionParameters() else { return }
             appLog("Triggering prediction...", category: .policy, level: .debug)
             await self.predictionService.fetchPrediction(telemetry: telemetry, userSettings: userSettings, version: version)
@@ -180,6 +180,6 @@ class PredictionPolicy {
                     }
                 }
             }
-        }})
+        })
     }
 }

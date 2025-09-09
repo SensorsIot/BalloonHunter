@@ -342,20 +342,25 @@ final class MapAnnotationItem: ObservableObject, Identifiable, Equatable {
                     return .gray // Default or unknown state
                 }
             }()
-            ZStack(alignment: .top) { // Use ZStack to layer image and text
-                Image(systemName: "balloon.fill")
-                    .font(.system(size: 90)) // Make balloon larger to fit text
-                    .foregroundColor(color)
-
+            ZStack {
+                Circle()
+                    .fill(color)
+                    .frame(width: 76, height: 76)
+                    .overlay(
+                        Image(systemName: "balloon.fill")
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                            .foregroundColor(.white)
+                            .frame(width: 76, height: 76)
+                    )
                 if let altitude = altitude {
                     Text("\(Int(altitude))")
-                        .font(.system(size: 16, weight: .heavy))
-                        .foregroundColor(.white)
-                        .shadow(color: .black.opacity(0.85), radius: 4, x: 0, y: 2)
-                        .minimumScaleFactor(0.4)
-                        .lineLimit(1)
-                        .frame(width: 54, height: 40, alignment: .center)
-                        .position(x: 44, y: 34) // Center within 76x76 balloon (adjusted x from 38 to 44)
+                        .font(.system(size: 22, weight: .bold, design: .rounded))
+                        .foregroundColor(.black)
+                        .shadow(color: .white.opacity(0.8), radius: 5, x: 0, y: 0)
+                        .padding(.top, 8)
+                        .frame(width: 54, height: 28, alignment: .center)
+                        .position(x: 38, y: 28) // upper third
                 }
             }
         case .burst:

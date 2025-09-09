@@ -39,7 +39,7 @@ class ModeManager: ObservableObject {
         serviceManager.uiEventPublisher
             .sink { [weak self] event in
                 guard let self = self else { return }
-                if case .modeSwitched(let _) = event {
+                if case .modeSwitched(_) = event {
                     // This is a simplified example. Actual mode switching from UI would be more explicit.
                     // For now, let's assume switching to car/bike implies 'follow' mode if not in final approach.
                     if self.currentMode != .finalApproach {

@@ -35,9 +35,8 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
         self.serviceManager = serviceManager
         super.init()
         centralManager = CBCentralManager(delegate: self, queue: nil)
-        print("[DEBUG] BLECommunicationService init")
 
-        Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+        Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 await self?.updateTelemetryAvailabilityState()
             }
@@ -67,33 +66,27 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
     }
 
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
-        print("[DEBUG] Central Manager did update state: \(central.state.rawValue)")
         switch central.state {
         case .poweredOn:
-            print("[DEBUG] BLE is powered on. Starting scan...")
             centralManager.scanForPeripherals(withServices: nil, options: nil)
         case .poweredOff:
-            print("[DEBUG] BLE is powered off.")
             connectionStatus = .disconnected
         case .resetting:
-            print("[DEBUG] BLE is resetting.")
+            break
         case .unauthorized:
-            print("[DEBUG] BLE is unauthorized.")
+            break
         case .unknown:
-            print("[DEBUG] BLE state is unknown.")
+            break
         case .unsupported:
-            print("[DEBUG] BLE is unsupported.")
+            break
         @unknown default:
-            print("[DEBUG] Unknown BLE state.")
+            break
         }
     }
 
     func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral, advertisementData: [String : Any], rssi RSSI: NSNumber) {
-        print("[DEBUG] Did discover peripheral: \(peripheral.name ?? "Unknown") (UUID: \(peripheral.identifier.uuidString)), RSSI: \(RSSI)")
-
         if let peripheralName = advertisementData[CBAdvertisementDataLocalNameKey] as? String {
             if peripheralName.contains("MySondy") {
-                print("[DEBUG] Found MySondy: \(peripheralName). Stopping scan and connecting...")
                 centralManager.stopScan()
                 connectedPeripheral = peripheral
                 connectionStatus = .connecting
@@ -103,47 +96,33 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
     }
 
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
-        print("[DEBUG] Successfully connected to peripheral: \(peripheral.name ?? "Unknown")")
         connectionStatus = .connected
         connectedPeripheral = peripheral
         peripheral.delegate = self
-        print("[DEBUG] Discovering services for peripheral: \(peripheral.name ?? "Unknown") with UUID: \(UART_SERVICE_UUID.uuidString)")
         peripheral.discoverServices([UART_SERVICE_UUID])
     }
 
     func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
-        print("[DEBUG] Failed to connect to peripheral: \(peripheral.name ?? "Unknown"). Error: \(error?.localizedDescription ?? "Unknown error")")
         connectionStatus = .disconnected
     }
 
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
-        print("[DEBUG] Disconnected from peripheral: \(peripheral.name ?? "Unknown"). Error: \(error?.localizedDescription ?? "No error")")
         connectionStatus = .disconnected
         connectedPeripheral = nil
-        print("[DEBUG] Restarting scan after disconnection...")
         centralManager.scanForPeripherals(withServices: nil, options: nil)
     }
 
     func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
-        if let error = error {
-            print("[DEBUG] Error discovering services for \(peripheral.name ?? "Unknown"): \(error.localizedDescription)")
+        if error != nil {
             return
         }
         guard let services = peripheral.services else {
-            print("[DEBUG] No services found for \(peripheral.name ?? "Unknown").")
             return
         }
-        print("[DEBUG] Discovered \(services.count) service(s) for \(peripheral.name ?? "Unknown").")
         for service in services {
             if service.uuid == UART_SERVICE_UUID {
-                print("[DEBUG] Found UART Service. Discovering characteristics for service: \(service.uuid.uuidString) with RX: \(UART_RX_CHARACTERISTIC_UUID.uuidString) and TX: \(UART_TX_CHARACTERISTIC_UUID.uuidString)")
                 peripheral.discoverCharacteristics([UART_RX_CHARACTERISTIC_UUID, UART_TX_CHARACTERISTIC_UUID], for: service)
-            } else {
-                print("[DEBUG] Skipping non-UART service: \(service.uuid.uuidString)")
             }
-        }
-        if services.allSatisfy({ $0.uuid != UART_SERVICE_UUID }) {
-            print("[DEBUG] UART Service not found among discovered services. Is the BLE device advertising the correct service?")
         }
     }
 
@@ -185,46 +164,40 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
     }
 
     func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
-        if let error = error {
-            print("[DEBUG] Error updating value for characteristic \(characteristic.uuid.uuidString): \(error.localizedDescription)") // Re-added debug print
+        if error != nil {
             return
         }
         guard let data = characteristic.value else {
-            print("[DEBUG] No data received for characteristic \(characteristic.uuid.uuidString).") // Re-added debug print
             return
         }
         if let string = String(data: data, encoding: .utf8) {
             self.parse(message: string)
-        } else {
-            print("[DEBUG] Could not decode data to UTF8 string for characteristic \(characteristic.uuid.uuidString). Raw data: \(data.hexEncodedString())") // Re-added debug print
         }
     }
 
     func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {
         if error != nil {
-            _ = error
+            // Error occurred during write
         }
     }
 
     func peripheral(_ peripheral: CBPeripheral, didUpdateNotificationStateFor characteristic: CBCharacteristic, error: Error?) {
         if error != nil {
-            _ = error
+            // Error occurred during notification state update
         } else {
+            // Notification state updated successfully
         }
     }
 
     @Published var isReadyForCommands = false
 
     private func parse(message: String) {
-        print("[DEBUG] Raw BLE message received: \(message)") // Re-added debug print
         if !isReadyForCommands {
             isReadyForCommands = true
-            print("[DEBUG] First BLE message received. isReadyForCommands is now true.")
         }
         
         let components = message.components(separatedBy: "/")
         guard components.count > 1 else {
-            print("[DEBUG] Parse: Message too short or invalid format: \(message)")
             return
         }
         let messageType = components[0]
@@ -237,7 +210,6 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
             var telemetryData = TelemetryData()
             telemetryData.parse(message: message)
             if telemetryData.latitude == 0.0 && telemetryData.longitude == 0.0 {
-                print("[BLECommunicationService] Ignoring telemetry with (0,0) coordinates (likely invalid).")
                 return
             }
             self.latestTelemetry = telemetryData
@@ -247,7 +219,6 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
             self.serviceManager?.telemetryPublisher.send(TelemetryEvent(telemetryData: telemetryData))
 
             if !hasSentReadSettingsCommand && isReadyForCommands {
-                print("[DEBUG] First type 1 message parsed and TX ready. Reading settings...")
                 readSettings()
                 hasSentReadSettingsCommand = true
             }
@@ -268,27 +239,21 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
 
     func sendCommand(command: String) {
         if !isReadyForCommands {
-            print("[DEBUG] sendCommand blocked: TX characteristic not ready. Wait until BLE connection and discovery complete. Check previous debug output for service and characteristic discovery issues.")
             return
         }
         guard let peripheral = connectedPeripheral else {
-            print("[DEBUG] sendCommand Error: Not connected to a peripheral.")
             return
         }
         guard let characteristic = writeCharacteristic else {
-            print("[DEBUG] sendCommand Error: Write characteristic not found.")
             return
         }
         guard let data = command.data(using: .utf8) else {
-            print("[DEBUG] sendCommand Error: Could not convert command string to data.")
             return
         }
-        print("[DEBUG] Sending command: \(command) (Raw Data: \(data.hexEncodedString()))")
         peripheral.writeValue(data, for: characteristic, type: .withResponse)
     }
     
     func disconnect() {
-        print("[DEBUG] Disconnect: Attempting to disconnect from peripheral.")
         if let connectedPeripheral = connectedPeripheral {
             centralManager.cancelPeripheralConnection(connectedPeripheral)
         }
@@ -298,7 +263,6 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
 
     func sendSettingsCommand(frequency: Double, probeType: Int) {
         let formattedCommand = String(format: "o{f=%.2f/tipo=%d}o", frequency, probeType)
-        print("[DEBUG] sendSettingsCommand: Sending command: \(formattedCommand)")
         sendCommand(command: formattedCommand)
     }
 }

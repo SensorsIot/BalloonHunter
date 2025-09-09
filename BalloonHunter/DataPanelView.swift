@@ -55,6 +55,12 @@ struct DataPanelView: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                         Text("Land: \(landingTimeString)")
                             .frame(maxWidth: .infinity, alignment: .leading)
+                        Text("Descent: \(adjustedDescentRateString) m/s")
+                            .frame(maxWidth: .infinity, alignment: .trailing)
+                    }
+                    GridRow {
+                        Spacer()
+                        Spacer()
                         Text("Arrival: \(arrivalTimeString)")
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
@@ -160,6 +166,13 @@ struct DataPanelView: View {
             return String(format: "%.1f", hs)
         }
         return "N/A"
+    }
+    
+    private var adjustedDescentRateString: String {
+        if let adjustedRate = balloonTrackingService.smoothedDescentRate {
+            return String(format: "%.1f", abs(adjustedRate))
+        }
+        return "--"
     }
 }
 

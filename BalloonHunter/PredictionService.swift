@@ -16,13 +16,19 @@ final class PredictionService: NSObject, ObservableObject {
     weak var persistenceService: PersistenceService?
     private var userSettings: UserSettings // Added UserSettings
 
+    /// UI (e.g., TrackingMapView) should observe this property and display route overlays only when true.
+    @Published var isRouteVisible: Bool = true
+    /// UI (e.g., TrackingMapView) should observe this property and display burst point marker only when true.
+    @Published var isBurstMarkerVisible: Bool = false
+    /// UI (e.g., TrackingMapView) should observe this property and display prediction path overlays only when true.
+    @Published var isPredictionPathVisible: Bool = true
+
     init(currentLocationService: CurrentLocationService, balloonTrackingService: BalloonTrackingService, persistenceService: PersistenceService, userSettings: UserSettings) {
         self.currentLocationService = currentLocationService
         self.balloonTrackingService = balloonTrackingService // Initialize new property
         self.persistenceService = persistenceService
         self.userSettings = userSettings // Initialize UserSettings
         super.init()
-        print("[DEBUG] PredictionService init: \(Unmanaged.passUnretained(self).toOpaque()))")
     }
 
     @Published var predictionData: PredictionData? { didSet { } }
@@ -56,13 +62,12 @@ final class PredictionService: NSObject, ObservableObject {
     /// Call this in response to explicit prediction triggers only (timer, UI, startup).
     /// Performs the prediction fetch from the external API using telemetry and user settings.
     func fetchPrediction(telemetry: TelemetryData, userSettings: UserSettings, measuredDescentRate: Double? = nil, version: Int) async {
-        print("[DEBUG] fetchPrediction entered.")
-        
+        appLog("PredictionService: Starting prediction fetch for \(telemetry.sondeName) at altitude \(telemetry.altitude)m", category: .service, level: .info)
         predictionStatus = .fetching
         isLoading = true
-        print("[Debug][PredictionService] Fetching prediction...")
 
         persistenceService?.clearLandingPoint(sondeName: telemetry.sondeName)
+        appLog("PredictionService: Cleared existing landing point for \(telemetry.sondeName)", category: .service, level: .debug)
 
         path = []
         burstPoint = nil
@@ -73,11 +78,15 @@ final class PredictionService: NSObject, ObservableObject {
         dateFormatter.formatOptions = [.withInternetDateTime]
         let launchDatetime = dateFormatter.string(from: Date().addingTimeInterval(60))
         
-        print("[DEBUG][PredictionService] altitude: \(telemetry.altitude), measuredDescentRate: \(String(describing: measuredDescentRate)), userDescentRate: \(userSettings.descentRate)")
         let useMeasured = (telemetry.altitude < 10000)
-        let measured = measuredDescentRate ?? userSettings.descentRate
-        let effectiveDescentRate = abs(useMeasured ? measured : userSettings.descentRate)
-        print("[DEBUG][PredictionService] useMeasured: \(useMeasured), measured: \(measured), effectiveDescentRate: \(effectiveDescentRate)")
+        // Determine measured descent rate to use for API call:
+        var measured: Double
+        if useMeasured, let smoothed = balloonTrackingService?.smoothedDescentRate {
+            measured = smoothed
+        } else {
+            measured = measuredDescentRate ?? userSettings.descentRate
+        }
+        let effectiveDescentRate = abs(measured)
         
         var adjustedBurstAltitude = userSettings.burstAltitude
         if telemetry.verticalSpeed < 0 {
@@ -86,7 +95,6 @@ final class PredictionService: NSObject, ObservableObject {
 
         let urlString = "https://api.v2.sondehub.org/tawhiri?launch_latitude=\(telemetry.latitude)&launch_longitude=\(telemetry.longitude)&launch_altitude=\(telemetry.altitude)&launch_datetime=\(launchDatetime)&ascent_rate=\(userSettings.ascentRate)&descent_rate=\(effectiveDescentRate)&burst_altitude=\(adjustedBurstAltitude)"
         self.lastAPICallURL = urlString
-        print("[Debug][PredictionService] API Call: \(urlString)")
         guard let url = URL(string: urlString) else {
             isLoading = false
             self.healthStatus = .unhealthy // Invalid URL is a persistent issue
@@ -112,6 +120,9 @@ final class PredictionService: NSObject, ObservableObject {
                 var ascentPoints: [CLLocationCoordinate2D] = []
                 var descentPoints: [CLLocationCoordinate2D] = []
 
+                // Reset burst marker visibility; will be set true when burst point is available
+                self.isBurstMarkerVisible = false
+
                 for p in apiResponse.prediction {
                     if p.stage == "ascent" {
                         for point in p.trajectory {
@@ -121,7 +132,12 @@ final class PredictionService: NSObject, ObservableObject {
                             }
                         }
                         self.burstPoint = ascentPoints.last
+                        // Set burst marker visible when we have a valid burst point
+                        if self.burstPoint != nil {
+                            self.isBurstMarkerVisible = true
+                        }
                     } else if p.stage == "descent" {
+                        // Don't change burst marker visibility during descent - keep it visible
                         var lastDescentPoint: APIResponse.Prediction.TrajectoryPoint? = nil
                         for point in p.trajectory {
                             if let lat = point.latitude, let lon = point.longitude {
@@ -133,7 +149,7 @@ final class PredictionService: NSObject, ObservableObject {
                         if let last = lastDescentPoint, let lat = last.latitude, let lon = last.longitude {
                             self.landingPoint = CLLocationCoordinate2D(latitude: lat, longitude: lon)
                             if lat == 0 && lon == 0 {
-                                print("[Debug][PredictionService] Landing point is at (0,0) -- likely invalid")
+                                // Landing point likely invalid, no debug print retained
                             }
                             if let dt = last.datetime {
                                 let formatter = ISO8601DateFormatter()
@@ -150,7 +166,8 @@ final class PredictionService: NSObject, ObservableObject {
                     var newPredictionData = PredictionData(path: self.path, burstPoint: self.burstPoint, landingPoint: landingPoint, landingTime: self.landingTime)
                     newPredictionData.version = version
                     self.predictionData = newPredictionData
-                    appLog("PredictionService: PredictionData set successfully.", category: .service, level: .debug)
+                    let burstPointString = self.burstPoint != nil ? "(\(self.burstPoint!.latitude), \(self.burstPoint!.longitude))" : "none"
+                    appLog("PredictionService: Prediction completed successfully - Landing point: (\(landingPoint.latitude), \(landingPoint.longitude)), Burst point: \(burstPointString)", category: .service, level: .info)
 
                     self.predictionStatus = .success
                     self.healthStatus = .healthy // Success, reset health
@@ -159,9 +176,12 @@ final class PredictionService: NSObject, ObservableObject {
 
                     if self.appInitializationFinished == false {
                         self.appInitializationFinished = true
+                        appLog("PredictionService: App initialization marked as finished", category: .service, level: .info)
                     }
+
+                    // Trigger route update for UI or routing logic
+                    self.triggerRouteUpdate()
                 } else {
-                    print("[Debug][PredictionService] Prediction parsing finished, but no valid landing point found.")
                     if case .fetching = self.predictionStatus {
                         self.predictionStatus = .noValidPrediction
                     }
@@ -171,6 +191,9 @@ final class PredictionService: NSObject, ObservableObject {
                     appLog("PredictionService: No valid landing point found after parsing.", category: .service, level: .error)
                 }
                 self.isLoading = false
+                
+                // Update route visibility based on current balloon and device locations
+                self.updateRouteVisibility()
             }
         } catch {
             await MainActor.run { @MainActor in
@@ -181,6 +204,9 @@ final class PredictionService: NSObject, ObservableObject {
                 self.failureCount += 1
                 self.retryDelay = min(self.retryDelay * 2, 60.0) // Exponential backoff, max 60s
                 self.healthStatus = self.failureCount >= 3 ? .unhealthy : .degraded
+                
+                // Also update route visibility on failure in case of position change
+                self.updateRouteVisibility()
             }
             appLog("Prediction fetch failed with error: \(error.localizedDescription)", category: .service, level: .error)
             if let decodingError = error as? DecodingError {
@@ -204,5 +230,44 @@ final class PredictionService: NSObject, ObservableObject {
         }
     }
     
+    /// Allows manual triggering of the prediction fetch (e.g., from UI events)
+    public func triggerPredictionManually(telemetry: TelemetryData, userSettings: UserSettings, measuredDescentRate: Double? = nil, version: Int = 0) async {
+        await fetchPrediction(telemetry: telemetry, userSettings: userSettings, measuredDescentRate: measuredDescentRate, version: version)
+    }
+    
+    /// Toggles the visibility of the prediction path on the UI.
+    public func togglePredictionPathVisibility() {
+        isPredictionPathVisible.toggle()
+        // Connect this toggle to UI or map layer visibility as needed.
+    }
+    
+    /// Updates the visibility of the route based on the distance between balloon and device.
+    func updateRouteVisibility() {
+        guard let balloonTelemetry = balloonTrackingService?.latestTelemetry,
+              let deviceLocation = currentLocationService?.locationData else {
+            // If no location available, keep route visible
+            isRouteVisible = true
+            return
+        }
+        let balloonLocation = CLLocation(latitude: balloonTelemetry.latitude, longitude: balloonTelemetry.longitude)
+        let deviceLoc = CLLocation(latitude: deviceLocation.latitude, longitude: deviceLocation.longitude)
+        let distanceMeters = balloonLocation.distance(from: deviceLoc)
+        // Hide route if balloon is within 100 meters of device location
+        isRouteVisible = distanceMeters > 100
+        // UI or map layer visibility should observe this property
+    }
+    
+    /// Placeholder to trigger route update or recalculation in UI or routing logic.
+    func triggerRouteUpdate() {
+        // Connect this function to UI or routing logic to update route display.
+        // For example, notify routing engine to recalculate or refresh.
+    }
+    
+    /// Updates transport mode and triggers route recalculation.
+    public func updateTransportMode(_ mode: TransportationMode) {
+        // Implement transport mode logic as needed
+        // Then trigger route update
+        triggerRouteUpdate()
+    }
     
 }

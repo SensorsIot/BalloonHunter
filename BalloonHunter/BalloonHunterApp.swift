@@ -34,41 +34,58 @@ Your role: act as a competent Swift programmer to complete this project accordin
 import SwiftUI
 import Combine
 import UIKit // Import UIKit for UIApplication
+import OSLog // Import OSLog for appLog function
 
 @main
 struct BalloonHunterApp: App {
     @StateObject var serviceManager = ServiceManager()
     @StateObject var appSettings = AppSettings()
     @StateObject var userSettings = UserSettings()
+    @State private var startupCompleted = false
 
     var body: some Scene {
         WindowGroup {
-            TrackingMapView()
-                .onAppear {
-                    if let persisted = serviceManager.persistenceService.readPredictionParameters() {
-                        userSettings.burstAltitude = persisted.burstAltitude
-                        userSettings.ascentRate = persisted.ascentRate
-                        userSettings.descentRate = persisted.descentRate
+            if startupCompleted {
+                TrackingMapView()
+                    .environmentObject(serviceManager.bleCommunicationService)
+                    .environmentObject(serviceManager.predictionService)
+                    .environmentObject(serviceManager.routeCalculationService)
+                    .environmentObject(serviceManager.currentLocationService)
+                    .environmentObject(appSettings)
+                    .environmentObject(userSettings)
+                    .environmentObject(serviceManager.annotationService)
+                    .environmentObject(serviceManager.persistenceService)
+                    .environmentObject(serviceManager.balloonTrackingService)
+                    .environmentObject(serviceManager.landingPointService)
+                    .environmentObject(serviceManager)
+            } else {
+                StartupView()
+                    .environmentObject(serviceManager.startupCoordinator)
+                    .onReceive(NotificationCenter.default.publisher(for: .startupCompleted)) { _ in
+                        startupCompleted = true
                     }
-                    serviceManager.currentLocationService.requestPermission()
-                    serviceManager.currentLocationService.startUpdating()
-                }
-                .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in
-                    // Centralize save-on-close logic in PersistenceService
-                    serviceManager.persistenceService.saveOnAppClose(balloonTrackingService: serviceManager.balloonTrackingService)
-                    print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] BalloonHunterApp: Called saveOnAppClose on app resign active.")
-                }
-                .environmentObject(serviceManager.bleCommunicationService)
-                .environmentObject(serviceManager.predictionService)
-                .environmentObject(serviceManager.routeCalculationService)
-                .environmentObject(serviceManager.currentLocationService)
-                .environmentObject(appSettings)
-                .environmentObject(userSettings)
-                .environmentObject(serviceManager.annotationService)
-                .environmentObject(serviceManager.persistenceService)
-                .environmentObject(serviceManager.balloonTrackingService)
-                .environmentObject(serviceManager.landingPointService)
-                .environmentObject(serviceManager)
+            }
+        }.onAppear {
+            // Load persisted prediction parameters into user settings
+            if let persisted = serviceManager.persistenceService.readPredictionParameters() {
+                userSettings.burstAltitude = persisted.burstAltitude
+                userSettings.ascentRate = persisted.ascentRate
+                userSettings.descentRate = persisted.descentRate
+            }
+            
+            // Start location services (required for startup)
+            serviceManager.currentLocationService.requestPermission()
+            serviceManager.currentLocationService.startUpdating()
+            
+            // Initialize startup coordinator to execute linear startup sequence
+            _ = serviceManager.startupCoordinator // This triggers the startup sequence
+            
+            appLog("BalloonHunterApp: Linear startup sequence initiated", category: .general, level: .info)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in
+            // Centralize save-on-close logic in PersistenceService
+            serviceManager.persistenceService.saveOnAppClose(balloonTrackingService: serviceManager.balloonTrackingService)
+            print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] BalloonHunterApp: Called saveOnAppClose on app resign active.")
         }
     }
 }

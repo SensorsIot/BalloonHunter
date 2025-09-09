@@ -15,6 +15,7 @@ class RoutingPolicy {
     private var currentMode: AppMode = .explore
     private var currentTransportationMode: TransportationMode = .car // Default to car
     private var routingVersion: Int = 0 // New property for routing version
+    private var routeTimer: AnyCancellable? // Periodic route timer
 
     init(serviceManager: ServiceManager, routeCalculationService: RouteCalculationService, policyScheduler: PolicyScheduler, routingCache: RoutingCache) {
         self.serviceManager = serviceManager
@@ -22,6 +23,7 @@ class RoutingPolicy {
         self.policyScheduler = policyScheduler
         self.routingCache = routingCache
         setupSubscriptions()
+        setupRouteTimer()
     }
 
     private func setupSubscriptions() {
@@ -116,7 +118,7 @@ class RoutingPolicy {
         }
 
         // Generate cache key
-        let cacheKey = await RoutingCache.makeKey(
+        let cacheKey = RoutingCache.makeKey(
             userCoordinate: CLLocationCoordinate2D(latitude: userLocation.latitude, longitude: userLocation.longitude),
             balloonCoordinate: landingPoint,
             mode: transportMode
@@ -140,8 +142,8 @@ class RoutingPolicy {
         }
 
         if shouldRecalculate {
-            await policyScheduler.cooldown(key: "routing", cooldownDuration: cooldownDuration, operation: { async {
-                Task { // Explicitly wrap in Task
+            await policyScheduler.cooldown(key: "routing", cooldownDuration: cooldownDuration, operation: {
+                Task {
                     appLog("Triggering route calculation...", category: .policy, level: .debug)
                     self.routeCalculationService.calculateRoute(
                         from: CLLocationCoordinate2D(latitude: userLocation.latitude, longitude: userLocation.longitude),
@@ -163,8 +165,22 @@ class RoutingPolicy {
                         }
                     }
                 }
-            }})
+            })
+        }
+    }
+
+    private func setupRouteTimer() {
+        routeTimer = Timer.publish(every: 60, on: .main, in: .common)
+            .autoconnect()
+            .sink { [weak self] _ in
+                guard let self = self else { return }
+                self.handleTimerTrigger()
+            }
+    }
+
+    private func handleTimerTrigger() {
+        Task {
+            await self.triggerRouteCalculation(transportMode: self.currentTransportationMode)
         }
     }
 }
-
