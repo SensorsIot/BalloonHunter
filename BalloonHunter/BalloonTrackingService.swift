@@ -25,8 +25,8 @@ final class BalloonTrackingService: ObservableObject {
         // Use last20 values if sufficient, else fallback to last
         let vCount = last20VerticalSpeeds.count
         let hCount = last20HorizontalSpeeds.count
-        let smoothedV = vCount >= 5 ? last20VerticalSpeeds.reduce(0, +) / Double(vCount) : last.verticalSpeed
-        let smoothedH = hCount >= 5 ? last20HorizontalSpeeds.reduce(0, +) / Double(hCount) : last.horizontalSpeed
+        let smoothedV = vCount >= smoothingWindowSize ? last20VerticalSpeeds.reduce(0, +) / Double(vCount) : last.verticalSpeed
+        let smoothedH = hCount >= smoothingWindowSize ? last20HorizontalSpeeds.reduce(0, +) / Double(hCount) : last.horizontalSpeed
         return abs(smoothedV) >= 2 || abs(smoothedH) >= 2
     }
     
@@ -47,6 +47,7 @@ final class BalloonTrackingService: ObservableObject {
     private var last100Positions: [CLLocationCoordinate2D] = []
     private var last20VerticalSpeeds: [Double] = []
     private var last20HorizontalSpeeds: [Double] = []
+    private let smoothingWindowSize = 5 // New constant for smoothing window size
     
     init(persistenceService: PersistenceService, bleService: BLECommunicationService) {
         self.persistenceService = persistenceService
@@ -133,13 +134,13 @@ final class BalloonTrackingService: ObservableObject {
         // Landing detection logic
         if let lastUpdateTime = telemetryData.lastUpdateTime, Date().timeIntervalSince(Date(timeIntervalSince1970: lastUpdateTime)) < 3 {
             last20VerticalSpeeds.append(telemetryData.verticalSpeed)
-            if last20VerticalSpeeds.count > 20 {
+            if last20VerticalSpeeds.count > smoothingWindowSize {
                 last20VerticalSpeeds.removeFirst()
             }
             let smoothedVerticalSpeed = last20VerticalSpeeds.reduce(0, +) / Double(last20VerticalSpeeds.count)
 
             last20HorizontalSpeeds.append(telemetryData.horizontalSpeed)
-            if last20HorizontalSpeeds.count > 20 {
+            if last20HorizontalSpeeds.count > smoothingWindowSize {
                 last20HorizontalSpeeds.removeFirst()
             }
             let smoothedHorizontalSpeed = last20HorizontalSpeeds.reduce(0, +) / Double(last20HorizontalSpeeds.count)

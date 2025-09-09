@@ -4,14 +4,18 @@ import SwiftUI
 import CoreBluetooth
 import CoreLocation
 import MapKit
+import os
 
 @MainActor
 final class CurrentLocationService: NSObject, ObservableObject {
     @Published var locationData: LocationData?
     private let locationManager = CLLocationManager()
     private var lastHeading: CLLocationDirection? = nil
+    private var lastLocationUpdateTime: Date? = nil
+    weak var serviceManager: ServiceManager?
     
-    override init() {
+    init(serviceManager: ServiceManager) {
+        self.serviceManager = serviceManager
         print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] CurrentLocationService init")
         super.init()
         locationManager.delegate = self
@@ -48,13 +52,28 @@ extension CurrentLocationService: CLLocationManagerDelegate {
         }
         let heading = lastHeading ?? location.course
         DispatchQueue.main.async {
-            self.locationData = LocationData(latitude: location.coordinate.latitude, longitude: location.coordinate.longitude, heading: heading)
+            let now = Date()
+            let newLocationData = LocationData(latitude: location.coordinate.latitude, longitude: location.coordinate.longitude, heading: heading)
+            
+            // Log location updates
+            if let oldLocationData = self.locationData {
+                let distance = CLLocation(latitude: oldLocationData.latitude, longitude: oldLocationData.longitude).distance(from: CLLocation(latitude: newLocationData.latitude, longitude: newLocationData.longitude))
+                let timeDiff = self.lastLocationUpdateTime != nil ? now.timeIntervalSince(self.lastLocationUpdateTime!) : 0
+                appLog("User location update: lat=\(newLocationData.latitude), lon=\(newLocationData.longitude), dist=\(distance)m, timeDiff=\(timeDiff)s", category: .service, level: .debug)
+            } else {
+                appLog("Initial user location: lat=\(newLocationData.latitude), lon=\(newLocationData.longitude)", category: .service, level: .debug)
+            }
+
+            self.locationData = newLocationData
+            self.lastLocationUpdateTime = now
+            self.serviceManager?.userLocationPublisher.send(UserLocationEvent(locationData: newLocationData))
         }
     }
     
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
         DispatchQueue.main.async {
-            print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] CurrentLocationService: Failed to get location: \(error.localizedDescription)")
+            appLog("CurrentLocationService: Failed to get location: \(error.localizedDescription)", category: .service, level: .error)
         }
     }
 }
+

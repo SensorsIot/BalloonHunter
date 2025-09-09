@@ -5,70 +5,30 @@ import SwiftUI
 import CoreBluetooth
 import CoreLocation
 import MapKit
+import OSLog
 
 @MainActor
 final class RouteCalculationService: ObservableObject {
     private let landingPointService: LandingPointService
     private let currentLocationService: CurrentLocationService
-    private var cancellables = Set<AnyCancellable>()
-    private var lastRouteCalculationTime: Date?
 
     @Published var routeData: RouteData? = nil
+    @Published var healthStatus: ServiceHealth = .healthy
+    private var failureCount: Int = 0
+    private var retryDelay: TimeInterval = 1.0
 
     init(landingPointService: LandingPointService, currentLocationService: CurrentLocationService) {
         self.landingPointService = landingPointService
         self.currentLocationService = currentLocationService
         
-        print("[DEBUG] RouteCalculationService init")
-        setupTriggers()
-    }
-
-    private func setupTriggers() {
-        // Trigger 1: The landing point has changed
-        landingPointService.$validLandingPoint
-            .sink { [weak self] newLandingPoint in
-                guard let self = self else { return }
-                if let landingPoint = newLandingPoint,
-                   let currentLocation = self.currentLocationService.locationData {
-                    print("[DEBUG] Landing point changed. Recalculating route.")
-                    self.calculateRoute(
-                        from: CLLocationCoordinate2D(latitude: currentLocation.latitude, longitude: currentLocation.longitude),
-                        to: landingPoint,
-                        transportType: .car // Default to car for now
-                    )
-                } else {
-                    self.routeData = nil // Clear route if landing point is no longer valid
-                }
-            }
-            .store(in: &cancellables)
-
-        // Trigger 2: The last route calculation is more than 60 seconds old and the user’s position has changed
-        currentLocationService.$locationData
-            .sink { [weak self] newLocationData in
-                guard let self = self else { return }
-                if let currentLocation = newLocationData,
-                   let landingPoint = self.landingPointService.validLandingPoint {
-                    let now = Date()
-                    if self.lastRouteCalculationTime == nil || now.timeIntervalSince(self.lastRouteCalculationTime!) > 60 {
-                        print("[DEBUG] User position changed and >60s since last calculation. Recalculating route.")
-                        self.calculateRoute(
-                            from: CLLocationCoordinate2D(latitude: currentLocation.latitude, longitude: currentLocation.longitude),
-                            to: landingPoint,
-                            transportType: .car // Default to car for now
-                        )
-                        self.lastRouteCalculationTime = now
-                    }
-                } else {
-                    self.routeData = nil // Clear route if current location or landing point is no longer valid
-                }
-            }
-            .store(in: &cancellables)
+        appLog("RouteCalculationService init", category: .service, level: .debug)
     }
 
     func calculateRoute(
         from: CLLocationCoordinate2D,
         to: CLLocationCoordinate2D,
-        transportType: TransportationMode = .car
+        transportType: TransportationMode = .car,
+        version: Int
     ) {
         let request = MKDirections.Request()
         request.source = MKMapItem(placemark: MKPlacemark(coordinate: from))
@@ -86,12 +46,20 @@ final class RouteCalculationService: ObservableObject {
             guard let self = self else { return }
             if let error = error {
                 print("[RouteCalculationService] Route calculation error: \(error.localizedDescription)")
+                DispatchQueue.main.async {
+                    self.failureCount += 1
+                    self.retryDelay = min(self.retryDelay * 2, 60.0)
+                    self.healthStatus = self.failureCount >= 3 ? .unhealthy : .degraded
+                }
                 return
             }
             guard let route = response?.routes.first else {
                 print("[RouteCalculationService] No route found.")
                 DispatchQueue.main.async {
                     self.routeData = nil
+                    self.failureCount += 1
+                    self.retryDelay = min(self.retryDelay * 2, 60.0)
+                    self.healthStatus = self.failureCount >= 3 ? .unhealthy : .degraded
                 }
                 return
             }
@@ -104,10 +72,14 @@ final class RouteCalculationService: ObservableObject {
             let routeData = RouteData(
                 path: route.polyline.coordinates,
                 distance: route.distance,
-                expectedTravelTime: travelTime
+                expectedTravelTime: travelTime,
+                version: version
             )
             DispatchQueue.main.async {
                 self.routeData = routeData
+                self.healthStatus = .healthy
+                self.failureCount = 0
+                self.retryDelay = 1.0
             }
         }
     }

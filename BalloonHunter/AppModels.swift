@@ -9,6 +9,30 @@ func coordinatesEqual(_ lhs: CLLocationCoordinate2D, _ rhs: CLLocationCoordinate
     lhs.latitude == rhs.latitude && lhs.longitude == rhs.longitude
 }
 
+extension CLLocationCoordinate2D {
+    func bearing(to otherCoordinate: CLLocationCoordinate2D) -> CLLocationDirection {
+        let lat1 = self.latitude.degreesToRadians
+        let lon1 = self.longitude.degreesToRadians
+
+        let lat2 = otherCoordinate.latitude.degreesToRadians
+        let lon2 = otherCoordinate.longitude.degreesToRadians
+
+        let dLon = lon2 - lon1
+
+        let y = sin(dLon) * cos(lat2)
+        let x = cos(lat1) * sin(lat2) - sin(lat1) * cos(lat2) * cos(dLon)
+
+        let radiansBearing = atan2(y, x)
+
+        return radiansBearing.radiansToDegrees // Convert to degrees
+    }
+}
+
+extension Double {
+    var degreesToRadians: Double { return self * .pi / 180 }
+    var radiansToDegrees: Double { return self * 180 / .pi }
+}
+
 enum AppState: String {
     case startup
     case longRangeTracking
@@ -214,6 +238,7 @@ struct TelemetryData: Identifiable, Equatable {
         self.batVoltage = Int(components[Type1Index.batVoltage.rawValue]) ?? 0
         self.buzmute = (components[Type1Index.buzmute.rawValue] == "1")
         self.firmwareVersion = components[Type1Index.firmwareVersion.rawValue]
+        self.lastUpdateTime = Date().timeIntervalSince1970
     }
     
     private mutating func parseType2(components: [String]) {
@@ -308,7 +333,7 @@ final class MapAnnotationItem: ObservableObject, Identifiable, Equatable {
         case .user:
             Image(systemName: "figure.walk")
                 .foregroundColor(.blue)
-                .font(.title)
+                .font(.title) // Increased size
         case .balloon:
             let color: Color = {
                 if let isAscending = isAscending {
@@ -376,6 +401,7 @@ struct PredictionData: Equatable {
     var landingPoint: CLLocationCoordinate2D?
     var landingTime: Date?
     var latestTelemetry: TelemetryData?
+    var version: Int = 0
     
     var isDescending: Bool {
         guard let telemetry = self.latestTelemetry else { return false }
@@ -431,6 +457,7 @@ struct RouteData: Equatable {
     var path: [CLLocationCoordinate2D]?
     var distance: Double // in meters
     var expectedTravelTime: TimeInterval // in seconds
+    var version: Int = 0
 
     static func == (lhs: RouteData, rhs: RouteData) -> Bool {
         let pathsEqual: Bool
@@ -453,6 +480,12 @@ enum ConnectionStatus {
     case disconnected
     case connecting
     case connected
+}
+
+enum ServiceHealth: String, Codable {
+    case healthy
+    case degraded
+    case unhealthy
 }
 
 struct AFCData {
@@ -496,3 +529,37 @@ final class UserSettings: ObservableObject, Codable { // Added Codable
     }
 }
 
+// MARK: - Event Definitions for Orchestration
+
+struct TelemetryEvent: Equatable {
+    let telemetryData: TelemetryData
+}
+
+struct UserLocationEvent: Equatable {
+    let locationData: LocationData
+}
+
+enum UIEvent: Equatable {
+    case cameraRegionChanged(MKCoordinateRegion)
+    case annotationSelected(MapAnnotationItem)
+    case modeSwitched(TransportationMode)
+    case manualPredictionTriggered // For tapping on balloon marker
+
+    static func == (lhs: UIEvent, rhs: UIEvent) -> Bool {
+        switch (lhs, rhs) {
+        case let (.cameraRegionChanged(lhsRegion), .cameraRegionChanged(rhsRegion)):
+            return lhsRegion.center.latitude == rhsRegion.center.latitude &&
+                   lhsRegion.center.longitude == rhsRegion.center.longitude &&
+                   lhsRegion.span.latitudeDelta == rhsRegion.span.latitudeDelta &&
+                   lhsRegion.span.longitudeDelta == rhsRegion.span.longitudeDelta
+        case let (.annotationSelected(lhsItem), .annotationSelected(rhsItem)):
+            return lhsItem == rhsItem
+        case let (.modeSwitched(lhsMode), .modeSwitched(rhsMode)):
+            return lhsMode == rhsMode
+        case (.manualPredictionTriggered, .manualPredictionTriggered):
+            return true
+        default:
+            return false
+        }
+    }
+}

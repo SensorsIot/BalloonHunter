@@ -4,6 +4,7 @@ import SwiftUI
 import CoreBluetooth
 import CoreLocation
 import MapKit
+import os
 
 @MainActor
 final class BLECommunicationService: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeripheralDelegate {
@@ -16,6 +17,7 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
     weak var annotationService: AnnotationService?
     weak var predictionService: PredictionService?
     weak var currentLocationService: CurrentLocationService?
+    weak var serviceManager: ServiceManager?
 
     private let UART_SERVICE_UUID = CBUUID(string: "53797269-614D-6972-6B6F-44616C6D6F6E")
     private let UART_RX_CHARACTERISTIC_UUID = CBUUID(string: "53797267-614D-6972-6B6F-44616C6D6F8E")
@@ -28,8 +30,9 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
 
     @Published var telemetryAvailabilityState: Bool = false
 
-    init(persistenceService: PersistenceService) {
+    init(persistenceService: PersistenceService, serviceManager: ServiceManager) {
         self.persistenceService = persistenceService
+        self.serviceManager = serviceManager
         super.init()
         centralManager = CBCentralManager(delegate: self, queue: nil)
         print("[DEBUG] BLECommunicationService init")
@@ -146,33 +149,33 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
 
     func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
         if let error = error {
-            print("[DEBUG] Error discovering characteristics for service \(service.uuid.uuidString): \(error.localizedDescription)")
+            appLog("Error discovering characteristics for service \(service.uuid.uuidString): \(error.localizedDescription)", category: .service, level: .error)
             return
         }
         guard let characteristics = service.characteristics else {
-            print("[DEBUG] No characteristics found for service \(service.uuid.uuidString).")
+            appLog("No characteristics found for service \(service.uuid.uuidString).", category: .service, level: .debug)
             return
         }
-        print("[DEBUG] Discovered \(characteristics.count) characteristic(s) for service \(service.uuid.uuidString).")
+        appLog("Discovered \(characteristics.count) characteristic(s) for service \(service.uuid.uuidString).", category: .service, level: .debug)
         for characteristic in characteristics {
             if characteristic.uuid == UART_RX_CHARACTERISTIC_UUID {
-                print("[DEBUG] Found UART RX Characteristic. Checking notify property...")
+                appLog("Found UART RX Characteristic. Checking notify property...", category: .service, level: .debug)
                 if characteristic.properties.contains(.notify) {
                     peripheral.setNotifyValue(true, for: characteristic)
-                    print("[DEBUG] Set notify value to true for RX characteristic.")
+                    appLog("Set notify value to true for RX characteristic.", category: .service, level: .debug)
                 } else {
-                    print("[DEBUG] UART RX Characteristic does not have notify property.")
+                    appLog("UART RX Characteristic does not have notify property.", category: .service, level: .error)
                 }
             } else if characteristic.uuid == UART_TX_CHARACTERISTIC_UUID {
-                print("[DEBUG] Found UART TX Characteristic. Checking write properties...")
+                appLog("Found UART TX Characteristic. Checking write properties...", category: .service, level: .debug)
                 if characteristic.properties.contains(.write) {
                     self.writeCharacteristic = characteristic
-                    print("[DEBUG] Assigned TX characteristic for writing (write).")
+                    appLog("Assigned TX characteristic for writing (write).", category: .service, level: .debug)
                 } else if characteristic.properties.contains(.writeWithoutResponse) {
                     self.writeCharacteristic = characteristic
-                    print("[DEBUG] Assigned TX characteristic for writing (writeWithoutResponse).")
+                    appLog("Assigned TX characteristic for writing (writeWithoutResponse).", category: .service, level: .debug)
                 } else {
-                    print("[DEBUG] UART TX Characteristic does not have write or writeWithoutResponse properties.")
+                    appLog("UART TX Characteristic does not have write or writeWithoutResponse properties.", category: .service, level: .error)
                 }
             }
         }
@@ -241,6 +244,7 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
 
             self.lastTelemetryUpdateTime = Date()
             self.telemetryData.send(telemetryData)
+            self.serviceManager?.telemetryPublisher.send(TelemetryEvent(telemetryData: telemetryData))
 
             if !hasSentReadSettingsCommand && isReadyForCommands {
                 print("[DEBUG] First type 1 message parsed and TX ready. Reading settings...")

@@ -4,6 +4,7 @@ import SwiftUI
 import CoreBluetooth
 import CoreLocation
 import MapKit
+import OSLog
 
 @MainActor
 final class PredictionService: NSObject, ObservableObject {
@@ -33,7 +34,10 @@ final class PredictionService: NSObject, ObservableObject {
     private var landingPoint: CLLocationCoordinate2D? = nil
     private var landingTime: Date? = nil
     @Published var predictionStatus: PredictionStatus = .noValidPrediction
-    private var lastPeriodicPredictionTime: Date? = nil
+    @Published var healthStatus: ServiceHealth = .healthy
+    private var failureCount: Int = 0
+    private var retryDelay: TimeInterval = 1.0
+    
 
     nonisolated private struct APIResponse: Codable {
         struct Prediction: Codable {
@@ -51,9 +55,8 @@ final class PredictionService: NSObject, ObservableObject {
 
     /// Call this in response to explicit prediction triggers only (timer, UI, startup).
     /// Performs the prediction fetch from the external API using telemetry and user settings.
-    func fetchPrediction(telemetry: TelemetryData, userSettings: UserSettings, measuredDescentRate: Double? = nil) async {
+    func fetchPrediction(telemetry: TelemetryData, userSettings: UserSettings, measuredDescentRate: Double? = nil, version: Int) async {
         print("[DEBUG] fetchPrediction entered.")
-        self.lastPeriodicPredictionTime = Date()
         
         predictionStatus = .fetching
         isLoading = true
@@ -86,11 +89,24 @@ final class PredictionService: NSObject, ObservableObject {
         print("[Debug][PredictionService] API Call: \(urlString)")
         guard let url = URL(string: urlString) else {
             isLoading = false
+            self.healthStatus = .unhealthy // Invalid URL is a persistent issue
+            appLog("PredictionService: Invalid URL: \(urlString)", category: .service, level: .error)
             return
         }
         do {
-            let (data, _) = try await URLSession.shared.data(from: url)
+            appLog("PredictionService: Attempting URLSession data task.", category: .service, level: .debug)
+            let (data, response) = try await URLSession.shared.data(from: url)
+            if let httpResponse = response as? HTTPURLResponse {
+                appLog("PredictionService: HTTP Status Code: \(httpResponse.statusCode)", category: .service, level: .debug)
+                if httpResponse.statusCode != 200 {
+                    let errorString = String(data: data, encoding: .utf8) ?? "Unknown error"
+                    appLog("PredictionService: API returned error status code: \(httpResponse.statusCode), response: \(errorString)", category: .service, level: .error)
+                    throw URLError(.badServerResponse)
+                }
+            }
+            appLog("PredictionService: Data received, attempting JSON decode.", category: .service, level: .debug)
             let apiResponse = try JSONDecoder().decode(APIResponse.self, from: data)
+            appLog("PredictionService: JSON decode successful.", category: .service, level: .debug)
             await MainActor.run { @MainActor in
                 self.path = []
                 var ascentPoints: [CLLocationCoordinate2D] = []
@@ -131,10 +147,16 @@ final class PredictionService: NSObject, ObservableObject {
 
                 if let landingPoint = self.landingPoint {
                     self.persistenceService?.saveLandingPoint(sondeName: telemetry.sondeName, coordinate: landingPoint)
-                    let newPredictionData = PredictionData(path: self.path, burstPoint: self.burstPoint, landingPoint: landingPoint, landingTime: self.landingTime)
+                    var newPredictionData = PredictionData(path: self.path, burstPoint: self.burstPoint, landingPoint: landingPoint, landingTime: self.landingTime)
+                    newPredictionData.version = version
                     self.predictionData = newPredictionData
+                    appLog("PredictionService: PredictionData set successfully.", category: .service, level: .debug)
 
                     self.predictionStatus = .success
+                    self.healthStatus = .healthy // Success, reset health
+                    self.failureCount = 0
+                    self.retryDelay = 1.0
+
                     if self.appInitializationFinished == false {
                         self.appInitializationFinished = true
                     }
@@ -143,34 +165,42 @@ final class PredictionService: NSObject, ObservableObject {
                     if case .fetching = self.predictionStatus {
                         self.predictionStatus = .noValidPrediction
                     }
+                    self.failureCount += 1
+                    self.retryDelay = min(self.retryDelay * 2, 60.0) // Exponential backoff, max 60s
+                    self.healthStatus = self.failureCount >= 3 ? .unhealthy : .degraded
+                    appLog("PredictionService: No valid landing point found after parsing.", category: .service, level: .error)
                 }
                 self.isLoading = false
             }
         } catch {
             await MainActor.run { @MainActor in
-                print("[Debug][PredictionService] Network or JSON parsing failed: \(error.localizedDescription)")
+                appLog("Network or JSON parsing failed: \(error.localizedDescription)", category: .service, level: .error)
                 self.predictionStatus = .error(error.localizedDescription)
                 self.isLoading = false
+
+                self.failureCount += 1
+                self.retryDelay = min(self.retryDelay * 2, 60.0) // Exponential backoff, max 60s
+                self.healthStatus = self.failureCount >= 3 ? .unhealthy : .degraded
             }
-            print("[Debug][PredictionService] Prediction fetch failed with error: \(error.localizedDescription)")
+            appLog("Prediction fetch failed with error: \(error.localizedDescription)", category: .service, level: .error)
             if let decodingError = error as? DecodingError {
                 switch decodingError {
                 case .dataCorrupted(let context):
-                    print("[Debug][PredictionService] Data corrupted: \(context.debugDescription)")
+                    appLog("Data corrupted: \(context.debugDescription)", category: .service, level: .error)
                     if let underlyingError = context.underlyingError {
-                        print("[Debug][PredictionService] Underlying error: \(underlyingError.localizedDescription)")
+                        appLog("Underlying error: \(underlyingError.localizedDescription)", category: .service, level: .error)
                     }
                 case .keyNotFound(let key, let context):
-                    print("[Debug][PredictionService] Key '\(key)' not found: \(context.debugDescription)")
+                    appLog("Key '\(key)' not found: \(context.debugDescription)", category: .service, level: .error)
                 case .valueNotFound(let type, let context):
-                    print("[Debug][PredictionService] Value of type '\(type)' not found: \(context.debugDescription)")
+                    appLog("Value of type '\(type)' not found: \(context.debugDescription)", category: .service, level: .error)
                 case .typeMismatch(let type, let context):
-                    print("[Debug][PredictionService] Type mismatch for type '\(type)': \(context.debugDescription)")
+                    appLog("Type mismatch for type '\(type)': \(context.debugDescription)", category: .service, level: .error)
                 @unknown default:
-                    print("[Debug][PredictionService] Unknown decoding error: \(decodingError.localizedDescription)")
+                    appLog("Unknown decoding error: \(decodingError.localizedDescription)", category: .service, level: .error)
                 }
             }
-            print("[Debug][PredictionService] Return JSON: (Raw data not captured for logging in this scope)")
+            appLog("Return JSON: (Raw data not captured for logging in this scope)", category: .service, level: .debug)
         }
     }
     

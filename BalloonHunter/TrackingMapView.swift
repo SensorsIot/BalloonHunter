@@ -1,10 +1,13 @@
 import SwiftUI
 import MapKit
 import Combine
+import OSLog
 
 struct TrackingMapView: View {
     
-    
+    @State private var containerHeight: CGFloat = 0
+    @State private var lastUpdateStateCall: Date? = nil
+
     @EnvironmentObject var userSettings: UserSettings
     @EnvironmentObject var annotationService: AnnotationService
     @EnvironmentObject var routeService: RouteCalculationService
@@ -14,6 +17,7 @@ struct TrackingMapView: View {
     @EnvironmentObject var persistenceService: PersistenceService
     @EnvironmentObject var balloonTrackingService: BalloonTrackingService
     @EnvironmentObject var landingPointService: LandingPointService
+    @EnvironmentObject var serviceManager: ServiceManager
 
     @State private var showSettings = false
     @State private var transportMode: TransportationMode = .car
@@ -24,10 +28,13 @@ struct TrackingMapView: View {
     @State private var initialRegionSet = false
     @State private var didPerformInitialZoom = false
     @State private var lastRouteCalculationTime: Date?
-    @State private var programmaticUpdateTrigger = 0
+    @State private var shouldUpdateMapRegion = true // New state variable to control map region updates
     @State private var isDirectionUp = false
     @State private var hasFetchedInitialPrediction = false
     @State private var showPrediction = true
+
+    // Added missing state for heading mode
+    @State private var isHeadingMode: Bool = false
 
     // State for polyline overlays
     @State private var balloonTrackPolyline: MKPolyline?
@@ -38,190 +45,123 @@ struct TrackingMapView: View {
     var body: some View {
         GeometryReader { geometry in
             VStack(spacing: 0) {
-                // New top HStack containing settings button to leading and Picker centered
-                HStack {
-                    Button {
-                        showSettings = true
-                    } label: {
-                        Image(systemName: "gearshape")
-                            .imageScale(.large)
-                            .padding(8)
-                    }
-                    .background(.ultraThinMaterial)
-                    .cornerRadius(8)
-
-                    Spacer()
-
-                    Picker("Mode", selection: $transportMode) {
-                        Image(systemName: "car.fill").tag(TransportationMode.car)
-                        Image(systemName: "bicycle").tag(TransportationMode.bike)
-                    }
-                    .pickerStyle(.segmented)
-                    .frame(width: 100)
-
-                    Spacer()
-
-                    Button {
-                        showPrediction.toggle()
-                    } label: {
-                        Image(systemName: showPrediction ? "eye.fill" : "eye.slash.fill")
-                            .imageScale(.large)
-                            .padding(8)
-                    }
-                    .background(.ultraThinMaterial)
-                    .cornerRadius(8)
-
-                    if landingPointService.validLandingPoint == nil {
-                        Button("Landing Point") {
-                            Task {
-                                if let telemetry = bleService.latestTelemetry,
-                                   let userSettings = persistenceService.readPredictionParameters() {
-                                    await predictionService.fetchPrediction(telemetry: telemetry, userSettings: userSettings)
-                                }
-                            }
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 12) {
+                        // Settings button
+                        Button {
+                            showSettings = true
+                        } label: {
+                            Image(systemName: "gearshape")
+                                .imageScale(.large)
+                                .padding(8)
                         }
-                        .buttonStyle(.bordered)
-                        .tint(.blue)
-                    }
-
-                    Button {
-                        readLandingPointFromClipboard()
-                    } label: {
-                        Image(systemName: "doc.on.clipboard")
-                            .imageScale(.large)
-                            .padding(8)
-                    }
-                    .background(.ultraThinMaterial)
-                    .cornerRadius(8)
-
-                    Spacer()
-
-                    Button {
-                        let newMuteState = !(bleService.latestTelemetry?.buzmute ?? false)
-                        bleService.latestTelemetry?.buzmute = newMuteState
-                        let command = "o{mute=\(newMuteState ? 1 : 0)}o"
-                        bleService.sendCommand(command: command)
-                    } label: {
-                        Image(systemName: (bleService.latestTelemetry?.buzmute ?? false) ? "speaker.slash.fill" : "speaker.fill")
-                            .imageScale(.large)
-                            .padding(8)
-                    }
-                    .background(.ultraThinMaterial)
-                    .cornerRadius(8)
-                }
-                .padding(.horizontal, 16)
-                .padding(.top, 16)
-                // No top padding, only minimal horizontal padding from Picker
-
-                ZStack {
-                    MapView(
-                        region: $region,
-                        annotations: annotationService.annotations,
-                        balloonTrack: balloonTrackPolyline,
-                        predictionPath: showPrediction ? predictionPathPolyline : nil,
-                        userRoute: userRoutePolyline,
-                        programmaticUpdateTrigger: programmaticUpdateTrigger,
-                        isDirectionUp: isDirectionUp,
-                        setIsDirectionUp: { newValue in isDirectionUp = newValue },
-                        onAnnotationTapped: { item in
-                            if item.kind == .balloon {
-                                Task {
-                                    if let telemetry = bleService.latestTelemetry,
-                                       let userSettings = persistenceService.readPredictionParameters() {
-                                        await predictionService.fetchPrediction(telemetry: telemetry, userSettings: userSettings)
-                                    }
-                                }
-                            }
-                        },
-                        getUserLocationAndHeading: {
-                            guard let location = locationService.locationData else { return nil }
-                            let heading = location.heading
-                            return (CLLocationCoordinate2D(latitude: location.latitude, longitude: location.longitude), heading)
-                        },
-                        getMapView: { mapView in
-                            self.mapView = mapView
-                        }
-                    )
-                    .frame(height: geometry.size.height * 0.7)
-                    .overlay(alignment: .bottomLeading) {
-                        Button("Overview") {
-                            // Instead of updateCameraToFitAllPoints(), showAnnotations with annotationsForZoom
-                            var annotationsForZoom: [MKAnnotation] = []
-                            if let userLocation = locationService.locationData {
-                                let userAnnotation = MKPointAnnotation()
-                                userAnnotation.coordinate = CLLocationCoordinate2D(latitude: userLocation.latitude, longitude: userLocation.longitude)
-                                annotationsForZoom.append(userAnnotation)
-                            }
-                            if let landing = landingPointService.validLandingPoint {
-                                let landingAnnotation = MKPointAnnotation()
-                                landingAnnotation.coordinate = landing
-                                annotationsForZoom.append(landingAnnotation)
-                            }
-                            if balloonTrackingService.isBalloonFlying {
-                                if let predictionPath = predictionService.predictionData?.path {
-                                    for coord in predictionPath {
-                                        let ann = MKPointAnnotation()
-                                        ann.coordinate = coord
-                                        annotationsForZoom.append(ann)
-                                    }
-                                }
-                                if let routePath = routeService.routeData?.path {
-                                    for coord in routePath {
-                                        let ann = MKPointAnnotation()
-                                        ann.coordinate = coord
-                                        annotationsForZoom.append(ann)
-                                    }
-                                }
-                            }
-                            if !annotationsForZoom.isEmpty, let mapView = mapView {
-                                mapView.showAnnotations(annotationsForZoom, animated: true)
-                            }
-                        }
-                        .font(.headline)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
                         .background(.ultraThinMaterial)
                         .cornerRadius(8)
-                        .padding([.leading, .bottom], 8)
-                    }
-                    .overlay(alignment: .bottomTrailing) {
-                        Button {
-                            withAnimation {
-                                isDirectionUp.toggle()
-                            }
-                        } label: {
-                            Text(isDirectionUp ? "Heading" : "Free")
-                                .font(.headline)
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 8)
-                                .background(.ultraThinMaterial)
-                                .cornerRadius(8)
+
+                        // Transport mode picker
+                        Picker("Mode", selection: $transportMode) {
+                            Image(systemName: "car.fill").tag(TransportationMode.car)
+                            Image(systemName: "bicycle").tag(TransportationMode.bike)
                         }
-                        .padding([.trailing, .bottom], 8)
+                        .pickerStyle(.segmented)
+                        .frame(width: 100)
+
+                        // Prediction toggle button
+                        Button {
+                            showPrediction.toggle()
+                        } label: {
+                            Image(systemName: showPrediction ? "eye.fill" : "eye.slash.fill")
+                                .imageScale(.large)
+                                .padding(8)
+                        }
+                        .background(.ultraThinMaterial)
+                        .cornerRadius(8)
+
+                        // Enter Landing Point button (text, only if no valid landing point)
+                        if landingPointService.validLandingPoint == nil {
+                            Button("Point") {
+                                readLandingPointFromClipboard()
+                            }
+                            .buttonStyle(.bordered)
+                            .tint(.blue)
+                        }
+
+                        // Overview button (text, only if valid landing point exists)
+                        if landingPointService.validLandingPoint != nil {
+                            Button("All") {
+                                showAllAnnotations()
+                            }
+                            .buttonStyle(.borderedProminent)
+                        }
+
+                        // Free/Heading mode toggle button
+                        Button {
+                            isHeadingMode.toggle()
+                        } label: {
+                            Image(systemName: isHeadingMode ? "location.fill" : "location.slash.fill")
+                                .imageScale(.large)
+                                .padding(8)
+                        }
+                        .background(.ultraThinMaterial)
+                        .cornerRadius(8)
+
+                        // Buzzer mute toggle button
+                        Button {
+                            let newMuteState = !(bleService.latestTelemetry?.buzmute ?? false)
+                            bleService.latestTelemetry?.buzmute = newMuteState
+                            let command = "o{mute=\(newMuteState ? 1 : 0)}o"
+                            bleService.sendCommand(command: command)
+                        } label: {
+                            Image(systemName: "speaker.2.fill")
+                                .imageScale(.large)
+                                .padding(8)
+                        }
+                        .background(.ultraThinMaterial)
+                        .cornerRadius(8)
                     }
+                    .padding(.horizontal, 16)
+                    .padding(.top, 16)
+                    .padding(.bottom, 8)
                 }
-            }
-            .safeAreaInset(edge: .bottom, alignment: .center) {
+
+                MapView(
+                    region: $region,
+                    annotations: annotationService.annotations,
+                    balloonTrack: balloonTrackPolyline,
+                    predictionPath: showPrediction ? predictionPathPolyline : nil,
+                    userRoute: userRoutePolyline,
+                    mapView: $mapView, // Pass the binding here
+                    shouldUpdateMapRegion: $shouldUpdateMapRegion, // Pass the new binding
+                    isDirectionUp: isDirectionUp,
+                    setIsDirectionUp: { newValue in isDirectionUp = newValue },
+                    onAnnotationTapped: { item in
+                        if item.kind == .balloon {
+                            serviceManager.uiEventPublisher.send(.annotationSelected(item))
+                        }
+                    },
+                    getUserLocationAndHeading: {
+                        guard let location = locationService.locationData else { return nil }
+                        let heading = location.heading
+                        return (CLLocationCoordinate2D(latitude: location.latitude, longitude: location.longitude), heading)
+                    },
+                    serviceManager: serviceManager,
+                    isHeadingMode: $isHeadingMode
+                )
+                .background(Color.blue.opacity(0.2)) // Temporary background for debugging
+                .frame(height: geometry.size.height * 0.7) // Map takes 70% of GeometryReader height
+
                 DataPanelView()
-                    .frame(maxHeight: .infinity, alignment: .top)
-                    .frame(maxWidth: .infinity)
+                    .frame(maxWidth: .infinity) // Let DataPanelView take its intrinsic height
                     .background(.ultraThinMaterial)
-                    .clipShape(RoundedRectangle(cornerRadius: 0, style: .continuous)) // Changed cornerRadius to 0 for full width
-                    .shadow(radius: 0) // Removed shadow for full width
+                    .clipShape(RoundedRectangle(cornerRadius: 0, style: .continuous))
+                    .shadow(radius: 0)
             }
             .sheet(isPresented: $showSettings) {
                 SettingsView()
             }
             
             .onReceive(locationService.$locationData) { locationData in
-                if !initialRegionSet, let locationData = locationData {
-                    region = MKCoordinateRegion(
-                        center: CLLocationCoordinate2D(latitude: locationData.latitude, longitude: locationData.longitude),
-                        span: MKCoordinateSpan(latitudeDelta: 0.225, longitudeDelta: 0.225) // 25km span
-                    )
-                    initialRegionSet = true
-                }
-                updateStateAndCamera()
+                throttledUpdateStateAndCamera()
 
                 if let userLocationData = locationData,
                    let landingPoint = landingPointService.validLandingPoint {
@@ -230,14 +170,15 @@ struct TrackingMapView: View {
                         routeService.calculateRoute(
                             from: CLLocationCoordinate2D(latitude: userLocationData.latitude, longitude: userLocationData.longitude),
                             to: landingPoint,
-                            transportType: transportMode
+                            transportType: transportMode,
+                            version: 0
                         )
                         lastRouteCalculationTime = now
                     }
                 }
             }
             .onReceive(bleService.telemetryData) { _ in
-                updateStateAndCamera()
+                throttledUpdateStateAndCamera()
                 if !hasFetchedInitialPrediction {
                     guard let telemetry = bleService.latestTelemetry,
                           let userSettings = persistenceService.readPredictionParameters() else {
@@ -246,35 +187,41 @@ struct TrackingMapView: View {
                     }
                     hasFetchedInitialPrediction = true
                     print("[DEBUG] Passing descent rate \(balloonTrackingService.currentEffectiveDescentRate ?? 0.0) to PredictionService")
-                    Task { await predictionService.fetchPrediction(telemetry: telemetry, userSettings: userSettings, measuredDescentRate: abs(balloonTrackingService.currentEffectiveDescentRate ?? userSettings.descentRate)) }
+                    Task { await predictionService.fetchPrediction(telemetry: telemetry, userSettings: userSettings, measuredDescentRate: abs(balloonTrackingService.currentEffectiveDescentRate ?? userSettings.descentRate), version: 0) }
                 }
             }
             .onReceive(predictionService.$predictionData) { _ in
-                updateStateAndCamera()
+                throttledUpdateStateAndCamera()
             }
             .onReceive(routeService.$routeData) { _ in
-                updateStateAndCamera()
+                throttledUpdateStateAndCamera()
+            }
+            .onReceive(serviceManager.cameraPolicy.cameraRegionPublisher) { newRegion in
+                // appLog("Received new region from cameraPolicy: \(newRegion.center.latitude), \(newRegion.center.longitude)", category: .ui, level: .debug)
+                // region = newRegion // Commented out to disable automatic region updates
             }
             
             .onChange(of: transportMode) {
-                routeService.routeData = nil
-                if let userLocationData = locationService.locationData,
-                   let landingPoint = landingPointService.validLandingPoint {
-                    routeService.calculateRoute(
-                        from: CLLocationCoordinate2D(latitude: userLocationData.latitude, longitude: userLocationData.longitude),
-                        to: landingPoint,
-                        transportType: transportMode
-                    )
-                }
+                serviceManager.uiEventPublisher.send(.modeSwitched(transportMode))
             }
-            
             
             // Removed the .onChange(of: annotationService.appState) block as requested.
         }
     }
+    
+    private func throttledUpdateStateAndCamera() {
+        let now = Date()
+        if let last = lastUpdateStateCall, now.timeIntervalSince(last) < 0.5 { return }
+        lastUpdateStateCall = now
+        updateStateAndCamera()
+    }
 
     private func updateStateAndCamera() {
         // First, update the state
+        appLog("updateStateAndCamera called.", category: .ui, level: .debug)
+        appLog("User Location Data: \(String(describing: locationService.locationData))", category: .ui, level: .debug)
+        appLog("Prediction Data: \(String(describing: predictionService.predictionData))", category: .ui, level: .debug)
+
         annotationService.updateState(
             telemetry: bleService.latestTelemetry,
             userLocation: locationService.locationData,
@@ -290,17 +237,25 @@ struct TrackingMapView: View {
         if !trackPoints.isEmpty {
             let polyline = MKPolyline(coordinates: trackPoints, count: trackPoints.count)
             polyline.title = "balloonTrack"
-            self.balloonTrackPolyline = polyline
-        } else {
+            if balloonTrackPolyline == nil || !polylinesEqual(lhs: balloonTrackPolyline!, rhs: polyline) {
+                self.balloonTrackPolyline = polyline
+                appLog("Balloon Track Polyline set.", category: .ui, level: .debug)
+            }
+        } else if balloonTrackPolyline != nil {
             self.balloonTrackPolyline = nil
+            appLog("Balloon Track Polyline cleared.", category: .ui, level: .debug)
         }
 
         if let predictionPath = predictionService.predictionData?.path, !predictionPath.isEmpty {
             let polyline = MKPolyline(coordinates: predictionPath, count: predictionPath.count)
             polyline.title = "predictionPath"
-            self.predictionPathPolyline = polyline
-        } else {
+            if predictionPathPolyline == nil || !polylinesEqual(lhs: predictionPathPolyline!, rhs: polyline) {
+                self.predictionPathPolyline = polyline
+                appLog("Prediction Path Polyline set.", category: .ui, level: .debug)
+            }
+        } else if predictionPathPolyline != nil {
             self.predictionPathPolyline = nil
+            appLog("Prediction Path Polyline cleared.", category: .ui, level: .debug)
         }
 
         if let routePath = routeService.routeData?.path, !routePath.isEmpty {
@@ -311,15 +266,25 @@ struct TrackingMapView: View {
                 let userCLLocation = CLLocation(latitude: userLocation.latitude, longitude: userLocation.longitude)
                 let balloonCLLocation = CLLocation(latitude: balloonLocation.latitude, longitude: balloonLocation.longitude)
                 if userCLLocation.distance(from: balloonCLLocation) < 100 {
-                    self.userRoutePolyline = nil
+                    if userRoutePolyline != nil {
+                        self.userRoutePolyline = nil
+                        appLog("User Route Polyline cleared (distance < 100m).", category: .ui, level: .debug)
+                    }
                 } else {
-                    self.userRoutePolyline = polyline
+                    if userRoutePolyline == nil || !polylinesEqual(lhs: userRoutePolyline!, rhs: polyline) {
+                        self.userRoutePolyline = polyline
+                        appLog("User Route Polyline set.", category: .ui, level: .debug)
+                    }
                 }
             } else {
-                self.userRoutePolyline = polyline
+                if userRoutePolyline == nil || !polylinesEqual(lhs: userRoutePolyline!, rhs: polyline) {
+                    self.userRoutePolyline = polyline
+                    appLog("User Route Polyline set (no user/balloon location).", category: .ui, level: .debug)
+                }
             }
-        } else {
+        } else if userRoutePolyline != nil {
             self.userRoutePolyline = nil
+            appLog("User Route Polyline cleared.", category: .ui, level: .debug)
         }
 
         // Then, update the camera
@@ -336,48 +301,40 @@ struct TrackingMapView: View {
             annotationsForZoom.append(landingAnnotation)
         }
         if balloonTrackingService.isBalloonFlying {
-            if let predictionPath = predictionService.predictionData?.path {
-                for coord in predictionPath {
-                    let ann = MKPointAnnotation()
-                    ann.coordinate = coord
-                    annotationsForZoom.append(ann)
-                }
+            if let predictionPath = predictionService.predictionData?.path, !predictionPath.isEmpty {
+                let startCoord = predictionPath.first!
+                let endCoord = predictionPath.last!
+                let startAnnotation = MKPointAnnotation()
+                startAnnotation.coordinate = startCoord
+                let endAnnotation = MKPointAnnotation()
+                endAnnotation.coordinate = endCoord
+                annotationsForZoom.append(startAnnotation)
+                annotationsForZoom.append(endAnnotation)
             }
-            if let routePath = routeService.routeData?.path {
-                for coord in routePath {
-                    let ann = MKPointAnnotation()
-                    ann.coordinate = coord
-                    annotationsForZoom.append(ann)
-                }
+            if let routePath = routeService.routeData?.path, !routePath.isEmpty {
+                let startCoord = routePath.first!
+                let endCoord = routePath.last!
+                let startAnnotation = MKPointAnnotation()
+                startAnnotation.coordinate = startCoord
+                let endAnnotation = MKPointAnnotation()
+                endAnnotation.coordinate = endCoord
+                annotationsForZoom.append(startAnnotation)
+                annotationsForZoom.append(endAnnotation)
             }
-        }
-        
-        // Debug output preserved from previous zoom logic:
-        if let userLocation = locationService.locationData {
-            print("[DEBUG][ZOOM] userLocation: \(userLocation.latitude), \(userLocation.longitude)")
-        } else {
-            print("[DEBUG][ZOOM] userLocation: nil")
-        }
-        if let landing = landingPointService.validLandingPoint {
-            print("[DEBUG][ZOOM] landingPoint: \(landing.latitude), \(landing.longitude)")
-        } else {
-            print("[DEBUG][ZOOM] landingPoint: nil")
-        }
-        print("[DEBUG][ZOOM] isBalloonFlying: \(balloonTrackingService.isBalloonFlying)")
-        print("[DEBUG][ZOOM] zoomCoordinates count: \(annotationsForZoom.count)")
-        for (index, annotation) in annotationsForZoom.enumerated() {
-            print("[DEBUG][ZOOM] zoomCoordinates[\(index)]: lat=\(annotation.coordinate.latitude), lon=\(annotation.coordinate.longitude)")
         }
         
         if !annotationsForZoom.isEmpty, let mapView = mapView {
-            mapView.showAnnotations(annotationsForZoom, animated: true)
-            return
+            if !initialRegionSet {
+                mapView.showAnnotations(annotationsForZoom, animated: true)
+                initialRegionSet = true
+                appLog("Initial map region set with \(annotationsForZoom.count) annotations.", category: .ui, level: .debug)
+                return
+            }
+            // If initialRegionSet is true, do not update the region to preserve user control
         }
         
 //        Removed custom manual camera/region calculation and updateCameraToFitAllPoints calls.
     }
-
-    
 
     private func readLandingPointFromClipboard() {
         if let clipboardString = UIPasteboard.general.string {
@@ -415,19 +372,76 @@ struct TrackingMapView: View {
         }
     }
 
-    
+    private func showAllAnnotations() {
+        guard let mapView = mapView else { return }
+
+        var annotationsToDisplay: [MKAnnotation] = []
+
+        // Add user location if available
+        if let userLocation = locationService.locationData {
+            let userAnnotation = MKPointAnnotation()
+            userAnnotation.coordinate = CLLocationCoordinate2D(latitude: userLocation.latitude, longitude: userLocation.longitude)
+            annotationsToDisplay.append(userAnnotation)
+        }
+
+        // Add landing point if available
+        if let landing = landingPointService.validLandingPoint {
+            let landingAnnotation = MKPointAnnotation()
+            landingAnnotation.coordinate = landing
+            annotationsToDisplay.append(landingAnnotation)
+        }
+
+        // Add balloon's current position if available and flying
+        if let telemetry = bleService.latestTelemetry, balloonTrackingService.isBalloonFlying {
+            let balloonAnnotation = MKPointAnnotation()
+            balloonAnnotation.coordinate = CLLocationCoordinate2D(latitude: telemetry.latitude, longitude: telemetry.longitude)
+            annotationsToDisplay.append(balloonAnnotation)
+        }
+
+        // Add burst point if available and balloon is ascending
+        if let prediction = predictionService.predictionData, let burst = prediction.burstPoint, bleService.latestTelemetry?.verticalSpeed ?? 0 >= 0 {
+            let burstAnnotation = MKPointAnnotation()
+            burstAnnotation.coordinate = burst
+            annotationsToDisplay.append(burstAnnotation)
+        }
+
+        // Add start/end points of polylines if they exist
+        if let balloonTrack = balloonTrackPolyline, let first = balloonTrack.coordinates.first, let last = balloonTrack.coordinates.last {
+            let startAnnotation = MKPointAnnotation()
+            startAnnotation.coordinate = first
+            let endAnnotation = MKPointAnnotation()
+            endAnnotation.coordinate = last
+            annotationsToDisplay.append(startAnnotation)
+            annotationsToDisplay.append(endAnnotation)
+        }
+
+        if let predictionPath = predictionService.predictionData?.path, !predictionPath.isEmpty, let first = predictionPath.first, let last = predictionPath.last {
+            let startAnnotation = MKPointAnnotation()
+            startAnnotation.coordinate = first
+            let endAnnotation = MKPointAnnotation()
+            endAnnotation.coordinate = last
+            annotationsToDisplay.append(startAnnotation)
+            annotationsToDisplay.append(endAnnotation)
+        }
+
+        if let userRoute = userRoutePolyline, let first = userRoute.coordinates.first, let last = userRoute.coordinates.last {
+            let startAnnotation = MKPointAnnotation()
+            startAnnotation.coordinate = first
+            let endAnnotation = MKPointAnnotation()
+            endAnnotation.coordinate = last
+            annotationsToDisplay.append(startAnnotation)
+            annotationsToDisplay.append(endAnnotation)
+        }
+
+        if !annotationsToDisplay.isEmpty {
+            mapView.showAnnotations(annotationsToDisplay, animated: true)
+        }
+    }
+
+    // End of TrackingMapView struct
 }
 
-/// Compares two MKPolyline objects for equality by checking their coordinates.
-private func polylinesEqual(lhs: MKPolyline, rhs: MKPolyline) -> Bool {
-    guard lhs.pointCount == rhs.pointCount else { return false }
-    let lhsCoords = lhs.coordinates
-    let rhsCoords = rhs.coordinates
-    for (a, b) in zip(lhsCoords, rhsCoords) {
-        if a.latitude != b.latitude || a.longitude != b.longitude { return false }
-    }
-    return true
-}
+ // Added closing brace to end TrackingMapView struct
 
 // MARK: - MapView UIViewRepresentable
 
@@ -441,180 +455,77 @@ private struct MapView: UIViewRepresentable {
     let balloonTrack: MKPolyline?
     let predictionPath: MKPolyline?
     let userRoute: MKPolyline?
-    let programmaticUpdateTrigger: Int
+    @Binding var mapView: MKMapView? // Changed to Binding
+    @Binding var shouldUpdateMapRegion: Bool // New binding
     let isDirectionUp: Bool
     let setIsDirectionUp: (Bool) -> Void
     let onAnnotationTapped: (MapAnnotationItem) -> Void
     let getUserLocationAndHeading: (() -> (CLLocationCoordinate2D, CLLocationDirection)?)
-    let getMapView: (MKMapView) -> Void
+    let serviceManager: ServiceManager // Added serviceManager
+    @Binding var isHeadingMode: Bool
 
     func makeUIView(context: Context) -> MKMapView {
+        print("[DEBUG] MapView makeUIView called")
         let mapView = MKMapView()
         mapView.delegate = context.coordinator
         mapView.mapType = .standard // Changed map style to standard for roads only
+        mapView.showsUserLocation = true
+
+        // Explicitly enable user interaction and all interaction types
+        mapView.isUserInteractionEnabled = true
+
         mapView.register(CustomAnnotationView.self, forAnnotationViewWithReuseIdentifier: "custom")
 
-        // Remove default double-tap (zoom) gesture recognizer
-        if let recognizers = mapView.gestureRecognizers {
-            for recognizer in recognizers {
-                if let tap = recognizer as? UITapGestureRecognizer, tap.numberOfTapsRequired == 2 {
-                    mapView.removeGestureRecognizer(tap)
-                }
-            }
+        DispatchQueue.main.async { // Assign on the next run loop cycle
+            self.mapView = mapView
         }
-
-        // Removed longPressGestureRecognizer setup as per instructions
-        getMapView(mapView)
         return mapView
     }
 
     func updateUIView(_ uiView: MKMapView, context: Context) {
-        // --- Update Annotations ---
-        // Get current annotations on the map view
-        let existingMapAnnotations = uiView.annotations.compactMap { $0 as? CustomMapAnnotation }
-        var existingMapAnnotationMap = [String: CustomMapAnnotation]()
-        for annotation in existingMapAnnotations {
-            if let id = annotation.item?.id { // Use the stable ID from MapAnnotationItem
-                existingMapAnnotationMap[id] = annotation
-            }
-        }
+        appLog("MapView updateUIView called.", category: .ui, level: .debug)
+        appLog("Annotations passed to MapView: \(annotations.count)", category: .ui, level: .debug)
+        appLog("Balloon Track Polyline passed: \(balloonTrack != nil)", category: .ui, level: .debug)
+        appLog("Prediction Path Polyline passed: \(predictionPath != nil)", category: .ui, level: .debug)
+        appLog("User Route Polyline passed: \(userRoute != nil)", category: .ui, level: .debug)
 
-        var annotationsToAdd = [CustomMapAnnotation]()
-        var annotationsToRemove = [MKAnnotation]()
+        // Control map interaction based on isHeadingMode
+        if isHeadingMode {
+            uiView.isScrollEnabled = false
+            uiView.isZoomEnabled = true
+            uiView.isPitchEnabled = false
+            uiView.isRotateEnabled = false
 
-        // Determine which annotations to add, update, or remove
-        let newAnnotationItemsMap = Dictionary(uniqueKeysWithValues: annotations.map { ($0.id, $0) })
-
-        for newItem in annotations {
-            if let existingAnnotation = existingMapAnnotationMap[newItem.id] {
-                // Annotation exists, update its properties
-                existingAnnotation.coordinate = newItem.coordinate
-                existingAnnotation.item = newItem // Update the item reference
-            } else {
-                // New annotation
-                let annotation = CustomMapAnnotation()
-                annotation.coordinate = newItem.coordinate
-                annotation.item = newItem
-                annotationsToAdd.append(annotation)
-            }
-        }
-
-        for existingAnnotation in existingMapAnnotations {
-            if let id = existingAnnotation.item?.id, newAnnotationItemsMap[id] == nil {
-                // Annotation no longer in new data, mark for removal
-                annotationsToRemove.append(existingAnnotation)
-            }
-        }
-
-        // Perform updates
-        if !annotationsToRemove.isEmpty {
-            uiView.removeAnnotations(annotationsToRemove)
-        }
-        if !annotationsToAdd.isEmpty {
-            uiView.addAnnotations(annotationsToAdd)
-        }
-        // For annotationsToUpdate, their properties are already updated in place.
-        // MKMapView will automatically reflect changes to coordinate if the annotation object is the same.
-
-
-        // --- Update Overlays ---
-        // Keep track of current overlays on the map view
-        let existingMapOverlays = uiView.overlays.compactMap { $0 as? MKPolyline }
-        var existingMapOverlayMap = [String: MKPolyline]()
-        for overlay in existingMapOverlays {
-            if let title = overlay.title {
-                existingMapOverlayMap[title] = overlay
-            }
-        }
-
-        var overlaysToAdd = [MKPolyline]()
-        var overlaysToRemove = [MKOverlay]()
-
-        // Process balloonTrackPolyline
-        if let newBalloonTrack = balloonTrack {
-            if let existing = existingMapOverlayMap["balloonTrack"], polylinesEqual(lhs: existing, rhs: newBalloonTrack) {
-                // Same polyline, no change needed
-            } else {
-                if let existing = existingMapOverlayMap["balloonTrack"] {
-                    overlaysToRemove.append(existing)
-                }
-                overlaysToAdd.append(newBalloonTrack)
+            if let (userLocation, userHeading) = getUserLocationAndHeading() {
+                let currentCamera = uiView.camera
+                let newCamera = MKMapCamera(lookingAtCenter: userLocation, fromDistance: currentCamera.centerCoordinateDistance, pitch: currentCamera.pitch, heading: userHeading)
+                uiView.setCamera(newCamera, animated: true)
             }
         } else {
-            if let existing = existingMapOverlayMap["balloonTrack"] {
-                overlaysToRemove.append(existing)
-            }
-        }
+            uiView.isScrollEnabled = true
+            uiView.isZoomEnabled = true
+            uiView.isPitchEnabled = true
+            uiView.isRotateEnabled = true
 
-        // Process predictionPathPolyline
-        if let newPredictionPath = predictionPath {
-            if let existing = existingMapOverlayMap["predictionPath"], polylinesEqual(lhs: existing, rhs: newPredictionPath) {
-                // Same polyline, no change needed
-            } else {
-                if let existing = existingMapOverlayMap["predictionPath"] {
-                    overlaysToRemove.append(existing)
-                }
-                overlaysToAdd.append(newPredictionPath)
-            }
-        } else {
-            if let existing = existingMapOverlayMap["predictionPath"] {
-                overlaysToRemove.append(existing)
-            }
+            // Reset camera heading to 0 (North) when switching to Free mode
+            let currentCamera = uiView.camera
+            let newCamera = MKMapCamera(lookingAtCenter: currentCamera.centerCoordinate, fromDistance: currentCamera.centerCoordinateDistance, pitch: currentCamera.pitch, heading: 0)
+            uiView.setCamera(newCamera, animated: true)
         }
-
-        // Process userRoutePolyline
-        if let newUserRoute = userRoute {
-            if let existing = existingMapOverlayMap["userRoute"], polylinesEqual(lhs: existing, rhs: newUserRoute) {
-                // Same polyline, no change needed
-            } else {
-                if let existing = existingMapOverlayMap["userRoute"] {
-                    overlaysToRemove.append(existing)
-                }
-                overlaysToAdd.append(newUserRoute)
-            }
-        } else {
-            if let existing = existingMapOverlayMap["userRoute"] {
-                overlaysToRemove.append(existing)
-            }
-        }
-
-        // Perform updates
-        if !overlaysToRemove.isEmpty {
-            uiView.removeOverlays(overlaysToRemove)
-        }
-        if !overlaysToAdd.isEmpty {
-            uiView.addOverlays(overlaysToAdd)
-        }
-
-        // If the programmaticUpdateTrigger changed, call showAnnotations to zoom and center map to all annotations.
-        if context.coordinator.lastUpdateTrigger != programmaticUpdateTrigger {
-            let annotationsForDebug = uiView.annotations
-            print("[DEBUG] Calling showAnnotations with the following annotations:")
-            for annotation in annotationsForDebug {
-                if let title = annotation.title {
-                    print("\tAnnotation: \(annotation), title: \(title) coordinate: \(annotation.coordinate)")
-                } else {
-                    print("\tAnnotation: \(annotation), coordinate: \(annotation.coordinate)")
-                }
-            }
-            uiView.showAnnotations(annotationsForDebug, animated: true)
-            context.coordinator.lastUpdateTrigger = programmaticUpdateTrigger
-        }
-
-        // Handle changes in isDirectionUp by updating camera heading accordingly
-        context.coordinator.updateCameraHeading(isDirectionUp: isDirectionUp, mapView: uiView, getUserLocationAndHeading: getUserLocationAndHeading)
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(self)
+        Coordinator(self, serviceManager: serviceManager)
     }
 
     class Coordinator: NSObject, MKMapViewDelegate {
         var parent: MapView
         var lastUpdateTrigger: Int = 0
+        var serviceManager: ServiceManager
 
-        init(_ parent: MapView) {
+        init(_ parent: MapView, serviceManager: ServiceManager) {
             self.parent = parent
+            self.serviceManager = serviceManager
         }
 
         func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
@@ -639,10 +550,14 @@ private struct MapView: UIViewRepresentable {
         }
 
         func mapView(_ mapView: MKMapView, regionDidChangeAnimated animated: Bool) {
-            parent.region = mapView.region
+            // serviceManager.uiEventPublisher.send(.cameraRegionChanged(mapView.region)) // Removed to break feedback loop
         }
 
         func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
+            if annotation is MKUserLocation {
+                return nil
+            }
+            
             guard let annotation = annotation as? CustomMapAnnotation else { return nil }
 
             let identifier = "custom"
@@ -713,21 +628,29 @@ private struct AnnotationHostingView: View {
 // End of AnnotationHostingView definition.
 
 private class CustomAnnotationView: MKAnnotationView {
-    private var hostingController: UIHostingController<AnnotationHostingView>? // Use a specific hosting view
+    private var hostingController: UIHostingController<AnnotationHostingView>?
     private var currentItem: MapAnnotationItem?
 
     override init(annotation: MKAnnotation?, reuseIdentifier: String?) {
         super.init(annotation: annotation, reuseIdentifier: reuseIdentifier)
-        self.frame = CGRect(x: 0, y: 0, width: 90, height: 90)
+        self.frame = CGRect(x: 0, y: 0, width: 90, height: 90) // Set a fixed frame for the annotation view
         self.backgroundColor = .clear
+        self.canShowCallout = false // Disable callouts for custom annotations
 
-        // Initialize hostingController once with a placeholder item
+        // Initialize hostingController once
         let initialItem = MapAnnotationItem(coordinate: CLLocationCoordinate2D(), kind: .user) // Placeholder
-        let newHostingController = UIHostingController(rootView: AnnotationHostingView(item: initialItem))
-        newHostingController.view.backgroundColor = .clear
-        self.addSubview(newHostingController.view)
-        newHostingController.view.frame = self.bounds
-        self.hostingController = newHostingController
+        hostingController = UIHostingController(rootView: AnnotationHostingView(item: initialItem))
+        if let hcView = hostingController?.view {
+            hcView.backgroundColor = .clear
+            hcView.translatesAutoresizingMaskIntoConstraints = false
+            self.addSubview(hcView)
+            NSLayoutConstraint.activate([
+                hcView.centerXAnchor.constraint(equalTo: self.centerXAnchor),
+                hcView.centerYAnchor.constraint(equalTo: self.centerYAnchor),
+                hcView.widthAnchor.constraint(equalTo: self.widthAnchor),
+                hcView.heightAnchor.constraint(equalTo: self.heightAnchor)
+            ])
+        }
     }
 
     required init?(coder aDecoder: NSCoder) {
@@ -735,14 +658,26 @@ private class CustomAnnotationView: MKAnnotationView {
     }
 
     func setup(with item: MapAnnotationItem) {
-        let newHostingController = UIHostingController(rootView: AnnotationHostingView(item: item))
-        newHostingController.view.backgroundColor = .clear
-        // Remove any previous hostingController's view from superview
-        self.hostingController?.view.removeFromSuperview()
-        self.addSubview(newHostingController.view)
-        newHostingController.view.frame = self.bounds
-        self.hostingController = newHostingController
+        appLog("CustomAnnotationView setup called for kind: \(item.kind)", category: .ui, level: .debug)
+        // Update the rootView of the existing hostingController
+        if let hc = hostingController {
+            hc.rootView = AnnotationHostingView(item: item)
+        }
         self.currentItem = item
+
+        // Adjust centerOffset based on the kind of annotation for proper anchoring
+        switch item.kind {
+        case .user:
+            self.centerOffset = CGPoint(x: 0, y: 0) // Center the icon
+        case .balloon:
+            self.centerOffset = CGPoint(x: 0, y: -20) // Adjust for balloon's bottom anchor
+        case .burst:
+            self.centerOffset = CGPoint(x: 0, y: -15) // Adjust for burst icon
+        case .landing:
+            self.centerOffset = CGPoint(x: 0, y: -15) // Adjust for pin icon
+        case .landed:
+            self.centerOffset = CGPoint(x: 0, y: -15) // Adjust for pin icon
+        }
     }
 
     override var annotation: MKAnnotation? {
@@ -755,5 +690,15 @@ private class CustomAnnotationView: MKAnnotationView {
             }
         }
     }
+}
+
+fileprivate func polylinesEqual(lhs: MKPolyline, rhs: MKPolyline) -> Bool {
+    guard lhs.pointCount == rhs.pointCount else { return false }
+    let lhsCoords = lhs.coordinates
+    let rhsCoords = rhs.coordinates
+    for (a, b) in zip(lhsCoords, rhsCoords) {
+        if a.latitude != b.latitude || a.longitude != b.longitude { return false }
+    }
+    return true
 }
 

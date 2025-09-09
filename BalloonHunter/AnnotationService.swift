@@ -4,6 +4,7 @@ import SwiftUI
 import CoreBluetooth
 import CoreLocation
 import MapKit
+import os
 
 @MainActor
 final class AnnotationService: ObservableObject {
@@ -130,7 +131,7 @@ final class AnnotationService: ObservableObject {
         prediction: PredictionData?,
         lastTelemetryUpdateTime: Date?
     ) {
-        
+        appLog("updateAnnotations called.", category: .ui, level: .debug)
 
         var currentAnnotationMap: [MapAnnotationItem.AnnotationKind: MapAnnotationItem] = [:]
         for annotation in self.annotations {
@@ -144,6 +145,7 @@ final class AnnotationService: ObservableObject {
             userAnnotation.coordinate = CLLocationCoordinate2D(latitude: userLoc.latitude, longitude: userLoc.longitude)
             newAnnotations.append(userAnnotation)
             currentAnnotationMap.removeValue(forKey: .user)
+            appLog("User annotation added/updated.", category: .ui, level: .debug)
         }
 
         if let tel = telemetry, (self.appState == .longRangeTracking) {
@@ -157,12 +159,14 @@ final class AnnotationService: ObservableObject {
             balloonAnnotation.altitude = tel.altitude
             newAnnotations.append(balloonAnnotation)
             currentAnnotationMap.removeValue(forKey: .balloon)
+            appLog("Balloon annotation added/updated. Ascending: \(isAscending)", category: .ui, level: .debug)
 
             if isAscending, let burst = prediction?.burstPoint {
                 let burstAnnotation = currentAnnotationMap[.burst] ?? MapAnnotationItem(coordinate: CLLocationCoordinate2D(), kind: .burst)
                 burstAnnotation.coordinate = burst
                 newAnnotations.append(burstAnnotation)
                 currentAnnotationMap.removeValue(forKey: .burst)
+                appLog("Burst annotation added/updated.", category: .ui, level: .debug)
             }
         }
 
@@ -171,9 +175,14 @@ final class AnnotationService: ObservableObject {
             landingAnnotation.coordinate = landing
             newAnnotations.append(landingAnnotation)
             currentAnnotationMap.removeValue(forKey: .landing)
+            appLog("Landing annotation added/updated.", category: .ui, level: .debug)
         }
 
         self.annotations = newAnnotations
+        appLog("Total annotations after update: \(self.annotations.count)", category: .ui, level: .debug)
+        for annotation in newAnnotations {
+            appLog("  Annotation kind: \(annotation.kind), coordinate: \(annotation.coordinate.latitude), \(annotation.coordinate.longitude)", category: .ui, level: .debug)
+        }
     }
 }
 

@@ -1,6 +1,7 @@
 import Foundation
 import Combine
 import CoreLocation
+import OSLog
 
 @MainActor
 final class LandingPointService: ObservableObject {
@@ -33,18 +34,21 @@ final class LandingPointService: ObservableObject {
     private func updateValidLandingPoint() {
         if balloonTrackingService.isLanded, let landedPosition = balloonTrackingService.landedPosition {
             validLandingPoint = landedPosition
-            print("Valid landing point from Telemetry: \(landedPosition)")
+            appLog("Valid landing point from Telemetry: \(landedPosition)", category: .service, level: .info)
         } else if let predictedLandingPoint = predictionService.predictionData?.landingPoint {
             validLandingPoint = predictedLandingPoint
             print("Valid landing point from Prediction: \(predictedLandingPoint)")
         } else if let manualLandingPoint = persistenceService.loadLandingPoint(sondeName: "manual_override") {
             validLandingPoint = manualLandingPoint
-            print("Valid landing point from Clipboard: \(manualLandingPoint)")
+            print("Valid landing point from Manual Override: \(manualLandingPoint)")
         } else if let sondeName = balloonTrackingService.currentBalloonName, let persistedLandingPoint = persistenceService.loadLandingPoint(sondeName: sondeName) {
             validLandingPoint = persistedLandingPoint
             print("Valid landing point from Persistence: \(persistedLandingPoint)")
         } else {
             validLandingPoint = nil
+            if let sondeName = balloonTrackingService.currentBalloonName {
+                persistenceService.clearLandingPoint(sondeName: sondeName)
+            }
             print("No valid landing point available")
         }
 
