@@ -6,6 +6,39 @@ import CoreLocation
 import MapKit
 import OSLog
 
+// MARK: - Application Logging
+
+enum LogCategory: String {
+    case event = "Event"
+    case policy = "Policy"
+    case service = "Service"
+    case ui = "UI"
+    case cache = "Cache"
+    case general = "General"
+    case persistence = "Persistence"
+    case ble = "BLE"
+    case lifecycle = "Lifecycle"
+}
+
+nonisolated func appLog(_ message: String, category: LogCategory, level: OSLogType = .default) {
+    let formatter = DateFormatter()
+    formatter.dateFormat = "HH:mm:ss.SSS"
+    let timestamp = formatter.string(from: Date.now)
+    let timestampedMessage = "[\(timestamp)] \(message)"
+    
+    let logger = Logger(subsystem: "com.yourcompany.BalloonHunter", category: category.rawValue)
+    switch level {
+    case OSLogType.debug: logger.debug("\(timestampedMessage)")
+    case OSLogType.info: logger.info("\(timestampedMessage)")
+    case OSLogType.error: logger.error("\(timestampedMessage)")
+    case OSLogType.fault: logger.fault("\(timestampedMessage)")
+    default: logger.log("\(timestampedMessage)")
+    }
+}
+
+
+// MARK: - Service Manager
+
 @MainActor
 final class ServiceManager: ObservableObject {
     // Core infrastructure
@@ -77,3 +110,59 @@ final class ServiceManager: ObservableObject {
     }
 }
 
+// MARK: - Application Lifecycle Management
+
+protocol ApplicationLifecycleDelegate {
+    func applicationDidBecomeActive()
+    func applicationWillResignActive()
+    func applicationDidEnterBackground()
+    func applicationWillEnterForeground()
+}
+
+@MainActor
+class ApplicationCoordinator: ObservableObject {
+    @Published private(set) var isInitialized = false
+    @Published private(set) var startupProgress: Double = 0.0
+    @Published private(set) var startupMessage = "Starting up..."
+    
+    private var delegates: [ApplicationLifecycleDelegate] = []
+    
+    func addLifecycleDelegate(_ delegate: ApplicationLifecycleDelegate) {
+        delegates.append(delegate)
+    }
+    
+    func removeLifecycleDelegate(_ delegate: ApplicationLifecycleDelegate) {
+        delegates.removeAll { $0 as AnyObject === delegate as AnyObject }
+    }
+    
+    func completeStartup() {
+        guard !isInitialized else { return }
+        isInitialized = true
+        NotificationCenter.default.post(name: .startupCompleted, object: nil)
+        appLog("ApplicationCoordinator: Startup completed", category: .lifecycle, level: .info)
+    }
+    
+    func updateStartupProgress(_ progress: Double, message: String) {
+        startupProgress = progress
+        startupMessage = message
+        appLog("ApplicationCoordinator: Startup progress \(Int(progress * 100))% - \(message)", 
+               category: .lifecycle, level: .debug)
+    }
+    
+    // Lifecycle event forwarding
+    func applicationDidBecomeActive() {
+        delegates.forEach { $0.applicationDidBecomeActive() }
+    }
+    
+    func applicationWillResignActive() {
+        delegates.forEach { $0.applicationWillResignActive() }
+    }
+    
+    func applicationDidEnterBackground() {
+        delegates.forEach { $0.applicationDidEnterBackground() }
+    }
+    
+    func applicationWillEnterForeground() {
+        delegates.forEach { $0.applicationWillEnterForeground() }
+    }
+}

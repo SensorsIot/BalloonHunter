@@ -42,27 +42,82 @@ struct BalloonHunterApp: App {
     @StateObject var serviceManager = ServiceManager()
     @StateObject var appSettings = AppSettings()
     @StateObject var userSettings = UserSettings()
-    @State private var startupCompleted = false
+    @State private var locationReady = false
+    @State private var animateLoading = false
 
     var body: some Scene {
         WindowGroup {
-            if startupCompleted {
+            ZStack {
+                // TrackingMapView always present (building in background)
                 TrackingMapView()
                     .environmentObject(serviceManager.mapState)
                     .environmentObject(appSettings)
                     .environmentObject(userSettings)
                     .environmentObject(serviceManager)
                     .onAppear {
+                        // Ensure event-driven flow is initialized when map appears
                         serviceManager.initializeEventDrivenFlow()
                     }
-            } else {
+                
+                // Logo overlay (shown until location ready)
+                if !locationReady {
+                    VStack {
+                        Spacer()
+                        
+                        Image(systemName: "balloon.fill")
+                            .font(.system(size: 80))
+                            .foregroundColor(.blue)
+                            .scaleEffect(animateLoading ? 1.1 : 1.0)
+                            .animation(.easeInOut(duration: 1.5).repeatForever(autoreverses: true), value: animateLoading)
+                        
+                        Text("BalloonHunter")
+                            .font(.largeTitle)
+                            .fontWeight(.bold)
+                            .foregroundColor(.primary)
+                            .padding(.top, 20)
+                        
+                        Text("Weather Balloon Tracking")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                            .padding(.top, 5)
+                        
+                        Spacer()
+                        
+                        // Subtle progress indicator
+                        HStack(spacing: 8) {
+                            ForEach(0..<3) { index in
+                                Circle()
+                                    .fill(Color.blue.opacity(0.6))
+                                    .frame(width: 8, height: 8)
+                                    .scaleEffect(animateLoading ? 1.3 : 0.7)
+                                    .animation(
+                                        Animation.easeInOut(duration: 0.6)
+                                            .repeatForever()
+                                            .delay(Double(index) * 0.2),
+                                        value: animateLoading
+                                    )
+                            }
+                        }
+                        .padding(.bottom, 50)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color(UIColor.systemBackground))
+                    .onAppear {
+                        animateLoading = true
+                    }
+                }
+                
+                // Invisible startup view running in background
                 StartupView()
                     .environmentObject(serviceManager)
                     .environmentObject(userSettings)
-                    .onReceive(NotificationCenter.default.publisher(for: .startupCompleted)) { _ in
-                        appLog("BalloonHunterApp: Received startupCompleted notification.", category: .lifecycle, level: .info)
-                        startupCompleted = true
-                    }
+                    .opacity(0)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .locationReady)) { _ in
+                appLog("BalloonHunterApp: Received locationReady notification, hiding logo overlay.", category: .lifecycle, level: .info)
+                withAnimation(.easeInOut(duration: 0.8)) {
+                    locationReady = true
+                }
             }
         }
         .onChange(of: scenePhase) { oldScenePhase, newScenePhase in

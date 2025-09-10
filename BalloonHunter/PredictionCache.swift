@@ -8,14 +8,14 @@ struct CacheEntry<T>: Sendable where T: Sendable {
     let version: Int
     let accessCount: Int
     
-    init(data: T, version: Int, timestamp: Date = Date()) {
+    nonisolated init(data: T, version: Int, timestamp: Date = Date()) {
         self.data = data
         self.timestamp = timestamp
         self.version = version
         self.accessCount = 1
     }
     
-    private init(data: T, timestamp: Date, version: Int, accessCount: Int) {
+    private nonisolated init(data: T, timestamp: Date, version: Int, accessCount: Int) {
         self.data = data
         self.timestamp = timestamp
         self.version = version
@@ -142,10 +142,13 @@ actor PredictionCache {
         let validEntries = cache.values.filter { now.timeIntervalSince($0.timestamp) <= ttl }
         let avgAge = validEntries.isEmpty ? 0 : validEntries.map { now.timeIntervalSince($0.timestamp) }.reduce(0, +) / Double(validEntries.count)
         
+        let total = metrics.hits + metrics.misses
+        let hitRate = total > 0 ? Double(metrics.hits) / Double(total) : 0.0
+        
         return [
             "totalEntries": cache.count,
             "validEntries": validEntries.count,
-            "hitRate": metrics.hitRate,
+            "hitRate": hitRate,
             "hits": metrics.hits,
             "misses": metrics.misses,
             "evictions": metrics.evictions,

@@ -1,6 +1,9 @@
 import Foundation
 import Combine
 import MapKit
+import OSLog
+
+// MARK: - Event Bus
 
 @MainActor
 final class EventBus: ObservableObject {
@@ -11,6 +14,9 @@ final class EventBus: ObservableObject {
     let uiEventPublisher = PassthroughSubject<UIEvent, Never>()
     let mapStateUpdatePublisher = PassthroughSubject<MapStateUpdate, Never>()
     let serviceHealthPublisher = PassthroughSubject<ServiceHealthEvent, Never>()
+    let balloonLandingPublisher = PassthroughSubject<BalloonLandingEvent, Never>()
+    let balloonPositionPublisher = PassthroughSubject<BalloonPositionEvent, Never>()
+    let telemetryAvailabilityPublisher = PassthroughSubject<TelemetryAvailabilityEvent, Never>()
     
     private init() {}
     
@@ -33,7 +39,21 @@ final class EventBus: ObservableObject {
     func publishServiceHealth(_ event: ServiceHealthEvent) {
         serviceHealthPublisher.send(event)
     }
+    
+    func publishBalloonLanding(_ event: BalloonLandingEvent) {
+        balloonLandingPublisher.send(event)
+    }
+    
+    func publishBalloonPosition(_ event: BalloonPositionEvent) {
+        balloonPositionPublisher.send(event)
+    }
+    
+    func publishTelemetryAvailability(_ event: TelemetryAvailabilityEvent) {
+        telemetryAvailabilityPublisher.send(event)
+    }
 }
+
+// MARK: - Event Types
 
 struct TelemetryEvent: Equatable {
     let balloonId: String
@@ -219,5 +239,160 @@ struct ServiceHealthEvent: Equatable {
                lhs.health == rhs.health &&
                lhs.message == rhs.message &&
                abs(lhs.timestamp.timeIntervalSince(rhs.timestamp)) < 0.01
+    }
+}
+
+struct BalloonLandingEvent: Equatable {
+    let landingPosition: CLLocationCoordinate2D
+    let landingTime: Date
+    let sondeName: String
+    let timestamp: Date
+    
+    init(landingPosition: CLLocationCoordinate2D, landingTime: Date, sondeName: String) {
+        self.landingPosition = landingPosition
+        self.landingTime = landingTime
+        self.sondeName = sondeName
+        self.timestamp = Date()
+    }
+    
+    static func == (lhs: BalloonLandingEvent, rhs: BalloonLandingEvent) -> Bool {
+        return lhs.landingPosition.latitude == rhs.landingPosition.latitude &&
+               lhs.landingPosition.longitude == rhs.landingPosition.longitude &&
+               lhs.sondeName == rhs.sondeName &&
+               abs(lhs.landingTime.timeIntervalSince(rhs.landingTime)) < 0.01 &&
+               abs(lhs.timestamp.timeIntervalSince(rhs.timestamp)) < 0.01
+    }
+}
+
+struct TelemetryAvailabilityEvent: Equatable {
+    let isAvailable: Bool
+    let reason: String
+    let timestamp: Date
+    
+    init(isAvailable: Bool, reason: String) {
+        self.isAvailable = isAvailable
+        self.reason = reason
+        self.timestamp = Date()
+    }
+    
+    static func == (lhs: TelemetryAvailabilityEvent, rhs: TelemetryAvailabilityEvent) -> Bool {
+        return lhs.isAvailable == rhs.isAvailable &&
+               lhs.reason == rhs.reason &&
+               abs(lhs.timestamp.timeIntervalSince(rhs.timestamp)) < 0.01
+    }
+}
+
+struct BalloonPositionEvent: Equatable {
+    let balloonId: String
+    let position: CLLocationCoordinate2D
+    let telemetry: TelemetryData
+    let timestamp: Date
+    
+    init(balloonId: String, position: CLLocationCoordinate2D, telemetry: TelemetryData) {
+        self.balloonId = balloonId
+        self.position = position
+        self.telemetry = telemetry
+        self.timestamp = Date()
+    }
+    
+    static func == (lhs: BalloonPositionEvent, rhs: BalloonPositionEvent) -> Bool {
+        return lhs.balloonId == rhs.balloonId &&
+               lhs.position.latitude == rhs.position.latitude &&
+               lhs.position.longitude == rhs.position.longitude &&
+               lhs.telemetry == rhs.telemetry &&
+               abs(lhs.timestamp.timeIntervalSince(rhs.timestamp)) < 0.01
+    }
+}
+
+// MARK: - Event Flow Validator
+
+/// Validates the complete event-driven architecture flow
+/// This can be used for integration testing and debugging
+@MainActor
+class EventFlowValidator {
+    private var cancellables = Set<AnyCancellable>()
+    private var eventCounts: [String: Int] = [:]
+    private let startTime = Date()
+    
+    init() {
+        setupEventMonitoring()
+    }
+    
+    private func setupEventMonitoring() {
+        // Monitor telemetry events
+        EventBus.shared.telemetryPublisher
+            .sink { [weak self] event in
+                self?.logEvent("TelemetryEvent", details: "balloon: \(event.balloonId), alt: \(event.telemetryData.altitude)m")
+            }
+            .store(in: &cancellables)
+        
+        // Monitor user location events
+        EventBus.shared.userLocationPublisher
+            .sink { [weak self] event in
+                self?.logEvent("UserLocationEvent", details: "lat: \(String(format: "%.4f", event.locationData.latitude)), lon: \(String(format: "%.4f", event.locationData.longitude))")
+            }
+            .store(in: &cancellables)
+        
+        // Monitor UI events
+        EventBus.shared.uiEventPublisher
+            .sink { [weak self] event in
+                self?.logEvent("UIEvent", details: "\(event)")
+            }
+            .store(in: &cancellables)
+        
+        // Monitor map state updates
+        EventBus.shared.mapStateUpdatePublisher
+            .sink { [weak self] update in
+                self?.logEvent("MapStateUpdate", details: "source: \(update.source), version: \(update.version)")
+            }
+            .store(in: &cancellables)
+        
+        // Monitor service health events
+        EventBus.shared.serviceHealthPublisher
+            .sink { [weak self] event in
+                self?.logEvent("ServiceHealthEvent", details: "service: \(event.serviceName), health: \(event.health)")
+            }
+            .store(in: &cancellables)
+    }
+    
+    private func logEvent(_ eventType: String, details: String) {
+        eventCounts[eventType, default: 0] += 1
+        let count = eventCounts[eventType]!
+        let elapsed = Date().timeIntervalSince(startTime)
+        
+        appLog("EventFlow: [\(String(format: "%.1f", elapsed))s] \(eventType) #\(count) - \(details)", 
+               category: .general, level: .debug)
+    }
+    
+    func getEventSummary() -> [String: Any] {
+        let elapsed = Date().timeIntervalSince(startTime)
+        var summary: [String: Any] = [
+            "elapsedTime": elapsed,
+            "eventCounts": eventCounts
+        ]
+        
+        // Calculate event rates
+        var rates: [String: Double] = [:]
+        for (eventType, count) in eventCounts {
+            rates[eventType + "Rate"] = Double(count) / elapsed
+        }
+        summary["eventRates"] = rates
+        
+        return summary
+    }
+    
+    func validateArchitecture() -> [String: Bool] {
+        return [
+            "telemetryFlowActive": eventCounts["TelemetryEvent", default: 0] > 0,
+            "locationFlowActive": eventCounts["UserLocationEvent", default: 0] > 0,
+            "uiFlowActive": eventCounts["UIEvent", default: 0] > 0,
+            "mapStateUpdatesActive": eventCounts["MapStateUpdate", default: 0] > 0,
+            "servicesHealthy": eventCounts["ServiceHealthEvent", default: 0] > 0,
+            "balancedFlow": eventCounts["MapStateUpdate", default: 0] >= eventCounts["TelemetryEvent", default: 0]
+        ]
+    }
+    
+    deinit {
+        cancellables.removeAll()
     }
 }

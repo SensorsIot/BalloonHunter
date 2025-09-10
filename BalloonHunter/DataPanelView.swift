@@ -3,6 +3,7 @@ import SwiftUI
 
 struct DataPanelView: View {
     @EnvironmentObject var mapState: MapState
+    @EnvironmentObject var serviceManager: ServiceManager
 
     var body: some View {
         GeometryReader { geometry in // Added GeometryReader
@@ -12,8 +13,8 @@ struct DataPanelView: View {
                 // Table 1: 4 columns
                 Grid(alignment: .leading, horizontalSpacing: 5, verticalSpacing: 10) {
                     GridRow {
-                        Image(systemName: mapState.connectionStatus == .connected ? "antenna.radiowaves.left.and.right" : "antenna.radiowaves.left.and.right.slash")
-                            .foregroundColor(mapState.connectionStatus == .connected ? .green : .red)
+                        Image(systemName: serviceManager.bleCommunicationService.connectionStatus == .connected ? "antenna.radiowaves.left.and.right" : "antenna.radiowaves.left.and.right.slash")
+                            .foregroundColor(serviceManager.bleCommunicationService.connectionStatus == .connected ? .green : .red)
                             .font(.system(size: 32))
                         Text(mapState.balloonTelemetry?.probeType ?? "N/A")
                             .frame(maxWidth: .infinity)
@@ -25,12 +26,12 @@ struct DataPanelView: View {
                 }
                 .padding(.horizontal)
 
-                // Table 2: 3 columns
+                // Table 2: 3 columns x 3 rows
                 Grid(alignment: .leading, horizontalSpacing: 5, verticalSpacing: 10) {
                     GridRow {
                         Text("\(String(format: "%.3f", mapState.balloonTelemetry?.frequency ?? 0.0)) MHz")
                             .frame(maxWidth: .infinity, alignment: .leading)
-                        Text("RSSI: \(signalStrengthString) dB") // Reverted to dB
+                        Text("RSSI: \(signalStrengthString) dB")
                             .frame(width: columnWidth, alignment: .leading)
                         Text("Batt: \(batteryPercentageString)%")
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -47,14 +48,8 @@ struct DataPanelView: View {
                     GridRow {
                         Text("Flight: \(flightTime)")
                             .frame(maxWidth: .infinity, alignment: .leading)
-                        Text("Land: \(landingTimeString)")
+                        Text("Landing: \(landingTimeString)")
                             .frame(maxWidth: .infinity, alignment: .leading)
-                        Text("Descent: \(adjustedDescentRateString) m/s")
-                            .frame(maxWidth: .infinity, alignment: .trailing)
-                    }
-                    GridRow {
-                        Spacer()
-                        Spacer()
                         Text("Arrival: \(arrivalTimeString)")
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
@@ -158,5 +153,6 @@ struct DataPanelView: View {
 #Preview {
     DataPanelView()
         .environmentObject(MapState())
+        .environmentObject(ServiceManager())
 }
 

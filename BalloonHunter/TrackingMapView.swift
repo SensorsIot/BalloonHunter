@@ -15,9 +15,9 @@ struct TrackingMapView: View {
         center: CLLocationCoordinate2D(latitude: 47.3769, longitude: 8.5417),
         span: MKCoordinateSpan(latitudeDelta: 0.225, longitudeDelta: 0.225)
     )
+    @State private var hasInitializedRegion = false
     @State private var isHeadingMode: Bool = false
     @State private var mapView: MKMapView? = nil
-    @State private var didPerformInitialZoom = false
 
     var body: some View {
         GeometryReader { geometry in
@@ -27,6 +27,8 @@ struct TrackingMapView: View {
                     HStack(spacing: 12) {
                         // Settings button
                         Button {
+                            // Send device settings request before showing settings
+                            serviceManager.bleCommunicationService.getParameters()
                             showSettings = true
                         } label: {
                             Image(systemName: "gearshape")
@@ -113,8 +115,7 @@ struct TrackingMapView: View {
                 EventDrivenMapView(
                     region: $region,
                     mapView: $mapView,
-                    isHeadingMode: $isHeadingMode,
-                    didPerformInitialZoom: $didPerformInitialZoom
+                    isHeadingMode: $isHeadingMode
                 )
                 .frame(height: geometry.size.height * 0.7)
 
@@ -133,28 +134,37 @@ struct TrackingMapView: View {
         }
         .onReceive(mapState.$region) { newRegion in
             if let newRegion = newRegion {
+                print("📍 TrackingMapView: Received new region from MapState: \(newRegion.center)")
                 self.region = newRegion
+                hasInitializedRegion = true
+                // Only reset the flag if this is the actual user location (not VIRTA)
+                let isVIRTA = abs(newRegion.center.latitude - 47.3769) < 0.001 && abs(newRegion.center.longitude - 8.5417) < 0.001
+                if !isVIRTA {
+                    print("📍 TrackingMapView: Real user region received, will apply on next update")
+                }
+            }
+        }
+        .onReceive(mapState.$userLocation) { userLocation in
+            // Fallback: if we have user location but no region set, initialize with 25km region
+            if let location = userLocation, !hasInitializedRegion {
+                let userRegion = MKCoordinateRegion(
+                    center: CLLocationCoordinate2D(latitude: location.latitude, longitude: location.longitude),
+                    span: MKCoordinateSpan(latitudeDelta: 0.25, longitudeDelta: 0.25)
+                )
+                self.region = userRegion
+                hasInitializedRegion = true
             }
         }
         .onAppear {
-            // Perform initial zoom after short delay
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                performInitialZoom()
+            // Initialize region immediately if user location is available
+            if let userLocation = mapState.userLocation, !hasInitializedRegion {
+                let userRegion = MKCoordinateRegion(
+                    center: CLLocationCoordinate2D(latitude: userLocation.latitude, longitude: userLocation.longitude),
+                    span: MKCoordinateSpan(latitudeDelta: 0.25, longitudeDelta: 0.25)
+                )
+                self.region = userRegion
+                hasInitializedRegion = true
             }
-        }
-    }
-
-    private func performInitialZoom() {
-        guard !didPerformInitialZoom else { return }
-        
-        if let userLocation = mapState.userLocation {
-            let span25km = MKCoordinateSpan(latitudeDelta: 0.225, longitudeDelta: 0.225)
-            let userRegion = MKCoordinateRegion(
-                center: CLLocationCoordinate2D(latitude: userLocation.latitude, longitude: userLocation.longitude),
-                span: span25km
-            )
-            self.region = userRegion
-            didPerformInitialZoom = true
         }
     }
 }
@@ -165,9 +175,9 @@ private struct EventDrivenMapView: UIViewRepresentable {
     @Binding var region: MKCoordinateRegion
     @Binding var mapView: MKMapView?
     @Binding var isHeadingMode: Bool
-    @Binding var didPerformInitialZoom: Bool
     
     @EnvironmentObject var mapState: MapState
+    @State private var hasAppliedStartupRegion = false
 
     func makeUIView(context: Context) -> MKMapView {
         let mapView = MKMapView()
@@ -177,6 +187,28 @@ private struct EventDrivenMapView: UIViewRepresentable {
         mapView.isUserInteractionEnabled = true
         mapView.register(CustomAnnotationView.self, forAnnotationViewWithReuseIdentifier: "custom")
         
+        // Set initial region - use MapState region if available, otherwise use binding
+        print("📍 makeUIView: hasAppliedStartupRegion = \(hasAppliedStartupRegion)")
+        if !hasAppliedStartupRegion {
+            if let mapStateRegion = mapState.region {
+                print("📍 makeUIView: Setting MapState region: \(mapStateRegion.center)")
+                mapView.setRegion(mapStateRegion, animated: false)
+                
+                // Use DispatchQueue to avoid modifying state during view creation
+                DispatchQueue.main.async {
+                    self.hasAppliedStartupRegion = true
+                }
+            } else {
+                print("📍 makeUIView: Setting binding region: \(region.center), MapState region is nil")
+                mapView.setRegion(region, animated: false)
+                
+                // Use DispatchQueue to avoid modifying state during view creation
+                DispatchQueue.main.async {
+                    self.hasAppliedStartupRegion = true
+                }
+            }
+        }
+        
         DispatchQueue.main.async {
             self.mapView = mapView
         }
@@ -185,10 +217,37 @@ private struct EventDrivenMapView: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: MKMapView, context: Context) {
-        // Update region
-        if !coordinatesEqual(uiView.region.center, region.center) ||
-           abs(uiView.region.span.latitudeDelta - region.span.latitudeDelta) > 0.001 {
-            uiView.setRegion(region, animated: true)
+        // Once startup region has been applied, never apply automatic region updates again
+        if hasAppliedStartupRegion {
+            print("📍 updateUIView: Startup region already applied, map is now user-controlled")
+            // Apply other updates but skip region changes
+        } else {
+            // Check if we need to apply a region update from the binding
+            let currentCenter = uiView.region.center
+            let bindingCenter = region.center
+            
+            // If the region binding changed significantly (not just the default VIRTA), apply it
+            let distanceThreshold = 0.01 // ~1km
+            let latDiff = abs(currentCenter.latitude - bindingCenter.latitude)
+            let lonDiff = abs(currentCenter.longitude - bindingCenter.longitude)
+            
+            if latDiff > distanceThreshold || lonDiff > distanceThreshold {
+                print("📍 updateUIView: Applying region: \(bindingCenter)")
+                uiView.setRegion(region, animated: false)
+                
+                // Only set the flag to true for real user locations (not default VIRTA)
+                let isVIRTA = abs(bindingCenter.latitude - 47.3769) < 0.001 && abs(bindingCenter.longitude - 8.5417) < 0.001
+                if !isVIRTA {
+                    DispatchQueue.main.async {
+                        print("📍 updateUIView: Real user region applied, map is now user-controlled")
+                        self.hasAppliedStartupRegion = true
+                    }
+                } else {
+                    print("📍 updateUIView: VIRTA region applied, waiting for real user location")
+                }
+            } else {
+                print("📍 updateUIView: No significant region change during startup")
+            }
         }
         
         // Apply camera update from policies
@@ -208,6 +267,12 @@ private struct EventDrivenMapView: UIViewRepresentable {
 
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
+    }
+    
+    private func coordinateDistance(_ coord1: CLLocationCoordinate2D, _ coord2: CLLocationCoordinate2D) -> Double {
+        let location1 = CLLocation(latitude: coord1.latitude, longitude: coord1.longitude)
+        let location2 = CLLocation(latitude: coord2.latitude, longitude: coord2.longitude)
+        return location1.distance(from: location2)
     }
     
     private func applyCameraUpdate(_ mapView: MKMapView, _ update: CameraUpdate) {

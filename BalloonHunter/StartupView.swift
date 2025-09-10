@@ -15,19 +15,13 @@ struct StartupView: View {
     @State private var hasReceivedFirstTelemetry: Bool = false
 
     var body: some View {
-        ZStack {
-            Color.black.edgesIgnoringSafeArea(.all)
-            VStack {
-                Text(startupProgress)
-                    .font(.headline)
-                    .foregroundColor(.white)
+        // No visible UI - startup runs silently in background
+        Color.clear
+            .onAppear {
+                Task {
+                    await performStartup()
+                }
             }
-        }
-        .onAppear {
-            Task {
-                await performStartup()
-            }
-        }
     }
     
     private func performStartup() async {
@@ -43,25 +37,34 @@ struct StartupView: View {
             startupProgress = "Initializing services..."
             serviceManager.initializeEventDrivenFlow()
             
-            // Step 3: Connect to MySondyGo and wait for first telemetry
-            startupProgress = "Connecting to MySondyGo..."
-            try await waitForBLEConnectionAndFirstTelemetry()
-            
-            // Step 4: Read device settings after first telemetry
-            startupProgress = "Reading device settings..."
-            await requestDeviceSettings()
-            
-            // Step 5: Setup location services with 25km zoom
+            // Step 3: Setup location services with 25km zoom FIRST
             startupProgress = "Getting location..."
             try await setupLocationWith25kmZoom()
+            
+            // Signal location ready - TrackingMapView can now be shown
+            NotificationCenter.default.post(name: .locationReady, object: nil)
+            appLog("StartupView: Location ready, TrackingMapView should now appear", category: .general, level: .info)
+            
+            // Continue with background tasks
+            // Step 4: Attempt to connect to MySondyGo (non-blocking)
+            startupProgress = "Connecting to MySondyGo..."
+            await attemptBLEConnection()
+            
+            // Step 5: Device settings are read automatically by BLE service
+            // No need to manually request them here
             
             // Step 6: Load all persistence data
             startupProgress = "Loading saved data..."
             await loadAllPersistenceData()
             
-            // Step 7: Initial map display setup
-            startupProgress = "Setting up initial map view..."
-            await triggerInitialMapDisplay()
+            // Step 7: Process current balloon data if telemetry available
+            if serviceManager.bleCommunicationService.latestTelemetry != nil {
+                startupProgress = "Processing balloon data..."
+                await processCurrentBalloonData()
+            }
+            
+            // Step 7: Keep initial 25km map view (don't override with show-all-annotations)
+            // The 25km region was already set during location setup
             
             startupProgress = "Ready!"
             
@@ -70,7 +73,7 @@ struct StartupView: View {
                 NotificationCenter.default.post(name: .startupCompleted, object: nil)
             }
             
-            appLog("StartupView: Complete startup sequence finished", category: .general, level: .info)
+            appLog("=================== END Startup ==========================", category: .general, level: .info)
             
         } catch {
             startupProgress = "Startup failed: \(error.localizedDescription)"
@@ -91,52 +94,70 @@ struct StartupView: View {
                 userSettings.descentRate = persisted.descentRate
             }
         }
-        appLog("StartupView: User settings loaded", category: .general, level: .debug)
+        appLog("StartupView: Settings loaded", category: .general, level: .debug)
     }
     
-    private func waitForBLEConnectionAndFirstTelemetry() async throws {
+    private func attemptBLEConnection() async {
         // Wait for Bluetooth to be powered on first
         let bluetoothTimeout = Date().addingTimeInterval(10) // 10 seconds timeout for Bluetooth
         while serviceManager.bleCommunicationService.centralManager.state != .poweredOn && Date() < bluetoothTimeout {
-            appLog("StartupView: Waiting for Bluetooth to power on, current state: \(serviceManager.bleCommunicationService.centralManager.state.rawValue)", category: .general, level: .info)
+            appLog("StartupView: Waiting for Bluetooth to power on", category: .general, level: .info)
             try? await Task.sleep(nanoseconds: 1_000_000_000) // 1 second check interval
         }
         
         guard serviceManager.bleCommunicationService.centralManager.state == .poweredOn else {
-            appLog("StartupView: Bluetooth not powered on, current state: \(serviceManager.bleCommunicationService.centralManager.state.rawValue)", category: .general, level: .error)
-            throw StartupError.bleConnectionTimeout
+            appLog("StartupView: Bluetooth not powered on, publishing telemetry unavailable and continuing startup", category: .general, level: .error)
+            // Publish telemetry unavailable event and continue
+            EventBus.shared.publishTelemetryAvailability(TelemetryAvailabilityEvent(
+                isAvailable: false,
+                reason: "Bluetooth not powered on"
+            ))
+            return
         }
         
         appLog("StartupView: Bluetooth powered on, starting scan", category: .general, level: .info)
         
+        // Show "no RadiosondyGo detected" message
+        startupProgress = "No RadiosondyGo detected"
+        
         // Now start BLE scanning
         serviceManager.bleCommunicationService.startScanning()
         
-        // Wait for BLE connection (with timeout)
-        let connectionTimeout = Date().addingTimeInterval(30) // 30 seconds timeout
+        // Wait for BLE connection (with 5 second timeout)
+        let connectionTimeout = Date().addingTimeInterval(5) // 5 seconds timeout
         while bleConnectionStatus != .connected && Date() < connectionTimeout {
             await observeBLEConnectionStatus()
             try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 second check interval
         }
         
-        guard bleConnectionStatus == .connected else {
-            throw StartupError.bleConnectionTimeout
+        if bleConnectionStatus == .connected {
+            appLog("StartupView: BLE connection established", category: .general, level: .info)
+            
+            // Update message when device is connected
+            startupProgress = "RadiosondyGo connected, waiting for data..."
+            
+            // Wait for first telemetry (with timeout)
+            let telemetryTimeout = Date().addingTimeInterval(10) // 10 seconds timeout
+            while !hasReceivedFirstTelemetry && Date() < telemetryTimeout {
+                await observeFirstTelemetry()
+                try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 second check interval
+            }
+            
+            if hasReceivedFirstTelemetry {
+                appLog("StartupView: First telemetry received", category: .general, level: .info)
+            } else {
+                appLog("StartupView: No telemetry received, but continuing startup", category: .general, level: .info)
+                // Note: BLE service will publish telemetry availability event when first packet is processed
+            }
+        } else {
+            appLog("StartupView: No device connected within 5 seconds, publishing telemetry unavailable and continuing startup", category: .general, level: .info)
+            // Publish telemetry unavailable event and continue
+            EventBus.shared.publishTelemetryAvailability(TelemetryAvailabilityEvent(
+                isAvailable: false,
+                reason: "No RadiosondyGo device found within 5 seconds"
+            ))
+            // BLE service continues trying to connect in background
         }
-        
-        appLog("StartupView: BLE connection established", category: .general, level: .info)
-        
-        // Wait for first telemetry (with timeout)
-        let telemetryTimeout = Date().addingTimeInterval(10) // 10 seconds timeout
-        while !hasReceivedFirstTelemetry && Date() < telemetryTimeout {
-            await observeFirstTelemetry()
-            try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 second check interval
-        }
-        
-        guard hasReceivedFirstTelemetry else {
-            throw StartupError.firstTelemetryTimeout
-        }
-        
-        appLog("StartupView: First telemetry received", category: .general, level: .info)
     }
     
     private func observeBLEConnectionStatus() async {
@@ -153,17 +174,7 @@ struct StartupView: View {
         }
     }
     
-    private func requestDeviceSettings() async {
-        // Send settings read command to device
-        await MainActor.run {
-            serviceManager.bleCommunicationService.readSettings()
-        }
-        
-        // Wait a moment for settings response
-        try? await Task.sleep(nanoseconds: 1_000_000_000) // 1 second
-        
-        appLog("StartupView: Device settings read command sent", category: .general, level: .debug)
-    }
+    // requestDeviceSettings removed - BLE service handles this automatically
     
     private func setupLocationWith25kmZoom() async throws {
         // Start location services
@@ -219,13 +230,84 @@ struct StartupView: View {
         appLog("StartupView: Persistence data loading triggered", category: .general, level: .debug)
     }
     
+    private func processCurrentBalloonData() async {
+        guard let telemetry = serviceManager.bleCommunicationService.latestTelemetry else {
+            appLog("StartupView: No telemetry available for balloon data processing", category: .general, level: .debug)
+            return
+        }
+        
+        appLog("StartupView: Processing balloon data - lat: \(telemetry.latitude), lon: \(telemetry.longitude), alt: \(telemetry.altitude)m", category: .general, level: .info)
+        
+        // Get current balloon position from telemetry
+        let balloonPosition = CLLocationCoordinate2D(latitude: telemetry.latitude, longitude: telemetry.longitude)
+        
+        // Step 7a: Call balloon prediction service
+        startupProgress = "Calculating balloon prediction..."
+        await callBalloonPredictionService(telemetry: telemetry)
+        
+        // Step 7b: Call routing service if user location is available
+        if let userLocation = serviceManager.currentLocationService.locationData {
+            startupProgress = "Calculating route..."
+            await callRoutingService(userLocation: userLocation, balloonPosition: balloonPosition)
+        }
+        
+        // Step 7c: Call landing point service
+        startupProgress = "Determining landing point..."
+        await callLandingPointService()
+        
+        appLog("StartupView: Balloon data processing completed", category: .general, level: .info)
+    }
+    
+    private func callBalloonPredictionService(telemetry: TelemetryData) async {
+        // Use the event-driven prediction policy to trigger prediction
+        await MainActor.run {
+            // Force prediction by publishing telemetry event
+            EventBus.shared.publishTelemetry(TelemetryEvent(telemetryData: telemetry))
+        }
+        
+        // Wait for prediction to complete (reasonable timeout)
+        let timeout = Date().addingTimeInterval(10) // 10 seconds timeout
+        while await serviceManager.predictionCache.getStats()["totalEntries"] as? Int == 0 && Date() < timeout {
+            try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 second intervals
+        }
+        
+        appLog("StartupView: Balloon prediction service completed", category: .general, level: .debug)
+    }
+    
+    private func callRoutingService(userLocation: LocationData, balloonPosition: CLLocationCoordinate2D) async {
+        // Use the routing policy to trigger route calculation
+        await MainActor.run {
+            let _ = CLLocationCoordinate2D(latitude: userLocation.latitude, longitude: userLocation.longitude)  // userCoordinate
+            // Trigger routing by publishing location events
+            EventBus.shared.publishUserLocation(UserLocationEvent(
+                locationData: userLocation
+            ))
+        }
+        
+        // Wait for routing to complete (reasonable timeout)  
+        let timeout = Date().addingTimeInterval(10) // 10 seconds timeout
+        while await serviceManager.routingCache.getStats()["totalEntries"] as? Int == 0 && Date() < timeout {
+            try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 second intervals
+        }
+        
+        appLog("StartupView: Routing service completed", category: .general, level: .debug)
+    }
+    
+    private func callLandingPointService() async {
+        // The landing point service is automatically triggered by the prediction policy
+        // through the event-driven architecture, so we just wait for it to process
+        try? await Task.sleep(nanoseconds: 1_000_000_000) // 1 second for processing
+        
+        appLog("StartupView: Landing point service completed", category: .general, level: .debug)
+    }
+    
     private func triggerInitialMapDisplay() async {
-        // Trigger show all annotations to fit all data on screen
+        // Trigger show all annotations with maximum zoom to fit all data on screen
         await MainActor.run {
             EventBus.shared.publishUIEvent(.showAllAnnotationsRequested(timestamp: Date()))
         }
         
-        appLog("StartupView: Initial map display triggered", category: .general, level: .debug)
+        appLog("StartupView: Initial map display triggered with maximum zoom to show all annotations", category: .general, level: .debug)
     }
 }
 
