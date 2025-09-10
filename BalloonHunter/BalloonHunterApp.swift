@@ -38,6 +38,7 @@ import OSLog // Import OSLog for appLog function
 
 @main
 struct BalloonHunterApp: App {
+    @Environment(\.scenePhase) var scenePhase
     @StateObject var serviceManager = ServiceManager()
     @StateObject var appSettings = AppSettings()
     @StateObject var userSettings = UserSettings()
@@ -47,45 +48,28 @@ struct BalloonHunterApp: App {
         WindowGroup {
             if startupCompleted {
                 TrackingMapView()
-                    .environmentObject(serviceManager.bleCommunicationService)
-                    .environmentObject(serviceManager.predictionService)
-                    .environmentObject(serviceManager.routeCalculationService)
-                    .environmentObject(serviceManager.currentLocationService)
+                    .environmentObject(serviceManager.mapState)
                     .environmentObject(appSettings)
                     .environmentObject(userSettings)
-                    .environmentObject(serviceManager.annotationService)
-                    .environmentObject(serviceManager.persistenceService)
-                    .environmentObject(serviceManager.balloonTrackingService)
-                    .environmentObject(serviceManager.landingPointService)
                     .environmentObject(serviceManager)
+                    .onAppear {
+                        serviceManager.initializeEventDrivenFlow()
+                    }
             } else {
                 StartupView()
-                    .environmentObject(serviceManager.startupCoordinator)
+                    .environmentObject(serviceManager)
+                    .environmentObject(userSettings)
                     .onReceive(NotificationCenter.default.publisher(for: .startupCompleted)) { _ in
+                        appLog("BalloonHunterApp: Received startupCompleted notification.", category: .lifecycle, level: .info)
                         startupCompleted = true
                     }
             }
-        }.onAppear {
-            // Load persisted prediction parameters into user settings
-            if let persisted = serviceManager.persistenceService.readPredictionParameters() {
-                userSettings.burstAltitude = persisted.burstAltitude
-                userSettings.ascentRate = persisted.ascentRate
-                userSettings.descentRate = persisted.descentRate
-            }
-            
-            // Start location services (required for startup)
-            serviceManager.currentLocationService.requestPermission()
-            serviceManager.currentLocationService.startUpdating()
-            
-            // Initialize startup coordinator to execute linear startup sequence
-            _ = serviceManager.startupCoordinator // This triggers the startup sequence
-            
-            appLog("BalloonHunterApp: Linear startup sequence initiated", category: .general, level: .info)
         }
-        .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in
-            // Centralize save-on-close logic in PersistenceService
-            serviceManager.persistenceService.saveOnAppClose(balloonTrackingService: serviceManager.balloonTrackingService)
-            print("[DEBUG][State: \(SharedAppState.shared.appState.rawValue)] BalloonHunterApp: Called saveOnAppClose on app resign active.")
+        .onChange(of: scenePhase) { oldScenePhase, newScenePhase in
+            if newScenePhase == .inactive {
+                serviceManager.persistenceService.saveOnAppClose(balloonTrackService: serviceManager.balloonTrackService)
+                appLog("BalloonHunterApp: App became inactive, saved data.", category: .lifecycle, level: .info)
+            }
         }
     }
 }

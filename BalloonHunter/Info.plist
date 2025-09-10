@@ -15,6 +15,10 @@
 			</dict>
 		</dict>
 	</dict>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>This app uses Bluetooth to communicate with MySondyGo weather balloon tracking devices.</string>
+	<key>NSBluetoothPeripheralUsageDescription</key>
+	<string>This app uses Bluetooth to communicate with MySondyGo weather balloon tracking devices.</string>
 	<key>NSServices</key>
 	<array>
 		<dict/>

@@ -13,17 +13,17 @@ import SwiftUI
 
 struct BalloonAnnotationView: View {
     let altitude: Double
-    let isRecent: Bool
+    let isAscending: Bool
 
     var body: some View {
         ZStack {
             Image(systemName: "balloon.fill")
                 .font(.system(size: 76))
-                .foregroundColor(isRecent ? .green : .red)
-            Text("\(Int(altitude))")
+                .foregroundColor(isAscending ? .green : .red)
+            Text("\(Int(altitude))m")
                 .font(.system(size: 15, weight: .bold))
                 .foregroundColor(.white)
-                .shadow(radius: 3)
+                .shadow(color: .black, radius: 2, x: 0, y: 0)
                 .offset(y: -20)
         }
     }

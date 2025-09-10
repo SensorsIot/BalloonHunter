@@ -38,6 +38,25 @@ enum AppState: String {
     case longRangeTracking
 }
 
+enum AppMode: String, CaseIterable, Identifiable, Codable {
+    case explore
+    case follow
+    case finalApproach
+    
+    var id: String { rawValue }
+    
+    var displayName: String {
+        switch self {
+        case .explore:
+            return "Explore"
+        case .follow:
+            return "Follow"
+        case .finalApproach:
+            return "Final Approach"
+        }
+    }
+}
+
 class SharedAppState {
     static let shared = SharedAppState()
     private init() {}
@@ -384,6 +403,13 @@ enum TransportationMode: Sendable, Equatable {
     case car
     case bike
 
+    var identifier: String {
+        switch self {
+        case .car: return "car"
+        case .bike: return "bike"
+        }
+    }
+
     nonisolated static func == (lhs: TransportationMode, rhs: TransportationMode) -> Bool {
         switch (lhs, rhs) {
         case (.car, .car): return true
@@ -534,37 +560,9 @@ final class UserSettings: ObservableObject, Codable { // Added Codable
     }
 }
 
-// MARK: - Event Definitions for Orchestration
+// MARK: - Notification Extensions
 
-struct TelemetryEvent: Equatable {
-    let telemetryData: TelemetryData
+extension NSNotification.Name {
+    static let startupCompleted = NSNotification.Name("startupCompleted")
 }
 
-struct UserLocationEvent: Equatable {
-    let locationData: LocationData
-}
-
-enum UIEvent: Equatable {
-    case cameraRegionChanged(MKCoordinateRegion)
-    case annotationSelected(MapAnnotationItem)
-    case modeSwitched(TransportationMode)
-    case manualPredictionTriggered // For tapping on balloon marker
-
-    static func == (lhs: UIEvent, rhs: UIEvent) -> Bool {
-        switch (lhs, rhs) {
-        case let (.cameraRegionChanged(lhsRegion), .cameraRegionChanged(rhsRegion)):
-            return lhsRegion.center.latitude == rhsRegion.center.latitude &&
-                   lhsRegion.center.longitude == rhsRegion.center.longitude &&
-                   lhsRegion.span.latitudeDelta == rhsRegion.span.latitudeDelta &&
-                   lhsRegion.span.longitudeDelta == rhsRegion.span.longitudeDelta
-        case let (.annotationSelected(lhsItem), .annotationSelected(rhsItem)):
-            return lhsItem == rhsItem
-        case let (.modeSwitched(lhsMode), .modeSwitched(rhsMode)):
-            return lhsMode == rhsMode
-        case (.manualPredictionTriggered, .manualPredictionTriggered):
-            return true
-        default:
-            return false
-        }
-    }
-}
