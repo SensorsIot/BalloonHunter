@@ -39,11 +39,19 @@ import OSLog // Import OSLog for appLog function
 @main
 struct BalloonHunterApp: App {
     @Environment(\.scenePhase) var scenePhase
-    @StateObject var balloonTracker = BalloonTracker()
+    @StateObject var domainModel = DomainModel()
+    @StateObject var balloonTracker: BalloonTracker
     @StateObject var appSettings = AppSettings()
     @State private var locationReady = false
     @State private var animateLoading = false
     @State private var minimumDisplayTimeElapsed = false
+    
+    init() {
+        let model = DomainModel()
+        _domainModel = StateObject(wrappedValue: model)
+        _balloonTracker = StateObject(wrappedValue: BalloonTracker(domainModel: model))
+        _appSettings = StateObject(wrappedValue: AppSettings())
+    }
 
     private func checkAndHideLogo() {
         // Logo will hide automatically when both locationReady AND minimumDisplayTimeElapsed are true
@@ -62,6 +70,7 @@ struct BalloonHunterApp: App {
                     .environmentObject(appSettings)
                     .environmentObject(balloonTracker.userSettings)
                     .environmentObject(balloonTracker)
+                    .environmentObject(domainModel)
                     .onAppear {
                         // Initialize simplified architecture
                         balloonTracker.initialize()

@@ -17,6 +17,8 @@ final class EventBus: ObservableObject {
     let balloonLandingPublisher = PassthroughSubject<BalloonLandingEvent, Never>()
     let balloonPositionPublisher = PassthroughSubject<BalloonPositionEvent, Never>()
     let telemetryAvailabilityPublisher = PassthroughSubject<TelemetryAvailabilityEvent, Never>()
+    let predictionRequestPublisher = PassthroughSubject<PredictionRequest, Never>()
+    let predictionResponsePublisher = PassthroughSubject<PredictionResponse, Never>()
     
     private init() {}
     
@@ -50,6 +52,14 @@ final class EventBus: ObservableObject {
     
     func publishTelemetryAvailability(_ event: TelemetryAvailabilityEvent) {
         telemetryAvailabilityPublisher.send(event)
+    }
+    
+    func publishPredictionRequest(_ request: PredictionRequest) {
+        predictionRequestPublisher.send(request)
+    }
+    
+    func publishPredictionResponse(_ response: PredictionResponse) {
+        predictionResponsePublisher.send(response)
     }
 }
 
@@ -298,6 +308,79 @@ struct BalloonPositionEvent: Equatable {
                lhs.position.longitude == rhs.position.longitude &&
                lhs.telemetry == rhs.telemetry &&
                abs(lhs.timestamp.timeIntervalSince(rhs.timestamp)) < 0.01
+    }
+}
+
+// MARK: - Prediction Events (Phase 3)
+
+struct PredictionRequest: Equatable {
+    let telemetry: TelemetryData
+    let userSettings: UserSettings
+    let measuredDescentRate: Double?
+    let force: Bool
+    let requestId: UUID
+    let timestamp: Date
+    
+    init(telemetry: TelemetryData, userSettings: UserSettings, measuredDescentRate: Double? = nil, force: Bool = false) {
+        self.telemetry = telemetry
+        self.userSettings = userSettings
+        self.measuredDescentRate = measuredDescentRate
+        self.force = force
+        self.requestId = UUID()
+        self.timestamp = Date()
+    }
+    
+    static func == (lhs: PredictionRequest, rhs: PredictionRequest) -> Bool {
+        return lhs.telemetry == rhs.telemetry &&
+               lhs.measuredDescentRate == rhs.measuredDescentRate &&
+               lhs.force == rhs.force &&
+               lhs.requestId == rhs.requestId &&
+               abs(lhs.timestamp.timeIntervalSince(rhs.timestamp)) < 0.01
+    }
+}
+
+enum PredictionResponse: Equatable {
+    case success(PredictionData, requestId: UUID, timestamp: Date)
+    case failure(Error, requestId: UUID, timestamp: Date)
+    case cached(PredictionData, requestId: UUID, timestamp: Date)
+    
+    init(success data: PredictionData, requestId: UUID) {
+        self = .success(data, requestId: requestId, timestamp: Date())
+    }
+    
+    init(failure error: Error, requestId: UUID) {
+        self = .failure(error, requestId: requestId, timestamp: Date())
+    }
+    
+    init(cached data: PredictionData, requestId: UUID) {
+        self = .cached(data, requestId: requestId, timestamp: Date())
+    }
+    
+    var requestId: UUID {
+        switch self {
+        case .success(_, let id, _), .failure(_, let id, _), .cached(_, let id, _):
+            return id
+        }
+    }
+    
+    var timestamp: Date {
+        switch self {
+        case .success(_, _, let time), .failure(_, _, let time), .cached(_, _, let time):
+            return time
+        }
+    }
+    
+    static func == (lhs: PredictionResponse, rhs: PredictionResponse) -> Bool {
+        switch (lhs, rhs) {
+        case let (.success(lhsData, lhsId, lhsTime), .success(rhsData, rhsId, rhsTime)):
+            return lhsData == rhsData && lhsId == rhsId && abs(lhsTime.timeIntervalSince(rhsTime)) < 0.01
+        case let (.failure(_, lhsId, lhsTime), .failure(_, rhsId, rhsTime)):
+            return lhsId == rhsId && abs(lhsTime.timeIntervalSince(rhsTime)) < 0.01
+        case let (.cached(lhsData, lhsId, lhsTime), .cached(rhsData, rhsId, rhsTime)):
+            return lhsData == rhsData && lhsId == rhsId && abs(lhsTime.timeIntervalSince(rhsTime)) < 0.01
+        default:
+            return false
+        }
     }
 }
 

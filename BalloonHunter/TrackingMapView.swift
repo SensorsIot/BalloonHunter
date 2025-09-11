@@ -8,6 +8,7 @@ struct TrackingMapView: View {
     @EnvironmentObject var userSettings: UserSettings
     @EnvironmentObject var mapState: MapState
     @EnvironmentObject var balloonTracker: BalloonTracker
+    @EnvironmentObject var domainModel: DomainModel
 
     @State private var showSettings = false
     @State private var position: MapCameraPosition = .automatic
@@ -113,7 +114,7 @@ struct TrackingMapView: View {
                 Map(position: $position) {
                     // User annotation
                     if let userLocation = mapState.userLocation {
-                        Annotation("You", coordinate: CLLocationCoordinate2D(latitude: userLocation.latitude, longitude: userLocation.longitude)) {
+                        Annotation("", coordinate: CLLocationCoordinate2D(latitude: userLocation.latitude, longitude: userLocation.longitude)) {
                             Image(systemName: "figure.walk")
                                 .foregroundColor(.blue)
                                 .font(.system(size: 24))
@@ -122,7 +123,7 @@ struct TrackingMapView: View {
                     
                     // Map annotations from MapState
                     ForEach(mapState.annotations, id: \.id) { item in
-                        Annotation(item.kind.displayName, coordinate: item.coordinate) {
+                        Annotation("", coordinate: item.coordinate) {
                             item.view
                         }
                     }
@@ -151,9 +152,31 @@ struct TrackingMapView: View {
                     MapUserLocationButton()
                 }
                 .frame(height: geometry.size.height * 0.7)
+                .onReceive(mapState.$region) { region in
+                    if let region = region {
+                        print("📍 TrackingMapView: Updating map position to region: \(region)")
+                        position = .region(region)
+                    }
+                }
                 .onReceive(NotificationCenter.default.publisher(for: .startupCompleted)) { _ in
                     // Leave map in .automatic mode for natural positioning
                     print("📍 TrackingMapView: Startup completed - keeping map in .automatic mode")
+                    
+                    // Phase 1 Test: Create MapFeatures and log them
+                    let features = MapFeatureCoordinator.createFeatures(from: mapState)
+                    let annotations = MapFeatureCoordinator.getAllAnnotations(from: features)
+                    let overlays = MapFeatureCoordinator.getAllOverlays(from: features)
+                    
+                    print("🎯 MapFeatures Test - Features: \(features.count), Annotations: \(annotations.count), Overlays: \(overlays.count)")
+                    
+                    for feature in features where feature.isVisible {
+                        print("  ✅ \(feature.id): \(feature.annotations.count) annotations, \(feature.overlays.count) overlays")
+                    }
+                    
+                    // Phase 2 Test: Sync DomainModel with MapState and compare
+                    domainModel.syncWithMapState(mapState)
+                    print("📊 DomainModel Status: \(domainModel.statusSummary)")
+                    domainModel.compareWithMapState(mapState)
                 }
 
                 // Data panel

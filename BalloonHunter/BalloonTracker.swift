@@ -15,11 +15,20 @@ final class BalloonTracker: ObservableObject {
     let predictionCache: PredictionCache  // Keep: has real performance value
     let routingCache: RoutingCache       // Keep: has real performance value
     let mapState: MapState               // Keep: single source of truth
+    let domainModel: DomainModel?        // Phase 2: Parallel domain model for comparison
     
     // KEEP: Core services (simplified)
     lazy var currentLocationService = CurrentLocationService()
     lazy var bleCommunicationService = BLECommunicationService(persistenceService: self.persistenceService)
     lazy var predictionService = PredictionService()
+    
+    // Phase 3: Event-driven prediction policy
+    lazy var predictionPolicy = PredictionPolicy(
+        predictionService: self.predictionService,
+        predictionCache: self.predictionCache,
+        mapState: self.mapState,
+        domainModel: self.domainModel
+    )
     
     // REQUIRED: Services that generate the events and manage data
     lazy var balloonPositionService = BalloonPositionService(bleService: self.bleCommunicationService)
@@ -31,14 +40,13 @@ final class BalloonTracker: ObservableObject {
     // REPLACE: With direct service communication
     
     private var cancellables = Set<AnyCancellable>()
-    private var lastPredictionTime = Date.distantPast
     private var lastRouteCalculationTime = Date.distantPast
     private var lastUserLocation: CLLocationCoordinate2D?
     private var lastLandingPoint: CLLocationCoordinate2D?
     private var lastUserLocationUpdateTime = Date.distantPast
     
     // Simple timing constants (replace complex mode machine)
-    private let predictionInterval: TimeInterval = 60  // Every 60 seconds per requirements
+    // Phase 3: Prediction timing moved to PredictionPolicy
     private let routeUpdateInterval: TimeInterval = 60  // Always 60 seconds
     private let significantMovementThreshold: Double = 100  // meters
     
@@ -48,7 +56,10 @@ final class BalloonTracker: ObservableObject {
     // Automatic descent rate calculation
     private var descentRateHistory: [Double] = [] // Store up to 20 values for smoothing
     
-    init() {
+    // Phase 2: Telemetry counter for comparison logging
+    private var telemetryCounter = 0
+    
+    init(domainModel: DomainModel? = nil) {
         appLog("BalloonTracker: Initializing simplified architecture", category: .general, level: .info)
         
         // Initialize core infrastructure (keep what's valuable)
@@ -56,10 +67,11 @@ final class BalloonTracker: ObservableObject {
         self.predictionCache = PredictionCache()
         self.routingCache = RoutingCache()
         self.mapState = MapState()
+        self.domainModel = domainModel
         
         setupDirectSubscriptions()
         
-        appLog("BalloonTracker: Simplified architecture initialized", category: .general, level: .info)
+        appLog("BalloonTracker: Simplified architecture initialized \(domainModel != nil ? "(with DomainModel)" : "")", category: .general, level: .info)
     }
     
     func initialize() {
@@ -73,6 +85,9 @@ final class BalloonTracker: ObservableObject {
         _ = balloonTrackService  
         _ = landingPointService
         _ = routeCalculationService
+        
+        // Phase 3: Initialize prediction policy
+        _ = predictionPolicy
         
         // Per FSD: Load persistence data after service initialization
         loadPersistenceData()
@@ -106,6 +121,14 @@ final class BalloonTracker: ObservableObject {
                 self?.handleUIEvent(uiEvent)
             }
             .store(in: &cancellables)
+        
+        // Phase 3: Prediction response handling
+        EventBus.shared.predictionResponsePublisher
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] response in
+                self?.handlePredictionResponse(response)
+            }
+            .store(in: &cancellables)
     }
     
     // MARK: - Simplified Event Handlers
@@ -118,20 +141,29 @@ final class BalloonTracker: ObservableObject {
         // 1. Update map state directly (no policy layers)
         updateMapWithBalloonPosition(telemetry)
         
+        // 1b. Phase 2: Mirror balloon position in DomainModel
+        if let domainModel = self.domainModel {
+            telemetryCounter += 1
+            domainModel.updateBalloonPosition(
+                CLLocationCoordinate2D(latitude: telemetry.latitude, longitude: telemetry.longitude),
+                altitude: telemetry.altitude,
+                climbRate: telemetry.verticalSpeed
+            )
+            domainModel.updateActiveSonde(telemetry.sondeName)
+            
+            // Phase 2: Compare every 10th telemetry update to verify consistency  
+            if telemetryCounter % 10 == 0 {
+                appLog("📊 Phase 2 Comparison (telemetry #\(telemetryCounter)): \(domainModel.statusSummary)", category: .general, level: .debug)
+                domainModel.compareWithMapState(mapState)
+            }
+        }
+        
         // 1a. Calculate automatic descent rate if below 10000m
         appLog("BalloonTracker: About to call calculateAutomaticDescentRate", category: .general, level: .debug)
         calculateAutomaticDescentRate(telemetry)
         
-        // 2. Check if we need prediction (simple time-based + movement)
-        appLog("BalloonTracker: Checking if prediction needed for \(telemetry.sondeName)", category: .general, level: .debug)
-        if shouldRequestPrediction(telemetry) {
-            appLog("BalloonTracker: Prediction needed, starting request", category: .general, level: .info)
-            Task {
-                await requestPrediction(telemetry)
-            }
-        } else {
-            appLog("BalloonTracker: Prediction not needed yet", category: .general, level: .debug)
-        }
+        // Phase 3: Prediction logic is now handled by PredictionPolicy via events
+        // The PredictionPolicy subscribes to BalloonPositionEvent and handles all prediction logic
         
         // 3. Update route if needed
         if shouldUpdateRoute() {
@@ -144,6 +176,15 @@ final class BalloonTracker: ObservableObject {
     private func handleUserLocation(_ event: UserLocationEvent) {
         // Update map state directly
         mapState.userLocation = event.locationData
+        
+        // Phase 2: Mirror location in DomainModel
+        if let domainModel = self.domainModel {
+            let location = CLLocation(
+                latitude: event.locationData.latitude,
+                longitude: event.locationData.longitude
+            )
+            domainModel.updateUserLocation(location)
+        }
         
         // Check if route needs updating due to user movement
         let userCoord = CLLocationCoordinate2D(
@@ -165,15 +206,28 @@ final class BalloonTracker: ObservableObject {
         lastUserLocation = userCoord
     }
     
+    // Phase 3: Handle prediction responses from PredictionPolicy
+    private func handlePredictionResponse(_ response: PredictionResponse) {
+        switch response {
+        case .success(let predictionData, let requestId, _):
+            appLog("🎯 BalloonTracker: Received successful prediction response \(requestId)", category: .general, level: .info)
+            updateMapWithPrediction(predictionData)
+            
+        case .cached(let predictionData, let requestId, _):
+            appLog("🎯 BalloonTracker: Received cached prediction response \(requestId)", category: .general, level: .debug)
+            updateMapWithPrediction(predictionData)
+            
+        case .failure(let error, let requestId, _):
+            appLog("🎯 BalloonTracker: Prediction failed \(requestId): \(error)", category: .general, level: .error)
+        }
+    }
+    
     private func handleUIEvent(_ event: UIEvent) {
         switch event {
         case .manualPredictionTriggered:
-            // Force immediate prediction
-            if let telemetry = bleCommunicationService.latestTelemetry {
-                Task {
-                    await requestPrediction(telemetry, force: true)
-                }
-            }
+            // Phase 3: Manual predictions are now handled by PredictionPolicy
+            // The PredictionPolicy subscribes to UIEvent and handles manual prediction requests
+            break
             
         case .buzzerMuteToggled(let muted, _):
             // Direct device command (no policy needed)
@@ -255,68 +309,11 @@ final class BalloonTracker: ObservableObject {
         appLog("BalloonTracker: Updated map with \(annotations.count) annotations", category: .general, level: .debug)
     }
     
-    private func shouldRequestPrediction(_ telemetry: TelemetryData, force: Bool = false) -> Bool {
-        if force {
-            appLog("BalloonTracker: Prediction forced", category: .general, level: .debug)
-            return true
-        }
-        
-        // Simple time-based trigger (no complex mode machine)
-        let timeSinceLastPrediction = Date().timeIntervalSince(lastPredictionTime)
-        let shouldTrigger = timeSinceLastPrediction > predictionInterval
-        
-        appLog("BalloonTracker: shouldRequestPrediction - timeSince: \(timeSinceLastPrediction)s, interval: \(predictionInterval)s, result: \(shouldTrigger)", category: .general, level: .debug)
-        
-        return shouldTrigger
-    }
-    
-    private func requestPrediction(_ telemetry: TelemetryData, force: Bool = false) async {
-        guard shouldRequestPrediction(telemetry, force: force) else { return }
-        
-        appLog("BalloonTracker: Requesting prediction for \(telemetry.sondeName)", category: .general, level: .info)
-        
-        // Use cache key generation (keep this valuable part)
-        let cacheKey = generateCacheKey(telemetry)
-        
-        // TEMPORARY: Skip cache completely to test landing time fix
-        appLog("BalloonTracker: TEMPORARY - Bypassing cache completely to test landing time fix", category: .general, level: .info)
-        
-        do {
-            // Use the tracker's user settings
-            let userSettings = self.userSettings
-            
-            // Use adjusted descent rate if available (below 10000m), otherwise use raw vertical speed
-            let descentRateToUse: Double
-            if let adjustedRate = mapState.smoothedDescentRate, telemetry.altitude < 10000 {
-                descentRateToUse = abs(adjustedRate) // Use absolute value of smoothed rate
-                appLog("BalloonTracker: Using adjusted descent rate: \(String(format: "%.2f", descentRateToUse)) m/s (altitude: \(Int(telemetry.altitude))m)", category: .general, level: .info)
-            } else {
-                descentRateToUse = abs(telemetry.verticalSpeed) // Fallback to raw vertical speed
-                appLog("BalloonTracker: Using raw vertical speed: \(String(format: "%.2f", descentRateToUse)) m/s (altitude: \(Int(telemetry.altitude))m)", category: .general, level: .info)
-            }
-            
-            // Call prediction service directly
-            let predictionData = try await predictionService.fetchPrediction(
-                telemetry: telemetry,
-                userSettings: userSettings,
-                measuredDescentRate: descentRateToUse,
-                cacheKey: cacheKey
-            )
-            
-            // Cache the result (keep this valuable optimization)
-            await predictionCache.set(key: cacheKey, value: predictionData)
-            
-            // Update map directly
-            updateMapWithPrediction(predictionData)
-            
-            lastPredictionTime = Date()
-            
-            appLog("BalloonTracker: Prediction completed successfully", category: .general, level: .info)
-            
-        } catch {
-            appLog("BalloonTracker: Prediction failed: \(error)", category: .general, level: .error)
-        }
-    }
+    // Phase 3: REMOVED - Prediction logic migrated to PredictionPolicy
+    // - shouldRequestPrediction() -> moved to PredictionPolicy.shouldRequestPrediction()
+    // - requestPrediction() -> moved to PredictionPolicy.processPredictionRequest()
+    // All prediction timing, caching, and service calls are now handled by PredictionPolicy
+    // This provides better separation of concerns and event-driven architecture
     
     private func updateMapWithPrediction(_ prediction: PredictionData) {
         // Update prediction data for DataPanelView (flight time, landing time)
@@ -335,6 +332,11 @@ final class BalloonTracker: ObservableObject {
         // Update landing and burst points
         mapState.landingPoint = prediction.landingPoint
         mapState.burstPoint = prediction.burstPoint
+        
+        // Phase 2: Mirror landing point in DomainModel
+        if let domainModel = self.domainModel, let landingPoint = prediction.landingPoint {
+            domainModel.updateLandingPoint(landingPoint, source: "prediction")
+        }
         
         // Update map annotations to include landing and burst points
         if let telemetry = bleCommunicationService.latestTelemetry {
@@ -525,12 +527,22 @@ final class BalloonTracker: ObservableObject {
         if let savedLandingPoint = persistenceService.loadLandingPoint(sondeName: "current") {
             mapState.landingPoint = savedLandingPoint
             appLog("BalloonTracker: Loaded saved landing point: \(savedLandingPoint)", category: .general, level: .debug)
+            
+            // Phase 2: Mirror in DomainModel
+            if let domainModel = self.domainModel {
+                domainModel.updateLandingPoint(savedLandingPoint, source: "persistence")
+            }
         }
         
         // 4. Sync landing point from LandingPointService (may have clipboard data)
         if let serviceLandingPoint = landingPointService.validLandingPoint {
             mapState.landingPoint = serviceLandingPoint
             appLog("BalloonTracker: Synced landing point from service: \(serviceLandingPoint)", category: .general, level: .info)
+            
+            // Phase 2: Mirror in DomainModel
+            if let domainModel = self.domainModel {
+                domainModel.updateLandingPoint(serviceLandingPoint, source: "service")
+            }
         }
         
         appLog("BalloonTracker: Persistence data loading complete", category: .general, level: .info)
