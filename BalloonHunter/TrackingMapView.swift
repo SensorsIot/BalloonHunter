@@ -158,6 +158,14 @@ struct TrackingMapView: View {
                         position = .region(region)
                     }
                 }
+                .onReceive(mapState.$isHeadingMode) { isHeadingMode in
+                    updateMapPositionForHeadingMode(isHeadingMode)
+                }
+                .onReceive(mapState.$userLocation) { userLocation in
+                    if mapState.isHeadingMode {
+                        updateMapPositionForHeadingMode(true)
+                    }
+                }
                 .onReceive(NotificationCenter.default.publisher(for: .startupCompleted)) { _ in
                     // Leave map in .automatic mode for natural positioning
                     print("📍 TrackingMapView: Startup completed - keeping map in .automatic mode")
@@ -177,6 +185,17 @@ struct TrackingMapView: View {
                     domainModel.syncWithMapState(mapState)
                     print("📊 DomainModel Status: \(domainModel.statusSummary)")
                     domainModel.compareWithMapState(mapState)
+                    
+                    // Phase 5 Test: Create RenderSets from DomainModel
+                    let renderSets = RenderSetCoordinator.createRenderSets(from: domainModel)
+                    let renderOverlays = RenderSetCoordinator.getAllOverlays(from: renderSets)
+                    let renderAnnotations = RenderSetCoordinator.getAllAnnotations(from: renderSets)
+                    
+                    print("🎨 RenderSet Pipeline - Sets: \(renderSets.count), Overlays: \(renderOverlays.count), Annotations: \(renderAnnotations.count)")
+                    
+                    for renderSet in renderSets where renderSet.isVisible {
+                        print("  🎯 \(renderSet.id) (z:\(renderSet.zOrder)): \(renderSet.annotations.count) annotations, \(renderSet.overlays.count) overlays")
+                    }
                 }
 
                 // Data panel
@@ -198,6 +217,32 @@ struct TrackingMapView: View {
         // Keep map in .automatic mode for natural positioning
         print("📍 TrackingMapView: Keeping map in .automatic mode for natural positioning")
         // Note: Map will automatically adjust to show annotations using .automatic position
+    }
+    
+    private func updateMapPositionForHeadingMode(_ isHeadingMode: Bool) {
+        guard let userLocation = mapState.userLocation else {
+            print("📍 TrackingMapView: No user location available for heading mode")
+            return
+        }
+        
+        let userCoordinate = CLLocationCoordinate2D(
+            latitude: userLocation.latitude,
+            longitude: userLocation.longitude
+        )
+        
+        if isHeadingMode {
+            // Center on user with their heading orientation
+            position = .camera(MapCamera(
+                centerCoordinate: userCoordinate,
+                distance: 1000,
+                heading: userLocation.heading
+            ))
+            print("📍 TrackingMapView: Enabled heading mode - heading: \(userLocation.heading)°")
+        } else {
+            // Return to automatic mode
+            position = .automatic
+            print("📍 TrackingMapView: Disabled heading mode - returning to automatic")
+        }
     }
 }
 
