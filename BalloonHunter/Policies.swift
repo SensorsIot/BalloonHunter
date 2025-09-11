@@ -1,7 +1,10 @@
-// Policies.swift
-// Consolidated policy layer for BalloonHunter
+// Policies.swift - DISABLED (DEAD CODE)
+// Consolidated policy layer for BalloonHunter  
 // Contains all policy implementations and PolicyScheduler in one organized file
+//
+// NOTE: This entire file is commented out as it's replaced by SimpleBalloonTracker
 
+/*
 import Foundation
 import Combine
 import SwiftUI
@@ -979,3 +982,4 @@ enum PolicyError: Error, LocalizedError {
 }
 
 // Camera update data structure
+*/

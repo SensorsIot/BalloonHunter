@@ -1,3 +1,9 @@
+// Application.swift - DISABLED (DEAD CODE)
+// Old ServiceManager architecture replaced by SimpleBalloonTracker
+//
+// NOTE: This entire file is commented out as it's replaced by SimpleBalloonTracker
+
+/*
 import Foundation
 import Combine
 import SwiftUI
@@ -168,3 +174,4 @@ class ApplicationCoordinator: ObservableObject {
         delegates.forEach { $0.applicationWillEnterForeground() }
     }
 }
+*/

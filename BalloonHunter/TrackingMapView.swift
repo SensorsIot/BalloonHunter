@@ -7,13 +7,11 @@ import UIKit
 struct TrackingMapView: View {
     @EnvironmentObject var userSettings: UserSettings
     @EnvironmentObject var mapState: MapState
-    @EnvironmentObject var serviceManager: ServiceManager
+    @EnvironmentObject var balloonTracker: BalloonTracker
 
     @State private var showSettings = false
-    @State private var transportMode: TransportationMode = .car
     @State private var position: MapCameraPosition = .automatic
     @State private var hasInitializedFromLocation = false
-    @State private var isHeadingMode: Bool = false
 
     var body: some View {
         GeometryReader { geometry in
@@ -24,7 +22,7 @@ struct TrackingMapView: View {
                         // Settings button
                         Button {
                             // Send device settings request before showing settings
-                            serviceManager.bleCommunicationService.getParameters()
+                            balloonTracker.bleCommunicationService.getParameters()
                             showSettings = true
                         } label: {
                             Image(systemName: "gearshape")
@@ -35,15 +33,17 @@ struct TrackingMapView: View {
                         .cornerRadius(8)
 
                         // Transport mode picker
-                        Picker("Mode", selection: $transportMode) {
+                        Picker("Mode", selection: Binding(
+                            get: { mapState.transportMode },
+                            set: { newMode in
+                                EventBus.shared.publishUIEvent(.transportModeChanged(newMode, timestamp: Date()))
+                            }
+                        )) {
                             Image(systemName: "car.fill").tag(TransportationMode.car)
                             Image(systemName: "bicycle").tag(TransportationMode.bike)
                         }
                         .pickerStyle(.segmented)
                         .frame(width: 100)
-                        .onChange(of: transportMode) { _, newMode in
-                            EventBus.shared.publishUIEvent(.transportModeChanged(newMode, timestamp: Date()))
-                        }
 
                         // Prediction visibility toggle
                         Button {
@@ -61,6 +61,10 @@ struct TrackingMapView: View {
                             // Landing point available - show "All" button
                             Button("All") {
                                 EventBus.shared.publishUIEvent(.showAllAnnotationsRequested(timestamp: Date()))
+                                // Update map position after event is processed
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                                    updateMapToShowAllAnnotations()
+                                }
                             }
                             .buttonStyle(.bordered)
                         } else {
@@ -74,13 +78,11 @@ struct TrackingMapView: View {
 
                         // Heading mode toggle
                         Button {
-                            isHeadingMode.toggle()
-                            EventBus.shared.publishUIEvent(.headingModeToggled(isHeadingMode, timestamp: Date()))
+                            EventBus.shared.publishUIEvent(.headingModeToggled(!mapState.isHeadingMode, timestamp: Date()))
                         } label: {
-                            Text(isHeadingMode ? "Heading" : "Free")
-                                .font(.system(size: 14, weight: .medium))
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 8)
+                            Image(systemName: mapState.isHeadingMode ? "location.north.circle.fill" : "location.circle")
+                                .imageScale(.large)
+                                .padding(8)
                         }
                         .background(.ultraThinMaterial)
                         .cornerRadius(8)
@@ -149,15 +151,9 @@ struct TrackingMapView: View {
                     MapUserLocationButton()
                 }
                 .frame(height: geometry.size.height * 0.7)
-                .onChange(of: mapState.userLocation) { _, newLocation in
-                    guard let location = newLocation, !hasInitializedFromLocation else { return }
-                    let region = MKCoordinateRegion(
-                        center: CLLocationCoordinate2D(latitude: location.latitude, longitude: location.longitude),
-                        span: MKCoordinateSpan(latitudeDelta: 0.25, longitudeDelta: 0.25) // ~25km span
-                    )
-                    position = .region(region)
-                    hasInitializedFromLocation = true
-                    print("📍 TrackingMapView: Initialized region from user location: \(location.latitude), \(location.longitude)")
+                .onReceive(NotificationCenter.default.publisher(for: .startupCompleted)) { _ in
+                    // Leave map in .automatic mode for natural positioning
+                    print("📍 TrackingMapView: Startup completed - keeping map in .automatic mode")
                 }
 
                 // Data panel
@@ -169,10 +165,16 @@ struct TrackingMapView: View {
         }
         .sheet(isPresented: $showSettings) {
             SettingsView()
-                .environmentObject(serviceManager.bleCommunicationService)
-                .environmentObject(serviceManager.persistenceService)
+                .environmentObject(balloonTracker.bleCommunicationService)
+                .environmentObject(balloonTracker.persistenceService)
                 .environmentObject(userSettings)
         }
+    }
+    
+    private func updateMapToShowAllAnnotations() {
+        // Keep map in .automatic mode for natural positioning
+        print("📍 TrackingMapView: Keeping map in .automatic mode for natural positioning")
+        // Note: Map will automatically adjust to show annotations using .automatic position
     }
 }
 
@@ -189,5 +191,6 @@ extension MapAnnotationItem.AnnotationKind {
         }
     }
 }
+
 
 

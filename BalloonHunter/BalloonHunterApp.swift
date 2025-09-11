@@ -39,28 +39,36 @@ import OSLog // Import OSLog for appLog function
 @main
 struct BalloonHunterApp: App {
     @Environment(\.scenePhase) var scenePhase
-    @StateObject var serviceManager = ServiceManager()
+    @StateObject var balloonTracker = BalloonTracker()
     @StateObject var appSettings = AppSettings()
-    @StateObject var userSettings = UserSettings()
     @State private var locationReady = false
     @State private var animateLoading = false
+    @State private var minimumDisplayTimeElapsed = false
 
+    private func checkAndHideLogo() {
+        // Logo will hide automatically when both locationReady AND minimumDisplayTimeElapsed are true
+        // due to the condition: if !locationReady || !minimumDisplayTimeElapsed
+        if locationReady && minimumDisplayTimeElapsed {
+            appLog("BalloonHunterApp: Both location and minimum display time ready - hiding logo.", category: .lifecycle, level: .info)
+        }
+    }
+    
     var body: some Scene {
         WindowGroup {
             ZStack {
                 // TrackingMapView always present (building in background)
                 TrackingMapView()
-                    .environmentObject(serviceManager.mapState)
+                    .environmentObject(balloonTracker.mapState)
                     .environmentObject(appSettings)
-                    .environmentObject(userSettings)
-                    .environmentObject(serviceManager)
+                    .environmentObject(balloonTracker.userSettings)
+                    .environmentObject(balloonTracker)
                     .onAppear {
-                        // Ensure event-driven flow is initialized when map appears
-                        serviceManager.initializeEventDrivenFlow()
+                        // Initialize simplified architecture
+                        balloonTracker.initialize()
                     }
                 
-                // Logo overlay (shown until location ready)
-                if !locationReady {
+                // Logo overlay (shown until location ready AND minimum 2 seconds elapsed)
+                if !locationReady || !minimumDisplayTimeElapsed {
                     VStack {
                         Spacer()
                         
@@ -80,6 +88,11 @@ struct BalloonHunterApp: App {
                             .font(.subheadline)
                             .foregroundColor(.gray)
                             .padding(.top, 5)
+                        
+                        Text("by HB9BLA")
+                            .font(.caption)
+                            .foregroundColor(.gray)
+                            .padding(.top, 2)
                         
                         Spacer()
                         
@@ -104,25 +117,30 @@ struct BalloonHunterApp: App {
                     .background(Color.black)
                     .onAppear {
                         animateLoading = true
+                        // Start 2-second minimum display timer (non-blocking)
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                            minimumDisplayTimeElapsed = true
+                            checkAndHideLogo()
+                        }
                     }
                 }
                 
                 // Invisible startup view running in background
                 StartupView()
-                    .environmentObject(serviceManager)
-                    .environmentObject(userSettings)
+                    .environmentObject(balloonTracker)
+                    .environmentObject(balloonTracker.userSettings)
                     .opacity(0)
             }
             .onReceive(NotificationCenter.default.publisher(for: .locationReady)) { _ in
-                appLog("BalloonHunterApp: Received locationReady notification, hiding logo overlay.", category: .lifecycle, level: .info)
-                withAnimation(.easeInOut(duration: 0.8)) {
-                    locationReady = true
-                }
+                appLog("BalloonHunterApp: Received locationReady notification.", category: .lifecycle, level: .info)
+                locationReady = true
+                checkAndHideLogo()
             }
         }
         .onChange(of: scenePhase) { oldScenePhase, newScenePhase in
             if newScenePhase == .inactive {
-                serviceManager.persistenceService.saveOnAppClose(balloonTrackService: serviceManager.balloonTrackService)
+                // Save data on app close using the track service
+                balloonTracker.persistenceService.saveOnAppClose(balloonTrackService: balloonTracker.balloonTrackService)
                 appLog("BalloonHunterApp: App became inactive, saved data.", category: .lifecycle, level: .info)
             }
         }

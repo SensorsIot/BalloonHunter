@@ -10,6 +10,39 @@ import CoreLocation
 import MapKit
 import OSLog
 
+// MARK: - Application Logging
+
+enum LogCategory: String {
+    case event = "Event"
+    case policy = "Policy"
+    case service = "Service"
+    case ui = "UI"
+    case cache = "Cache"
+    case general = "General"
+    case persistence = "Persistence"
+    case ble = "BLE"
+    case lifecycle = "Lifecycle"
+    case modeState = "ModeState"
+}
+
+nonisolated func appLog(_ message: String, category: LogCategory, level: OSLogType = .default) {
+    let formatter = DateFormatter()
+    formatter.dateFormat = "HH:mm:ss.SSS"
+    let timestamp = formatter.string(from: Date.now)
+    let timestampedMessage = "[\(timestamp)] \(message)"
+    
+    let logger = Logger(subsystem: "com.yourcompany.BalloonHunter", category: category.rawValue)
+    
+    // Use literal string formatting to avoid decode issues with special characters
+    switch level {
+    case OSLogType.debug: logger.debug("\(timestampedMessage, privacy: .public)")
+    case OSLogType.info: logger.info("\(timestampedMessage, privacy: .public)")
+    case OSLogType.error: logger.error("\(timestampedMessage, privacy: .public)")
+    case OSLogType.fault: logger.fault("\(timestampedMessage, privacy: .public)")
+    default: logger.log("\(timestampedMessage, privacy: .public)")
+    }
+}
+
 // MARK: - BLE Communication Service
 
 @MainActor
@@ -93,12 +126,8 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
     }
 
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
-        let stateString = bluetoothStateString(central.state)
-        appLog("BLE: Bluetooth state changed to \(central.state.rawValue) (\(stateString))", category: .ble, level: .info)
-        
         switch central.state {
         case .poweredOn:
-            appLog("BLE: Bluetooth powered on, ready for scanning", category: .ble, level: .info)
             centralManagerPoweredOn.send(())
             publishHealthEvent(.healthy, message: "Bluetooth powered on")
         case .poweredOff:
@@ -201,27 +230,21 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
         }
 
         let characteristics = service.characteristics ?? []
-        appLog("Discovered \(characteristics.count) characteristic(s) for service \(service.uuid).", category: .ble, level: .debug)
 
         for characteristic in characteristics {
             switch characteristic.uuid {
             case UART_TX_CHARACTERISTIC_UUID:
-                appLog("Found UART TX Characteristic. Checking write properties...", category: .ble, level: .debug)
                 if characteristic.properties.contains(.write) {
                     writeCharacteristic = characteristic
-                    appLog("Assigned TX characteristic for writing (write).", category: .ble, level: .debug)
                 } else if characteristic.properties.contains(.writeWithoutResponse) {
                     writeCharacteristic = characteristic
-                    appLog("Assigned TX characteristic for writing (writeWithoutResponse).", category: .ble, level: .debug)
                 } else {
                     appLog("TX characteristic does not support writing.", category: .ble, level: .error)
                 }
 
             case UART_RX_CHARACTERISTIC_UUID:
-                appLog("Found UART RX Characteristic. Checking notify property...", category: .ble, level: .debug)
                 if characteristic.properties.contains(.notify) {
                     peripheral.setNotifyValue(true, for: characteristic)
-                    appLog("Set notify value to true for RX characteristic.", category: .ble, level: .debug)
                 } else {
                     appLog("RX characteristic does not support notifications.", category: .ble, level: .error)
                 }
@@ -237,22 +260,8 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
             appLog("BLE: Ready for commands", category: .ble, level: .info)
             publishHealthEvent(.healthy, message: "BLE ready for commands")
             
-            // Initialize device by reading settings - this often triggers telemetry transmission
-            if !hasSentReadSettingsCommand {
-                appLog("BLE: Scheduling device settings read command", category: .ble, level: .debug)
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-                    guard let self = self else { return }
-                    if !self.hasSentReadSettingsCommand {
-                        appLog("BLE: Sending device settings read command", category: .ble, level: .debug)
-                        self.getParameters()
-                        self.hasSentReadSettingsCommand = true
-                    } else {
-                        appLog("BLE: Device settings command already sent, skipping", category: .ble, level: .debug)
-                    }
-                }
-            } else {
-                appLog("BLE: Device settings command already scheduled/sent", category: .ble, level: .debug)
-            }
+            // Don't automatically request settings - wait for first telemetry packet
+            // Settings will be requested only when user opens settings panel
         }
     }
 
@@ -268,7 +277,7 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
         }
 
         if let string = String(data: data, encoding: .utf8) {
-            appLog("BLE RAW: '\(string)'", category: .ble, level: .debug)
+            // Removed verbose BLE RAW logging per user request
             parseMessage(string)
         }
     }
@@ -297,14 +306,20 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
             ))
             
             appLog("BLE: First packet processed - telemetry available: \(isTelemetryAvailable) (\(reason))", category: .ble, level: .info)
+            
+            // Per FSD: After receiving and decoding the first BLE package, issue settings command
+            if !hasSentReadSettingsCommand {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                    self?.getParameters()
+                    self?.hasSentReadSettingsCommand = true
+                }
+            }
         }
         
         switch messageType {
         case "0":
-            // Device Basic Info and Status
-            if let deviceStatus = parseType0Message(components) {
-                appLog("BLE PARSED: Type=0 probe=\(deviceStatus.probeType) freq=\(deviceStatus.frequency) rssi=\(Int(deviceStatus.rssi)) bat=\(deviceStatus.batPercentage)% batV=\(deviceStatus.batVoltage) mute=\(deviceStatus.buzmute) sw=\(deviceStatus.softwareVersion)", category: .ble, level: .debug)
-            }
+            // Device Basic Info and Status - parsed but not currently used
+            _ = parseType0Message(components)
             
         case "1":
             // Probe Telemetry
@@ -313,7 +328,6 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
                     return // Skip invalid coordinates
                 }
                 
-                appLog("BLE PARSED: Type=1 probe=\(telemetry.probeType) freq=\(telemetry.frequency) sonde=\(telemetry.sondeName) lat=\(telemetry.latitude) lon=\(telemetry.longitude) alt=\(Int(telemetry.altitude))m hspd=\(telemetry.horizontalSpeed) vspd=\(telemetry.verticalSpeed) rssi=\(Int(telemetry.signalStrength)) bat=\(telemetry.batteryPercentage)% afc=\(telemetry.afcFrequency) burst=\(telemetry.burstKillerEnabled) burstTime=\(telemetry.burstKillerTime) batV=\(telemetry.batVoltage) mute=\(telemetry.buzmute) sw=\(telemetry.firmwareVersion)", category: .ble, level: .debug)
                 
                 DispatchQueue.main.async {
                     self.latestTelemetry = telemetry
@@ -332,15 +346,12 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
             }
             
         case "2":
-            // Name Only
-            if let nameOnly = parseType2Message(components) {
-                appLog("BLE PARSED: Type=2 probe=\(nameOnly.probeType) freq=\(nameOnly.frequency) sonde=\(nameOnly.sondeName) rssi=\(Int(nameOnly.rssi)) bat=\(nameOnly.batPercentage)% afc=\(nameOnly.afcFrequency) batV=\(nameOnly.batVoltage) mute=\(nameOnly.buzmute) sw=\(nameOnly.softwareVersion)", category: .ble, level: .debug)
-            }
+            // Name Only - parsed but not currently used
+            _ = parseType2Message(components)
             
         case "3":
             // Device Configuration
             if let settings = parseType3Message(components) {
-                appLog("BLE PARSED: Type=3 probe=\(settings.sondeType) freq=\(settings.frequency) callSign=\(settings.callSign) oledSDA=\(settings.oledSDA) oledSCL=\(settings.oledSCL) oledRST=\(settings.oledRST) ledPin=\(settings.ledPin) RS41BW=\(settings.RS41Bandwidth) M20BW=\(settings.M20Bandwidth) M10BW=\(settings.M10Bandwidth) PILOTBW=\(settings.PILOTBandwidth) DFMBW=\(settings.DFMBandwidth) freqCorr=\(settings.frequencyCorrection) batPin=\(settings.batPin) batMin=\(settings.batMin) batMax=\(settings.batMax) batType=\(settings.batType) lcdType=\(settings.lcdType) nameType=\(settings.nameType) buzPin=\(settings.buzPin) sw=\(settings.softwareVersion)", category: .ble, level: .debug)
                 DispatchQueue.main.async {
                     self.deviceSettings = settings
                     self.persistenceService.save(deviceSettings: settings)
@@ -847,10 +858,10 @@ final class CurrentLocationService: NSObject, ObservableObject, CLLocationManage
             appLog("CurrentLocationService: CLOSE MODE - Best accuracy, no distance filter, 1Hz max", category: .service, level: .info)
             
         case .far:
-            // FAR MODE (>100m): kCLLocationAccuracyNearestTenMeters, 5m movement threshold
+            // FAR MODE (>100m): kCLLocationAccuracyNearestTenMeters, 20m movement threshold
             locationManager.desiredAccuracy = kCLLocationAccuracyNearestTenMeters
-            locationManager.distanceFilter = 5.0 // Only update on 5+ meter movement
-            appLog("CurrentLocationService: FAR MODE - 10m accuracy, 5m distance filter", category: .service, level: .info)
+            locationManager.distanceFilter = 20.0 // Only update on 20+ meter movement
+            appLog("CurrentLocationService: FAR MODE - 10m accuracy, 20m distance filter", category: .service, level: .info)
         }
     }
 
@@ -1102,7 +1113,7 @@ final class BalloonTrackService: ObservableObject {
     
     // Track management
     private var telemetryPointCounter = 0
-    private let saveInterval = 100 // Save every 100 telemetry points
+    private let saveInterval = 10 // Save every 10 telemetry points
     
     // Landing detection - smoothing buffers
     private var verticalSpeedBuffer: [Double] = []
@@ -1141,8 +1152,16 @@ final class BalloonTrackService: ObservableObject {
     func processTelemetryData(_ telemetryData: TelemetryData) {
         if currentBalloonName == nil || telemetryData.sondeName != currentBalloonName {
             appLog("BalloonTrackService: New sonde detected - \(telemetryData.sondeName), switching from \(currentBalloonName ?? "none")", category: .service, level: .info)
-            persistenceService.purgeAllTracks()
+            
+            // First, try to load the track for the new sonde
             let persistedTrack = persistenceService.loadTrackForCurrentSonde(sondeName: telemetryData.sondeName)
+            
+            // Only purge tracks if we're actually switching to a different sonde
+            if let currentName = currentBalloonName, currentName != telemetryData.sondeName {
+                appLog("BalloonTrackService: Switching from different sonde (\(currentName)) - purging old tracks", category: .service, level: .info)
+                persistenceService.purgeAllTracks()
+            }
+            
             if let track = persistedTrack {
                 self.currentBalloonTrack = track
                 appLog("BalloonTrackService: Loaded persisted track for \(telemetryData.sondeName) with \(self.currentBalloonTrack.count) points", category: .service, level: .info)
@@ -1377,13 +1396,16 @@ final class PredictionService: ObservableObject {
         components.host = "api.v2.sondehub.org"
         components.path = "/tawhiri"
         
+        // Ensure burst altitude is always above current altitude
+        let effectiveBurstAltitude = max(userSettings.burstAltitude, telemetry.altitude + 100)
+        
         let queryItems = [
             URLQueryItem(name: "launch_latitude", value: String(telemetry.latitude)),
             URLQueryItem(name: "launch_longitude", value: String(telemetry.longitude)),
             URLQueryItem(name: "launch_altitude", value: String(telemetry.altitude)),
             URLQueryItem(name: "launch_datetime", value: ISO8601DateFormatter().string(from: Date())),
             URLQueryItem(name: "ascent_rate", value: String(userSettings.ascentRate)),
-            URLQueryItem(name: "burst_altitude", value: String(userSettings.burstAltitude)),
+            URLQueryItem(name: "burst_altitude", value: String(effectiveBurstAltitude)),
             URLQueryItem(name: "descent_rate", value: String(abs(descentRate)))
         ]
         
@@ -1406,6 +1428,11 @@ final class PredictionService: ObservableObject {
         var trajectoryCoordinates: [CLLocationCoordinate2D] = []
         var burstPoint: CLLocationCoordinate2D?
         var landingPoint: CLLocationCoordinate2D?
+        var landingTime: Date?
+        
+        // ISO8601 date formatter for parsing Sondehub datetime strings with fractional seconds
+        let dateFormatter = ISO8601DateFormatter()
+        dateFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         
         // Process ascent stage
         if let ascent = sondehubResponse.prediction.first(where: { $0.stage == "ascent" }) {
@@ -1422,22 +1449,38 @@ final class PredictionService: ObservableObject {
         
         // Process descent stage
         if let descent = sondehubResponse.prediction.first(where: { $0.stage == "descent" }) {
+            appLog("PredictionService: Found descent stage with \(descent.trajectory.count) trajectory points", category: .service, level: .debug)
+            
             for point in descent.trajectory {
                 let coordinate = CLLocationCoordinate2D(latitude: point.latitude, longitude: point.longitude)
                 trajectoryCoordinates.append(coordinate)
             }
             
-            // Landing point is the last point of descent
+            // Landing point and time are from the last point of descent
             if let lastDescentPoint = descent.trajectory.last {
                 landingPoint = CLLocationCoordinate2D(latitude: lastDescentPoint.latitude, longitude: lastDescentPoint.longitude)
+                appLog("PredictionService: Last descent point datetime string: '\(lastDescentPoint.datetime)'", category: .service, level: .debug)
+                
+                landingTime = dateFormatter.date(from: lastDescentPoint.datetime)
+                
+                if landingTime == nil {
+                    appLog("PredictionService: Failed to parse landing time from: '\(lastDescentPoint.datetime)'", category: .service, level: .error)
+                    appLog("PredictionService: DateFormatter expects ISO8601 format (e.g., '2024-03-15T10:30:45Z')", category: .service, level: .error)
+                } else {
+                    appLog("PredictionService: Successfully parsed landing time: \(landingTime!) from '\(lastDescentPoint.datetime)'", category: .service, level: .info)
+                }
+            } else {
+                appLog("PredictionService: No trajectory points found in descent stage", category: .service, level: .error)
             }
+        } else {
+            appLog("PredictionService: No descent stage found in prediction response", category: .service, level: .error)
         }
         
         return PredictionData(
             path: trajectoryCoordinates,
             burstPoint: burstPoint,
             landingPoint: landingPoint,
-            landingTime: nil,
+            landingTime: landingTime,
             latestTelemetry: nil
         )
     }
@@ -1525,13 +1568,15 @@ final class LandingPointService: ObservableObject {
     private let predictionService: PredictionService
     private let persistenceService: PersistenceService
     private let predictionCache: PredictionCache
+    private let mapState: MapState
     private var cancellables = Set<AnyCancellable>()
     
-    init(balloonTrackService: BalloonTrackService, predictionService: PredictionService, persistenceService: PersistenceService, predictionCache: PredictionCache) {
+    init(balloonTrackService: BalloonTrackService, predictionService: PredictionService, persistenceService: PersistenceService, predictionCache: PredictionCache, mapState: MapState) {
         self.balloonTrackService = balloonTrackService
         self.predictionService = predictionService
         self.persistenceService = persistenceService
         self.predictionCache = predictionCache
+        self.mapState = mapState
         
         setupSubscriptions()
         // Don't call updateLandingPointPriorities() during init - let events trigger it naturally
@@ -1636,15 +1681,24 @@ final class LandingPointService: ObservableObject {
             appLog("LandingPointService: Priority 2 - Telemetry available, waiting for prediction or landing detection", category: .service, level: .debug)
             // Don't set validLandingPoint - wait for prediction service
             
-        } else if let clipboardLanding = parseClipboardForLandingPoint() {
-            // Priority 3: No telemetry - clipboard is OK
-            validLandingPoint = clipboardLanding
-            appLog("LandingPointService: Priority 3 - No telemetry available, using clipboard", category: .service, level: .info)
-            
         } else {
-            // Priority 4: Persisted landing point from previous sessions
-            appLog("LandingPointService: No clipboard data available, checking Priority 4 - Persisted data", category: .service, level: .debug)
-            checkPersistedLandingPoint()
+            // Priority 3: No telemetry - check clipboard
+            appLog("LandingPointService: Checking clipboard for landing point...", category: .service, level: .info)
+            if let clipboardLanding = parseClipboardForLandingPoint() {
+                validLandingPoint = clipboardLanding
+                appLog("LandingPointService: Priority 3 - No telemetry available, using clipboard", category: .service, level: .info)
+                
+                // Directly sync to mapState
+                mapState.landingPoint = clipboardLanding
+                appLog("LandingPointService: Synced clipboard landing point to mapState", category: .service, level: .info)
+                
+                // Trigger annotation update via EventBus
+                EventBus.shared.publishUIEvent(.showAllAnnotationsRequested(timestamp: Date()))
+            } else {
+                appLog("LandingPointService: Clipboard check completed, no valid coordinates found", category: .service, level: .info)
+                // Priority 4: Persisted landing point from previous sessions
+                checkPersistedLandingPoint()
+            }
         }
     }
     
@@ -1687,8 +1741,12 @@ final class LandingPointService: ObservableObject {
     }
     
     private func parseClipboardForLandingPoint() -> CLLocationCoordinate2D? {
-        guard let clipboardString = UIPasteboard.general.string else {
-            appLog("LandingPointService: No clipboard content available", category: .service, level: .debug)
+        let clipboardString = UIPasteboard.general.string ?? ""
+        
+        // Always show clipboard content for decision making
+        appLog("LandingPointService: Clipboard content: '\(clipboardString)' (\(clipboardString.count) chars)", category: .service, level: .info)
+        
+        guard !clipboardString.isEmpty else {
             return nil
         }
         
@@ -1862,16 +1920,30 @@ final class PersistenceService: ObservableObject {
     private func saveAllTracks() {
         let encoder = JSONEncoder()
         if let encoded = try? encoder.encode(internalTracks) {
+            // Save to both UserDefaults (for production) and Documents directory (for development persistence)
             userDefaults.set(encoded, forKey: "BalloonTracks")
+            saveToDocumentsDirectory(data: encoded, filename: "BalloonTracks.json")
         }
     }
     
     private static func loadAllTracks() -> [String: [BalloonTrackPoint]] {
         let decoder = JSONDecoder()
-        if let data = UserDefaults.standard.data(forKey: "BalloonTracks"),
+        
+        // Try Documents directory first (survives development installs)
+        if let data = loadFromDocumentsDirectory(filename: "BalloonTracks.json"),
            let tracks = try? decoder.decode([String: [BalloonTrackPoint]].self, from: data) {
+            appLog("PersistenceService: Loaded tracks from Documents directory", category: .service, level: .debug)
             return tracks
         }
+        
+        // Fallback to UserDefaults (for production)
+        if let data = UserDefaults.standard.data(forKey: "BalloonTracks"),
+           let tracks = try? decoder.decode([String: [BalloonTrackPoint]].self, from: data) {
+            appLog("PersistenceService: Loaded tracks from UserDefaults", category: .service, level: .debug)
+            return tracks
+        }
+        
+        appLog("PersistenceService: No existing tracks found", category: .service, level: .debug)
         return [:]
     }
     
@@ -1901,6 +1973,32 @@ final class PersistenceService: ObservableObject {
             }
         }
         return [:]
+    }
+    
+    // MARK: - Documents Directory Helpers
+    
+    private func saveToDocumentsDirectory(data: Data, filename: String) {
+        do {
+            let documentsURL = try FileManager.default.url(for: .documentDirectory, in: .userDomainMask, appropriateFor: nil, create: false)
+            let fileURL = documentsURL.appendingPathComponent(filename)
+            try data.write(to: fileURL)
+            appLog("PersistenceService: Saved \(filename) to Documents directory", category: .service, level: .debug)
+        } catch {
+            appLog("PersistenceService: Failed to save \(filename) to Documents directory: \(error)", category: .service, level: .error)
+        }
+    }
+    
+    private static func loadFromDocumentsDirectory(filename: String) -> Data? {
+        do {
+            let documentsURL = try FileManager.default.url(for: .documentDirectory, in: .userDomainMask, appropriateFor: nil, create: false)
+            let fileURL = documentsURL.appendingPathComponent(filename)
+            let data = try Data(contentsOf: fileURL)
+            appLog("PersistenceService: Loaded \(filename) from Documents directory", category: .service, level: .debug)
+            return data
+        } catch {
+            appLog("PersistenceService: Failed to load \(filename) from Documents directory: \(error)", category: .service, level: .debug)
+            return nil
+        }
     }
 }
 

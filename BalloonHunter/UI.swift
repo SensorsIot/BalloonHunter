@@ -128,30 +128,6 @@ struct TransportModeButton: View {
     }
 }
 
-struct ModeIndicator: View {
-    let mode: AppMode
-    
-    var body: some View {
-        Text(mode.displayName)
-            .font(.caption)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(backgroundColor(for: mode))
-            .foregroundColor(.white)
-            .cornerRadius(8)
-    }
-    
-    private func backgroundColor(for mode: AppMode) -> Color {
-        switch mode {
-        case .explore:
-            return .blue
-        case .follow:
-            return .green
-        case .finalApproach:
-            return .red
-        }
-    }
-}
 
 struct MetricRow: View {
     let title: String

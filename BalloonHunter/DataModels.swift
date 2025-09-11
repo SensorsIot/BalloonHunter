@@ -55,24 +55,6 @@ enum AppState: String {
     case longRangeTracking
 }
 
-enum AppMode: String, CaseIterable, Identifiable, Codable {
-    case explore
-    case follow
-    case finalApproach
-    
-    var id: String { rawValue }
-    
-    var displayName: String {
-        switch self {
-        case .explore:
-            return "Explore"
-        case .follow:
-            return "Follow"
-        case .finalApproach:
-            return "Final Approach"
-        }
-    }
-}
 
 class SharedAppState {
     static let shared = SharedAppState()
@@ -710,6 +692,7 @@ final class MapState: ObservableObject {
     @Published var balloonTelemetry: TelemetryData? = nil
     @Published var userLocation: LocationData? = nil
     @Published var landingPoint: CLLocationCoordinate2D? = nil
+    @Published var burstPoint: CLLocationCoordinate2D? = nil
     
     // Additional data for DataPanelView
     @Published var predictionData: PredictionData? = nil
@@ -719,7 +702,6 @@ final class MapState: ObservableObject {
     @Published var smoothedDescentRate: Double? = nil
     
     // UI state
-    @Published var currentMode: AppMode = .explore
     @Published var transportMode: TransportationMode = .car
     @Published var isHeadingMode: Bool = false
     @Published var isPredictionPathVisible: Bool = true
@@ -775,8 +757,11 @@ final class MapState: ObservableObject {
             .sink { event in
                 // ServiceHealthEvent doesn't contain connection status data
                 // Connection status updates will come through other event channels
-                appLog("MapState: Received service health event from \(event.serviceName): \(event.health)", 
-                       category: .general, level: .debug)
+                // Only log when service health is not healthy
+                if event.health != .healthy {
+                    appLog("MapState: Received service health event from \(event.serviceName): \(event.health)", 
+                           category: .general, level: .debug)
+                }
             }
             .store(in: &cancellables)
     }
@@ -795,8 +780,6 @@ final class MapState: ObservableObject {
             updateBuzzerMute(muted)
         case .showAllAnnotationsRequested(_):
             triggerShowAllAnnotations()
-        case .modeSwitched(let mode, _):
-            updateMode(mode)
         default:
             break
         }
@@ -916,13 +899,6 @@ final class MapState: ObservableObject {
         }
     }
     
-    func updateMode(_ mode: AppMode) {
-        if currentMode != mode {
-            currentMode = mode
-            appLog("MapState: Mode changed to \(mode.displayName)", 
-                   category: .general, level: .info)
-        }
-    }
     
     func updateTransportMode(_ mode: TransportationMode) {
         if transportMode != mode {
@@ -982,7 +958,6 @@ final class MapState: ObservableObject {
             "hasBalloonTrack": balloonTrackPath != nil,
             "hasPredictionPath": predictionPath != nil,
             "hasUserRoute": userRoute != nil,
-            "currentMode": currentMode.displayName,
             "transportMode": transportMode,
             "isHeadingMode": isHeadingMode,
             "versionCount": currentVersion.count
@@ -1023,12 +998,13 @@ private func regionsEqual(_ lhs: MKCoordinateRegion?, _ rhs: MKCoordinateRegion)
            abs(lhs.span.longitudeDelta - rhs.span.longitudeDelta) < 0.0001
 }
 
-// MARK: - Mode State Machine
+// MARK: - Mode State Machine (DISABLED - DEAD CODE)
 
+/*
 @MainActor
 final class ModeStateMachine: ObservableObject {
-    @Published private(set) var currentMode: AppMode = .explore
-    @Published private(set) var modeTransitionHistory: [(AppMode, Date)] = []
+    // @Published private(set) var currentMode: AppMode = .explore // DISABLED: AppMode removed
+    // @Published private(set) var modeTransitionHistory: [(AppMode, Date)] = [] // DISABLED: AppMode removed
     
     private var cancellables = Set<AnyCancellable>()
     private let hysteresisThreshold: TimeInterval = 5.0 // Prevent mode flapping
@@ -1067,7 +1043,7 @@ final class ModeStateMachine: ObservableObject {
     
     init() {
         setupEventSubscriptions()
-        recordTransition(to: .explore, reason: "Initial state")
+        // recordTransition(to: .explore, reason: "Initial state") // DISABLED: AppMode removed
     }
     
     private func setupEventSubscriptions() {
@@ -1237,7 +1213,7 @@ final class ModeStateMachine: ObservableObject {
         recordTransition(to: newMode, reason: getTransitionReason(from: previousMode, to: newMode))
         
         // Publish mode change event
-        EventBus.shared.publishUIEvent(.modeSwitched(newMode))
+        // EventBus.shared.publishUIEvent(.modeSwitched(newMode)) // DISABLED: modeSwitched removed
         
         appLog("ModeStateMachine: Transitioned from \(previousMode.displayName) to \(newMode.displayName)", 
                category: .general, level: .info)
@@ -1348,23 +1324,6 @@ final class ModeStateMachine: ObservableObject {
         ]
     }
 }
+*/
 
-struct ModeConfiguration {
-    let predictionInterval: TimeInterval
-    let routingEnabled: Bool
-    let cameraFollowEnabled: Bool
-    let updateFrequency: UpdateFrequency
-    
-    enum UpdateFrequency {
-        case low, normal, high
-        
-        var intervalSeconds: TimeInterval {
-            switch self {
-            case .low: return 60.0
-            case .normal: return 30.0  
-            case .high: return 10.0
-            }
-        }
-    }
-}
 

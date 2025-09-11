@@ -1,9 +1,11 @@
 // DataPanelView.swift
 import SwiftUI
+import OSLog
 
 struct DataPanelView: View {
     @EnvironmentObject var mapState: MapState
-    @EnvironmentObject var serviceManager: ServiceManager
+    @EnvironmentObject var balloonTracker: BalloonTracker
+    @State private var refreshTrigger = false
 
     var body: some View {
         GeometryReader { geometry in // Added GeometryReader
@@ -13,8 +15,8 @@ struct DataPanelView: View {
                 // Table 1: 4 columns
                 Grid(alignment: .leading, horizontalSpacing: 5, verticalSpacing: 10) {
                     GridRow {
-                        Image(systemName: serviceManager.bleCommunicationService.connectionStatus == .connected ? "antenna.radiowaves.left.and.right" : "antenna.radiowaves.left.and.right.slash")
-                            .foregroundColor(serviceManager.bleCommunicationService.connectionStatus == .connected ? .green : .red)
+                        Image(systemName: balloonTracker.bleCommunicationService.connectionStatus == ConnectionStatus.connected ? "antenna.radiowaves.left.and.right" : "antenna.radiowaves.left.and.right.slash")
+                            .foregroundColor(balloonTracker.bleCommunicationService.connectionStatus == ConnectionStatus.connected ? .green : .red)
                             .font(.system(size: 32))
                         Text(mapState.balloonTelemetry?.probeType ?? "N/A")
                             .frame(maxWidth: .infinity)
@@ -53,6 +55,14 @@ struct DataPanelView: View {
                         Text("Arrival: \(arrivalTimeString)")
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
+                    GridRow {
+                        Text("Descent: \(adjustedDescentRateString) m/s")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Text("")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Text("")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
                 }
                 .padding(.horizontal)
             }
@@ -60,8 +70,17 @@ struct DataPanelView: View {
             .font(.system(size: 18)) // Apply font size to the VStack
             .frame(maxWidth: .infinity, maxHeight: .infinity) // Fill available space
             .background(Color(.systemGray6))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(isTelemetryStale ? Color.red : Color.clear, lineWidth: 3)
+            )
         } // End GeometryReader
-        // DataPanelView now gets all data from MapState - no onChange needed
+        .onAppear {
+            // Start timer to check for stale telemetry every second
+            Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
+                refreshTrigger.toggle() // Force view refresh to check telemetry staleness
+            }
+        }
     }
 
     // MARK: - Helpers for smoothing
@@ -80,22 +99,48 @@ struct DataPanelView: View {
     }
 
     // MARK: - Computed properties and helpers
+    
+    private var isTelemetryStale: Bool {
+        // Use refreshTrigger to ensure view updates when staleness changes
+        _ = refreshTrigger
+        
+        guard let telemetry = mapState.balloonTelemetry,
+              let lastUpdateTime = telemetry.lastUpdateTime else {
+            // No telemetry available at all
+            return true
+        }
+        
+        let lastUpdate = Date(timeIntervalSince1970: lastUpdateTime)
+        let timeSinceUpdate = Date().timeIntervalSince(lastUpdate)
+        let isStale = timeSinceUpdate > 3.0 // 3 seconds threshold
+        
+        if isStale {
+            appLog("DataPanelView: Telemetry is stale - last update \(String(format: "%.1f", timeSinceUpdate))s ago", category: .ui, level: .debug)
+        }
+        
+        return isStale
+    }
 
     var flightTime: String {
-        guard let landingTime = mapState.predictionData?.landingTime else { return "--:--" }
+        guard let landingTime = mapState.predictionData?.landingTime else { 
+            return "--:--" 
+        }
         let interval = landingTime.timeIntervalSinceNow
 
         if interval < 0 {
+            appLog("DataPanelView: flightTime - landing time in past, returning '00:00'", category: .ui, level: .debug)
             return "00:00"
         }
 
         let hours = Int(interval) / 3600
         let minutes = (Int(interval) % 3600) / 60
-        return String(format: "%02d:%02d", hours, minutes)
+        let result = String(format: "%02d:%02d", hours, minutes)
+        appLog("DataPanelView: flightTime - calculated: \(result) (interval: \(interval)s)", category: .ui, level: .debug)
+        return result
     }
 
     private var landingTimeString: String {
-        mapState.predictionData?.landingTime?.formatted(date: .omitted, time: .shortened) ?? "--:--"
+        return mapState.predictionData?.landingTime?.formatted(date: .omitted, time: .shortened) ?? "--:--"
     }
 
     private var arrivalTimeString: String {
@@ -142,6 +187,7 @@ struct DataPanelView: View {
     
     private var adjustedDescentRateString: String {
         if let adjustedRate = mapState.smoothedDescentRate {
+            appLog("DataPanelView: Displaying smoothed descent rate: \(String(format: "%.2f", adjustedRate)) m/s", category: .ui, level: .debug)
             return String(format: "%.1f", abs(adjustedRate))
         }
         return "--"
@@ -153,6 +199,6 @@ struct DataPanelView: View {
 #Preview {
     DataPanelView()
         .environmentObject(MapState())
-        .environmentObject(ServiceManager())
+        .environmentObject(BalloonTracker())
 }
 

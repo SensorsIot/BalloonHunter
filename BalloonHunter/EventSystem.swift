@@ -91,7 +91,6 @@ struct UserLocationEvent: Equatable {
 enum UIEvent: Equatable {
     case cameraRegionChanged(MKCoordinateRegion, timestamp: Date = Date())
     case annotationSelected(MapAnnotationItem, timestamp: Date = Date())
-    case modeSwitched(AppMode, timestamp: Date = Date())
     case manualPredictionTriggered(timestamp: Date = Date())
     case transportModeChanged(TransportationMode, timestamp: Date = Date())
     case predictionVisibilityToggled(Bool, timestamp: Date = Date())
@@ -111,8 +110,6 @@ enum UIEvent: Equatable {
                    abs(lhsTime.timeIntervalSince(rhsTime)) < 0.01
         case let (.annotationSelected(lhsItem, lhsTime), .annotationSelected(rhsItem, rhsTime)):
             return lhsItem == rhsItem && abs(lhsTime.timeIntervalSince(rhsTime)) < 0.01
-        case let (.modeSwitched(lhsMode, lhsTime), .modeSwitched(rhsMode, rhsTime)):
-            return lhsMode == rhsMode && abs(lhsTime.timeIntervalSince(rhsTime)) < 0.01
         case let (.manualPredictionTriggered(lhsTime), .manualPredictionTriggered(rhsTime)):
             return abs(lhsTime.timeIntervalSince(rhsTime)) < 0.01
         case let (.transportModeChanged(lhsMode, lhsTime), .transportModeChanged(rhsMode, rhsTime)):
