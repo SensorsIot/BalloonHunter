@@ -22,12 +22,14 @@ final class BalloonTracker: ObservableObject {
     lazy var bleCommunicationService = BLECommunicationService(persistenceService: self.persistenceService)
     lazy var predictionService = PredictionService()
     
-    // Phase 3: Event-driven prediction policy
-    lazy var predictionPolicy = PredictionPolicy(
+    // Phase 3: Independent Balloon Track Prediction Service
+    lazy var balloonTrackPredictionService = BalloonTrackPredictionService(
         predictionService: self.predictionService,
         predictionCache: self.predictionCache,
         mapState: self.mapState,
-        domainModel: self.domainModel
+        userSettings: self.userSettings,
+        landingPointService: self.landingPointService,
+        balloonTrackService: self.balloonTrackService
     )
     
     // REQUIRED: Services that generate the events and manage data
@@ -86,13 +88,16 @@ final class BalloonTracker: ObservableObject {
         _ = landingPointService
         _ = routeCalculationService
         
-        // Phase 3: Initialize prediction policy
-        _ = predictionPolicy
+        // Phase 3: Start independent prediction service
+        balloonTrackPredictionService.start()
         
         // Per FSD: Load persistence data after service initialization
         loadPersistenceData()
         
-        appLog("BalloonTracker: All services initialized", category: .general, level: .info)
+        // Setup manual prediction listener
+        setupManualPredictionListener()
+        
+        appLog("BalloonTracker: All services initialized with direct calls (no EventBus)", category: .general, level: .info)
     }
     
     // MARK: - Direct Event Handling (No Policy Layers)
@@ -131,6 +136,18 @@ final class BalloonTracker: ObservableObject {
             .store(in: &cancellables)
     }
     
+    private func setupManualPredictionListener() {
+        NotificationCenter.default.addObserver(
+            forName: .manualPredictionRequested,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task {
+                await self?.balloonTrackPredictionService.triggerManualPrediction()
+            }
+        }
+    }
+    
     // MARK: - Simplified Event Handlers
     
     private func handleBalloonPosition(_ event: BalloonPositionEvent) {
@@ -158,12 +175,22 @@ final class BalloonTracker: ObservableObject {
             }
         }
         
-        // 1a. Calculate automatic descent rate if below 10000m
-        appLog("BalloonTracker: About to call calculateAutomaticDescentRate", category: .general, level: .debug)
-        calculateAutomaticDescentRate(telemetry)
+        // 1. Process altitude-based descent/climb rate calculation
+        if telemetry.altitude >= 10000 {
+            // Above 10000m: use raw vertical speed as climb rate
+            if let domainModel = self.domainModel {
+                domainModel.balloon.climbRate = telemetry.verticalSpeed
+            }
+            appLog("BalloonTracker: Above 10000m (\(Int(telemetry.altitude))m) - using raw vertical speed: \(String(format: "%.2f", telemetry.verticalSpeed)) m/s", category: .general, level: .debug)
+        } else {
+            // Below 10000m: calculate smoothed descent rate
+            calculateAutomaticDescentRate(telemetry)
+        }
         
-        // Phase 3: Prediction logic is now handled by PredictionPolicy via events
-        // The PredictionPolicy subscribes to BalloonPositionEvent and handles all prediction logic
+        // Phase 3: Notify independent prediction service
+        Task {
+            await balloonTrackPredictionService.handleStartupTelemetry(telemetry)
+        }
         
         // 3. Update route if needed
         if shouldUpdateRoute() {
@@ -434,10 +461,12 @@ final class BalloonTracker: ObservableObject {
                 mapState.userRoute = MKPolyline(coordinates: routePath, count: routePath.count)
                 mapState.isRouteVisible = true
                 mapState.routeData = cachedRoute  // Fix: Set route data for arrival time
+                print("🛣️ BalloonTracker: CACHED route set - \(routePath.count) coordinates, transport: \(mapState.transportMode)")
             } else {
                 mapState.userRoute = nil
                 mapState.isRouteVisible = false
                 mapState.routeData = nil
+                print("🛣️ BalloonTracker: CACHED route CLEARED - empty path")
             }
             return
         }
@@ -461,10 +490,12 @@ final class BalloonTracker: ObservableObject {
                 // Cache the route
                 await routingCache.set(key: routeKey, value: routeData)
                 
+                print("🛣️ BalloonTracker: NEW route set - \(routePath.count) coordinates, transport: \(mapState.transportMode)")
                 appLog("BalloonTracker: Route calculated successfully - \(String(format: "%.1f", routeData.distance/1000))km, \(Int(routeData.expectedTravelTime/60))min", category: .general, level: .info)
             } else {
                 mapState.userRoute = nil
                 mapState.isRouteVisible = false
+                print("🛣️ BalloonTracker: NEW route CLEARED - empty path")
                 appLog("BalloonTracker: Route calculation returned empty path", category: .general, level: .error)
             }
             
@@ -609,11 +640,8 @@ final class BalloonTracker: ObservableObject {
     // MARK: - Automatic Descent Rate Calculation
     
     private func calculateAutomaticDescentRate(_ telemetry: TelemetryData) {
-        appLog("BalloonTracker: calculateAutomaticDescentRate called - altitude: \(Int(telemetry.altitude))m", category: .general, level: .debug)
-        
         // Only calculate if below 10000m altitude
         guard telemetry.altitude < 10000 else {
-            appLog("BalloonTracker: Altitude \(Int(telemetry.altitude))m above 10000m - will start calculating descent rate when below 10000m", category: .general, level: .debug)
             return
         }
         
@@ -664,5 +692,14 @@ final class BalloonTracker: ObservableObject {
         
         // Update map state with smoothed descent rate
         mapState.smoothedDescentRate = smoothedRate
+        
+        // Sync smoothed descent rate to DomainModel for better ascent/descent detection
+        if let domainModel = self.domainModel {
+            domainModel.balloon.climbRate = smoothedRate
+            print("🆕 BalloonTracker: Updated DomainModel with smoothed climb rate: \(String(format: "%.2f", smoothedRate)) m/s")
+        }
     }
+    
+    // MARK: - Prediction Logic Now Handled by Independent BalloonTrackPredictionService
+    // All prediction functionality moved to BalloonTrackPredictionService for better separation of concerns
 }

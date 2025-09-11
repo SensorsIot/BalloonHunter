@@ -13,8 +13,19 @@ struct Balloon {
     var altitude: Double?
     var climbRate: Double?
     var isAscending: Bool {
-        guard let rate = climbRate else { return false }
-        return rate > 0
+        // If we have a climb rate, use it
+        if let rate = climbRate {
+            return rate > 0
+        }
+        
+        // If no climb rate and above 10000m, assume still ascending
+        // (since descent rate calculation only starts below 10000m)
+        if let alt = altitude, alt >= 10000 {
+            return true
+        }
+        
+        // If below 10000m with no climb rate data, assume descending
+        return false
     }
 }
 
@@ -102,8 +113,86 @@ final class DomainModel: ObservableObject {
     var hasBalloonData: Bool { balloon.coordinate != nil }
     var hasLandingPoint: Bool { landingPoint != nil }
     
+    private var cancellables = Set<AnyCancellable>()
+    
     init() {
         print("🆕 DomainModel initialized (Phase 4 - Structured Entities)")
+        setupEventSubscriptions()
+    }
+    
+    private func setupEventSubscriptions() {
+        print("🔄 DomainModel: Setting up EventBus subscriptions and MapState observation")
+        
+        // Subscribe to MapStateUpdate events to keep DomainModel in sync
+        EventBus.shared.mapStateUpdatePublisher
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] update in
+                print("🔄 DomainModel: EventBus subscription received update")
+                self?.handleMapStateUpdate(update)
+            }
+            .store(in: &cancellables)
+        
+        print("🔄 DomainModel: EventBus subscription setup complete")
+    }
+    
+    /// Setup direct MapState observation for systems that bypass EventBus
+    func observeMapState(_ mapState: MapState) {
+        print("🔄 DomainModel: Setting up direct MapState observation")
+        
+        // Observe userRoute changes directly
+        mapState.$userRoute
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] userRoute in
+                print("🔄 DomainModel: Direct MapState - userRoute changed")
+                if let userRoute = userRoute {
+                    let route = Route(
+                        coordinates: userRoute.coordinates,
+                        estimatedTravelTime: nil
+                    )
+                    self?.updateRoute(route)
+                    print("🔄 DomainModel: Route updated via direct MapState observation - \(userRoute.coordinates.count) coordinates")
+                } else {
+                    self?.updateRoute(nil)
+                    print("🔄 DomainModel: Route cleared via direct MapState observation")
+                }
+            }
+            .store(in: &cancellables)
+        
+        // Observe transport mode changes
+        mapState.$transportMode
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] transportMode in
+                print("🔄 DomainModel: Direct MapState - transportMode changed to \(transportMode)")
+                self?.updateTransportMode(transportMode == .car ? .car : .bike)
+            }
+            .store(in: &cancellables)
+    }
+    
+    private func handleMapStateUpdate(_ update: MapStateUpdate) {
+        print("🔄 DomainModel: Received MapStateUpdate from \(update.source)")
+        
+        // Sync route changes
+        if let userRoute = update.userRoute {
+            let route = Route(
+                coordinates: userRoute.coordinates,
+                estimatedTravelTime: nil
+            )
+            updateRoute(route)
+            print("🔄 DomainModel: Route updated from MapStateUpdate - \(userRoute.coordinates.count) coordinates")
+        } else if update.userRoute == nil && routing.route != nil {
+            // Route was cleared
+            updateRoute(nil)
+            print("🔄 DomainModel: Route cleared from MapStateUpdate")
+        }
+        
+        // Sync prediction path changes
+        if let predictionPath = update.predictionPath {
+            let predictionPoints = predictionPath.coordinates.map { coordinate in
+                PredictedPoint(coordinate: coordinate, altitude: 0, timestamp: Date())
+            }
+            updatePrediction(path: predictionPoints)
+            print("🔄 DomainModel: Prediction path updated from MapStateUpdate - \(predictionPoints.count) points")
+        }
     }
     
     // MARK: - Update Methods (Phase 4)
@@ -174,8 +263,14 @@ final class DomainModel: ObservableObject {
     }
     
     func updateRoute(_ route: Route?) {
+        let oldRoutePoints = routing.route?.coordinates.count ?? 0
         routing.route = route
-        print("🆕 DomainModel: Route updated - \(route?.coordinates.count ?? 0) points")
+        let newRoutePoints = route?.coordinates.count ?? 0
+        print("🆕 DomainModel: Route updated - from \(oldRoutePoints) to \(newRoutePoints) points")
+        if let route = route {
+            print("🆕 DomainModel: New route first point: \(route.coordinates.first?.latitude ?? 0), \(route.coordinates.first?.longitude ?? 0)")
+            print("🆕 DomainModel: New route last point: \(route.coordinates.last?.latitude ?? 0), \(route.coordinates.last?.longitude ?? 0)")
+        }
     }
     
     // MARK: - MapState Integration (Phase 4)
@@ -201,6 +296,15 @@ final class DomainModel: ObservableObject {
         
         // Sync prediction state
         updatePrediction(visible: mapState.isPredictionPathVisible)
+        
+        // Sync prediction path from MapState
+        if let predictionPath = mapState.predictionPath {
+            let predictionPoints = predictionPath.coordinates.map { coordinate in
+                PredictedPoint(coordinate: coordinate, altitude: 0, timestamp: Date())
+            }
+            updatePrediction(path: predictionPoints)
+        }
+        
         if let burstPoint = mapState.burstPoint {
             updatePrediction(burst: burstPoint)
         }
@@ -215,6 +319,15 @@ final class DomainModel: ObservableObject {
             updateTransportMode(.car)
         } else {
             updateTransportMode(.bike)
+        }
+        
+        // Sync route from MapState
+        if let userRoute = mapState.userRoute {
+            let route = Route(
+                coordinates: userRoute.coordinates,
+                estimatedTravelTime: nil
+            )
+            updateRoute(route)
         }
         
         print("🔄 DomainModel: Sync complete - \(statusSummary)")

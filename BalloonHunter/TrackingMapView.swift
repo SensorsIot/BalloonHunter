@@ -13,6 +13,11 @@ struct TrackingMapView: View {
     @State private var showSettings = false
     @State private var position: MapCameraPosition = .automatic
     @State private var hasInitializedFromLocation = false
+    @State private var currentZoomLevel: Double = 15.0
+    @State private var currentDistance: CLLocationDistance = 1000
+    @State private var renderSets: [RenderSet] = []
+    @State private var overlays: [RenderOverlay] = []
+    @State private var annotations: [RenderAnnotation] = []
 
     var body: some View {
         GeometryReader { geometry in
@@ -35,8 +40,10 @@ struct TrackingMapView: View {
 
                         // Transport mode picker
                         Picker("Mode", selection: Binding(
-                            get: { mapState.transportMode },
-                            set: { newMode in
+                            get: { 
+                                return mapState.transportMode 
+                            },
+                            set: { (newMode: TransportationMode) in
                                 EventBus.shared.publishUIEvent(.transportModeChanged(newMode, timestamp: Date()))
                             }
                         )) {
@@ -61,10 +68,23 @@ struct TrackingMapView: View {
                         if mapState.landingPoint != nil {
                             // Landing point available - show "All" button
                             Button("All") {
-                                EventBus.shared.publishUIEvent(.showAllAnnotationsRequested(timestamp: Date()))
-                                // Update map position after event is processed
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                                    updateMapToShowAllAnnotations()
+                                // If in heading mode, exit it first
+                                if mapState.isHeadingMode {
+                                    print("📍 TrackingMapView: Exiting heading mode for 'All' view")
+                                    EventBus.shared.publishUIEvent(.headingModeToggled(false, timestamp: Date()))
+                                    // Delay the show all request to let heading mode exit first
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                                        EventBus.shared.publishUIEvent(.showAllAnnotationsRequested(timestamp: Date()))
+                                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                                            updateMapToShowAllAnnotations()
+                                        }
+                                    }
+                                } else {
+                                    EventBus.shared.publishUIEvent(.showAllAnnotationsRequested(timestamp: Date()))
+                                    // Update map position after event is processed
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                                        updateMapToShowAllAnnotations()
+                                    }
                                 }
                             }
                             .buttonStyle(.bordered)
@@ -79,7 +99,13 @@ struct TrackingMapView: View {
 
                         // Heading mode toggle
                         Button {
-                            EventBus.shared.publishUIEvent(.headingModeToggled(!mapState.isHeadingMode, timestamp: Date()))
+                            let newHeadingMode = !mapState.isHeadingMode
+                            print("🧭 TrackingMapView: Heading mode button pressed - changing from \(mapState.isHeadingMode) to \(newHeadingMode)")
+                            print("🧭 TrackingMapView: User location available: \(mapState.userLocation != nil)")
+                            if let userLoc = mapState.userLocation {
+                                print("🧭 TrackingMapView: User heading: \(userLoc.heading)°")
+                            }
+                            EventBus.shared.publishUIEvent(.headingModeToggled(newHeadingMode, timestamp: Date()))
                         } label: {
                             Image(systemName: mapState.isHeadingMode ? "location.north.circle.fill" : "location.circle")
                                 .imageScale(.large)
@@ -110,40 +136,26 @@ struct TrackingMapView: View {
                     .padding(.bottom, 8)
                 }
 
-                // Map view
-                Map(position: $position) {
-                    // User annotation
-                    if let userLocation = mapState.userLocation {
-                        Annotation("", coordinate: CLLocationCoordinate2D(latitude: userLocation.latitude, longitude: userLocation.longitude)) {
-                            Image(systemName: "figure.walk")
-                                .foregroundColor(.blue)
-                                .font(.system(size: 24))
+                // Map view with RenderSet system
+                Map(position: $position, interactionModes: mapState.isHeadingMode ? [] : .all) {
+                    // Phase 6: Render overlays and annotations from cached RenderSets
+                    
+                    // Render overlays in z-order
+                    ForEach(overlays, id: \.id) { overlay in
+                        MapPolyline(coordinates: overlay.polyline.coordinates)
+                            .stroke(overlay.style.color, 
+                                   style: StrokeStyle(
+                                       lineWidth: overlay.style.lineWidth(for: currentZoomLevel),
+                                       lineCap: .round,
+                                       lineJoin: .round
+                                   ))
+                    }
+                    
+                    // Render annotations in z-order
+                    ForEach(annotations, id: \.id) { annotation in
+                        Annotation("", coordinate: annotation.coordinate) {
+                            annotation.createAnnotationView()
                         }
-                    }
-                    
-                    // Map annotations from MapState
-                    ForEach(mapState.annotations, id: \.id) { item in
-                        Annotation("", coordinate: item.coordinate) {
-                            item.view
-                        }
-                    }
-                    
-                    // Balloon track overlay
-                    if let trackPath = mapState.balloonTrackPath {
-                        MapPolyline(coordinates: trackPath.coordinates)
-                            .stroke(.red, lineWidth: 2)
-                    }
-                    
-                    // Prediction path overlay
-                    if mapState.isPredictionPathVisible, let predictionPath = mapState.predictionPath {
-                        MapPolyline(coordinates: predictionPath.coordinates)
-                            .stroke(.blue, lineWidth: 4)
-                    }
-                    
-                    // Route overlay
-                    if mapState.isRouteVisible, let userRoute = mapState.userRoute {
-                        MapPolyline(coordinates: userRoute.coordinates)
-                            .stroke(.green, lineWidth: 3)
                     }
                 }
                 .mapControls {
@@ -151,11 +163,15 @@ struct TrackingMapView: View {
                     MapScaleView()
                     MapUserLocationButton()
                 }
+                .mapStyle(.standard(pointsOfInterest: .excludingAll, showsTraffic: false))
+                .mapControlVisibility(mapState.isHeadingMode ? .hidden : .automatic)
                 .frame(height: geometry.size.height * 0.7)
                 .onReceive(mapState.$region) { region in
-                    if let region = region {
+                    if let region = region, !mapState.isHeadingMode {
                         print("📍 TrackingMapView: Updating map position to region: \(region)")
                         position = .region(region)
+                    } else if mapState.isHeadingMode {
+                        print("📍 TrackingMapView: Ignoring region update - in heading mode")
                     }
                 }
                 .onReceive(mapState.$isHeadingMode) { isHeadingMode in
@@ -165,6 +181,16 @@ struct TrackingMapView: View {
                     if mapState.isHeadingMode {
                         updateMapPositionForHeadingMode(true)
                     }
+                }
+                .onChange(of: mapState.isHeadingMode) { _, isHeadingMode in
+                    if isHeadingMode {
+                        // Force immediate update when entering heading mode
+                        updateMapPositionForHeadingMode(true)
+                    }
+                }
+                .onMapCameraChange { context in
+                    // Track current distance for heading mode
+                    currentDistance = context.camera.distance
                 }
                 .onReceive(NotificationCenter.default.publisher(for: .startupCompleted)) { _ in
                     // Leave map in .automatic mode for natural positioning
@@ -183,18 +209,17 @@ struct TrackingMapView: View {
                     
                     // Phase 2 Test: Sync DomainModel with MapState and compare
                     domainModel.syncWithMapState(mapState)
+                    domainModel.observeMapState(mapState) // Setup direct observation for ongoing changes
                     print("📊 DomainModel Status: \(domainModel.statusSummary)")
                     domainModel.compareWithMapState(mapState)
                     
-                    // Phase 5 Test: Create RenderSets from DomainModel
-                    let renderSets = RenderSetCoordinator.createRenderSets(from: domainModel)
-                    let renderOverlays = RenderSetCoordinator.getAllOverlays(from: renderSets)
-                    let renderAnnotations = RenderSetCoordinator.getAllAnnotations(from: renderSets)
-                    
-                    print("🎨 RenderSet Pipeline - Sets: \(renderSets.count), Overlays: \(renderOverlays.count), Annotations: \(renderAnnotations.count)")
-                    
-                    for renderSet in renderSets where renderSet.isVisible {
-                        print("  🎯 \(renderSet.id) (z:\(renderSet.zOrder)): \(renderSet.annotations.count) annotations, \(renderSet.overlays.count) overlays")
+                    // Phase 5: Initialize RenderSets
+                    updateRenderSets()
+                }
+                .onReceive(domainModel.objectWillChange) { _ in
+                    // Update RenderSets when DomainModel changes
+                    DispatchQueue.main.async {
+                        updateRenderSets()
                     }
                 }
 
@@ -214,35 +239,39 @@ struct TrackingMapView: View {
     }
     
     private func updateMapToShowAllAnnotations() {
+        // Don't change position if in heading mode
+        if mapState.isHeadingMode {
+            print("📍 TrackingMapView: Ignoring 'All' request - in heading mode")
+            return
+        }
+        
         // Keep map in .automatic mode for natural positioning
         print("📍 TrackingMapView: Keeping map in .automatic mode for natural positioning")
         // Note: Map will automatically adjust to show annotations using .automatic position
     }
     
     private func updateMapPositionForHeadingMode(_ isHeadingMode: Bool) {
-        guard let userLocation = mapState.userLocation else {
-            print("📍 TrackingMapView: No user location available for heading mode")
-            return
-        }
-        
-        let userCoordinate = CLLocationCoordinate2D(
-            latitude: userLocation.latitude,
-            longitude: userLocation.longitude
-        )
-        
         if isHeadingMode {
-            // Center on user with their heading orientation
-            position = .camera(MapCamera(
-                centerCoordinate: userCoordinate,
-                distance: 1000,
-                heading: userLocation.heading
-            ))
-            print("📍 TrackingMapView: Enabled heading mode - heading: \(userLocation.heading)°")
+            guard let userLocationData = mapState.userLocation else {
+                print("📍 TrackingMapView: No user location available for heading mode")
+                return
+            }
+            
+            // Use follow-with-heading mode - centers and rotates with user
+            position = .userLocation(followsHeading: true, fallback: .automatic)
+            print("📍 TrackingMapView: HEADING MODE ACTIVATED - following user location with heading at \(userLocationData.heading)°")
+            print("📍 TrackingMapView: Position set to .userLocation(followsHeading: true)")
         } else {
             // Return to automatic mode
             position = .automatic
-            print("📍 TrackingMapView: Disabled heading mode - returning to automatic")
+            print("📍 TrackingMapView: HEADING MODE DISABLED - returning to automatic")
         }
+    }
+    
+    private func updateRenderSets() {
+        renderSets = RenderSetCoordinator.createRenderSets(from: domainModel)
+        overlays = RenderSetCoordinator.getAllOverlays(from: renderSets)
+        annotations = RenderSetCoordinator.getAllAnnotations(from: renderSets)
     }
 }
 

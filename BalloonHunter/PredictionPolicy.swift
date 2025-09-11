@@ -16,6 +16,7 @@ final class PredictionPolicy: ObservableObject {
     
     private var cancellables = Set<AnyCancellable>()
     private var lastPredictionTime = Date.distantPast
+    private var predictionTimer: Timer?
     
     // Simple timing constants (extracted from BalloonTracker)
     private let predictionInterval: TimeInterval = 60  // Every 60 seconds per requirements
@@ -27,7 +28,8 @@ final class PredictionPolicy: ObservableObject {
         self.domainModel = domainModel
         
         setupEventSubscriptions()
-        appLog("🎯 PredictionPolicy: Initialized event-driven prediction policy", category: .general, level: .info)
+        startPredictionTimer()
+        appLog("🎯 PredictionPolicy: Initialized event-driven prediction policy with 60-second timer", category: .general, level: .info)
     }
     
     private func setupEventSubscriptions() {
@@ -139,14 +141,31 @@ final class PredictionPolicy: ObservableObject {
         }
         
         do {
+            // Determine if balloon is descending based on vertical speed
+            let balloonDescends = telemetry.verticalSpeed < 0
+            appLog("🎯 PredictionPolicy: Balloon descending: \(balloonDescends) (verticalSpeed: \(telemetry.verticalSpeed) m/s)", category: .general, level: .info)
+            
             // Call prediction service
             appLog("🎯 PredictionPolicy: Calling prediction service for \(telemetry.sondeName)", category: .general, level: .info)
+            
+            // Determine effective descent rate based on altitude
+            let effectiveDescentRate: Double
+            if telemetry.altitude < 10000, let smoothedRate = request.measuredDescentRate {
+                // Below 10000m: Use automatically calculated smoothed descent rate
+                effectiveDescentRate = abs(smoothedRate)
+                appLog("🎯 PredictionPolicy: Using smoothed descent rate: \(String(format: "%.2f", effectiveDescentRate)) m/s (below 10000m)", category: .general, level: .info)
+            } else {
+                // Above 10000m: Use user settings default
+                effectiveDescentRate = request.userSettings.descentRate
+                appLog("🎯 PredictionPolicy: Using settings descent rate: \(String(format: "%.2f", effectiveDescentRate)) m/s (above 10000m or no smoothed rate)", category: .general, level: .info)
+            }
             
             let predictionData = try await predictionService.fetchPrediction(
                 telemetry: telemetry,
                 userSettings: request.userSettings,
-                measuredDescentRate: request.measuredDescentRate ?? abs(telemetry.verticalSpeed),
-                cacheKey: cacheKey
+                measuredDescentRate: effectiveDescentRate,
+                cacheKey: cacheKey,
+                balloonDescends: balloonDescends
             )
             
             // Cache the result
@@ -154,6 +173,14 @@ final class PredictionPolicy: ObservableObject {
             
             // Update last prediction time
             lastPredictionTime = Date()
+            
+            // Update MapState with prediction data so LandingPointService can process landing point
+            let mapUpdate = MapStateUpdate(
+                source: "PredictionPolicy",
+                version: 0,
+                predictionData: predictionData
+            )
+            EventBus.shared.publishMapStateUpdate(mapUpdate)
             
             // Send success response
             let response = PredictionResponse(success: predictionData, requestId: request.requestId)
@@ -190,5 +217,28 @@ final class PredictionPolicy: ObservableObject {
     private func getMeasuredDescentRate() -> Double? {
         // Get measured descent rate from MapState
         return mapState.smoothedDescentRate
+    }
+    
+    // MARK: - Timer Management
+    
+    private func startPredictionTimer() {
+        // DEPRECATED: Timer functionality moved to BalloonTrackPredictionService
+        appLog("🎯 PredictionPolicy: DEPRECATED - Timer functionality moved to BalloonTrackPredictionService", category: .general, level: .info)
+    }
+    
+    private func stopPredictionTimer() {
+        // DEPRECATED: Timer functionality moved to BalloonTrackPredictionService
+        predictionTimer?.invalidate()
+        predictionTimer = nil
+    }
+    
+    private func handleTimerPredictionRequest() {
+        // DEPRECATED: Timer functionality moved to BalloonTrackPredictionService
+        appLog("🎯 PredictionPolicy: DEPRECATED - Timer functionality moved to BalloonTrackPredictionService", category: .general, level: .info)
+    }
+    
+    deinit {
+        predictionTimer?.invalidate()
+        predictionTimer = nil
     }
 }

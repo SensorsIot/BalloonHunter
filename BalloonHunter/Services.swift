@@ -953,7 +953,9 @@ final class CurrentLocationService: NSObject, ObservableObject, CLLocationManage
     }
     
     func locationManager(_ manager: CLLocationManager, didUpdateHeading newHeading: CLHeading) {
-        lastHeading = newHeading.trueHeading >= 0 ? newHeading.trueHeading : newHeading.magneticHeading
+        let heading = newHeading.trueHeading >= 0 ? newHeading.trueHeading : newHeading.magneticHeading
+        print("🧭 CurrentLocationService: Heading updated - true: \(newHeading.trueHeading)°, magnetic: \(newHeading.magneticHeading)°, using: \(heading)°")
+        lastHeading = heading
     }
     
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
@@ -1319,10 +1321,10 @@ final class PredictionService: ObservableObject {
         publishHealthEvent(.healthy, message: "Prediction service initialized")
     }
     
-    func fetchPrediction(telemetry: TelemetryData, userSettings: UserSettings, measuredDescentRate: Double, cacheKey: String) async throws -> PredictionData {
+    func fetchPrediction(telemetry: TelemetryData, userSettings: UserSettings, measuredDescentRate: Double, cacheKey: String, balloonDescends: Bool = false) async throws -> PredictionData {
         appLog("PredictionService: Starting Sondehub v2 prediction fetch for \(telemetry.sondeName) at altitude \(telemetry.altitude)m", category: .service, level: .info)
         
-        let request = try buildPredictionRequest(telemetry: telemetry, userSettings: userSettings, descentRate: abs(measuredDescentRate))
+        let request = try buildPredictionRequest(telemetry: telemetry, userSettings: userSettings, descentRate: abs(measuredDescentRate), balloonDescends: balloonDescends)
         
         do {
             appLog("PredictionService: Making GET request to Sondehub v2 API", category: .service, level: .debug)
@@ -1390,20 +1392,28 @@ final class PredictionService: ObservableObject {
         }
     }
     
-    private func buildPredictionRequest(telemetry: TelemetryData, userSettings: UserSettings, descentRate: Double) throws -> URLRequest {
+    private func buildPredictionRequest(telemetry: TelemetryData, userSettings: UserSettings, descentRate: Double, balloonDescends: Bool = false) throws -> URLRequest {
         var components = URLComponents()
         components.scheme = "https"
         components.host = "api.v2.sondehub.org"
         components.path = "/tawhiri"
         
-        // Ensure burst altitude is always above current altitude
-        let effectiveBurstAltitude = max(userSettings.burstAltitude, telemetry.altitude + 100)
+        // Burst altitude logic based on requirements:
+        // - During ascent: use settings burst altitude (default 35000m)
+        // - During descent: current altitude + 10m
+        let effectiveBurstAltitude = if balloonDescends {
+            telemetry.altitude + 10  // Requirements: current altitude + 10m for descent
+        } else {
+            max(userSettings.burstAltitude, telemetry.altitude + 100)  // Ensure above current for ascent
+        }
+        
+        appLog("PredictionService: Burst altitude - descending: \(balloonDescends), effective: \(effectiveBurstAltitude)m", category: .service, level: .info)
         
         let queryItems = [
             URLQueryItem(name: "launch_latitude", value: String(telemetry.latitude)),
             URLQueryItem(name: "launch_longitude", value: String(telemetry.longitude)),
             URLQueryItem(name: "launch_altitude", value: String(telemetry.altitude)),
-            URLQueryItem(name: "launch_datetime", value: ISO8601DateFormatter().string(from: Date())),
+            URLQueryItem(name: "launch_datetime", value: ISO8601DateFormatter().string(from: Date().addingTimeInterval(60))), // Requirements: actual time + 1 minute
             URLQueryItem(name: "ascent_rate", value: String(userSettings.ascentRate)),
             URLQueryItem(name: "burst_altitude", value: String(effectiveBurstAltitude)),
             URLQueryItem(name: "descent_rate", value: String(abs(descentRate)))
@@ -1808,6 +1818,27 @@ final class LandingPointService: ObservableObject {
         appLog("LandingPointService: Invalid URL format", category: .service, level: .debug)
         appLog("LandingPointService: ❌ Clipboard content could not be parsed as coordinates", category: .service, level: .debug)
         return nil
+    }
+    
+    // MARK: - Direct Service Integration (No EventBus)
+    
+    /// Direct method for BalloonTracker to notify of new prediction landing point
+    func updateFromPrediction(_ landingPoint: CLLocationCoordinate2D) {
+        appLog("LandingPointService: Received direct prediction update", category: .service, level: .info)
+        
+        // Check if landing point changed significantly (>100m)
+        if let currentLanding = validLandingPoint {
+            let distance = CLLocation(latitude: currentLanding.latitude, longitude: currentLanding.longitude)
+                .distance(from: CLLocation(latitude: landingPoint.latitude, longitude: landingPoint.longitude))
+            
+            if distance > 100 {
+                appLog("LandingPointService: Prediction landing point changed significantly - updating", category: .service, level: .info)
+                updateLandingPointFromPrediction(landingPoint)
+            }
+        } else {
+            // First landing point from prediction
+            updateLandingPointFromPrediction(landingPoint)
+        }
     }
 }
 

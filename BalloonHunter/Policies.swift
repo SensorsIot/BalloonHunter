@@ -923,22 +923,28 @@ final class UIEventPolicy: ObservableObject {
             // Update landing point service
             serviceManager?.landingPointService.validLandingPoint = coordinates
             
-            appLog("UIEventPolicy: Set landing point from clipboard: \(coordinates)", category: .policy, level: .info)
+            // Sync to DomainModel immediately
+            serviceManager?.domainModel?.updateLandingPoint(coordinates, source: "manual_clipboard")
+            
+            appLog("UIEventPolicy: Set landing point from clipboard: \(coordinates) and synced to DomainModel", category: .policy, level: .info)
         } else {
             appLog("UIEventPolicy: Could not parse coordinates from clipboard", category: .policy, level: .error)
         }
     }
     
     private func handlePredictionVisibilityToggle(visible: Bool) {
-        // Update map state to show/hide prediction path
+        // Sync to DomainModel immediately
+        serviceManager?.domainModel?.updatePrediction(visible: visible)
+        
+        // Update MapState isPredictionPathVisible flag
         let update = MapStateUpdate(
             source: "UIEventPolicy",
             version: 0,
-            predictionPath: visible ? nil : MKPolyline() // Empty polyline to hide
+            isPredictionPathVisible: visible
         )
         
         EventBus.shared.publishMapStateUpdate(update)
-        appLog("UIEventPolicy: Prediction visibility set to \(visible)", category: .policy, level: .info)
+        appLog("UIEventPolicy: Prediction visibility set to \(visible) and synced to DomainModel", category: .policy, level: .info)
     }
     
     private func parseCoordinatesFromClipboard(_ text: String) -> CLLocationCoordinate2D? {

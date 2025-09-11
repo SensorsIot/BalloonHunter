@@ -7,6 +7,7 @@ import CoreLocation
 import MapKit
 import SwiftUI
 
+
 // MARK: - RenderSet Protocol
 
 protocol RenderSet {
@@ -37,7 +38,7 @@ struct RenderAnnotation {
 
 struct OverlayStyle {
     let color: Color
-    let lineWidth: CGFloat
+    let baseLineWidth: CGFloat  // Base width that scales with zoom
     let pattern: LinePattern
     let opacity: Double
     
@@ -45,6 +46,13 @@ struct OverlayStyle {
         case solid
         case dashed
         case dotted
+    }
+    
+    /// Returns zoom-aware line width
+    func lineWidth(for zoomLevel: Double) -> CGFloat {
+        // Scale line width based on zoom level (closer = thicker)
+        let zoomFactor = max(0.5, min(2.0, zoomLevel / 15.0))  // Clamp between 0.5x and 2x
+        return baseLineWidth * zoomFactor
     }
 }
 
@@ -54,11 +62,19 @@ struct AnnotationStyle {
     let size: CGFloat
     let text: String?
     let halo: HaloStyle?
+    let accessibilityShape: AccessibilityShape?
     
     struct HaloStyle {
         let colors: [Color]  // For dual rings: [blue, green]
         let thickness: CGFloat
         let opacity: Double
+    }
+    
+    enum AccessibilityShape {
+        case circle    // For landing points
+        case triangle  // For ascending balloons
+        case square    // For descending balloons
+        case star      // For burst points
     }
 }
 
@@ -76,7 +92,7 @@ struct PredictionRenderSet: RenderSet {
         self.isVisible = domainModel.prediction.visible
         
         var renderOverlays: [RenderOverlay] = []
-        var renderAnnotations: [RenderAnnotation] = []
+        let renderAnnotations: [RenderAnnotation] = []
         
         // Prediction path overlay (thick blue polyline)
         if !domainModel.prediction.path.isEmpty {
@@ -88,7 +104,7 @@ struct PredictionRenderSet: RenderSet {
                 polyline: polyline,
                 style: OverlayStyle(
                     color: .blue,
-                    lineWidth: 4,
+                    baseLineWidth: 4,
                     pattern: .solid,
                     opacity: 1.0
                 ),
@@ -124,7 +140,7 @@ struct TrackRenderSet: RenderSet {
                 polyline: polyline,
                 style: OverlayStyle(
                     color: .red,
-                    lineWidth: 2,
+                    baseLineWidth: 2,
                     pattern: .solid,
                     opacity: 1.0
                 ),
@@ -161,7 +177,7 @@ struct RouteRenderSet: RenderSet {
                 polyline: polyline,
                 style: OverlayStyle(
                     color: .green,
-                    lineWidth: 3,
+                    baseLineWidth: 3,
                     pattern: .solid,
                     opacity: 1.0
                 ),
@@ -198,7 +214,8 @@ struct BurstRenderSet: RenderSet {
                     color: .orange,
                     size: 24,
                     text: nil,
-                    halo: nil
+                    halo: nil,
+                    accessibilityShape: .star
                 ),
                 zOrder: 5
             )
@@ -243,11 +260,12 @@ struct LandingRenderSet: RenderSet {
                 id: "landing_point",
                 coordinate: landingPoint.coordinate,
                 style: AnnotationStyle(
-                    icon: "flag.fill",
+                    icon: "mappin.and.ellipse",
                     color: .primary,
                     size: 28,
                     text: nil,
-                    halo: haloStyle
+                    halo: haloStyle,
+                    accessibilityShape: .circle
                 ),
                 zOrder: 6
             )
@@ -290,7 +308,8 @@ struct BalloonRenderSet: RenderSet {
                     color: balloonColor,
                     size: 32,
                     text: altitudeText,
-                    halo: nil
+                    halo: nil,
+                    accessibilityShape: domainModel.balloon.isAscending ? .triangle : .square
                 ),
                 zOrder: 7
             )
@@ -323,7 +342,8 @@ struct UserRenderSet: RenderSet {
                     color: .blue,
                     size: 24,
                     text: nil,
-                    halo: nil
+                    halo: nil,
+                    accessibilityShape: .circle
                 ),
                 zOrder: 8
             )
@@ -377,7 +397,13 @@ extension RenderAnnotation {
     @ViewBuilder
     func createAnnotationView() -> some View {
         ZStack {
-            // Halo rings (bottom layer)
+            // Accessibility shape (bottom layer)
+            if let accessibilityShape = style.accessibilityShape {
+                createAccessibilityShapeView(accessibilityShape)
+                    .frame(width: style.size + 8, height: style.size + 8)
+            }
+            
+            // Halo rings (middle layer)
             if let halo = style.halo {
                 ForEach(Array(halo.colors.enumerated()), id: \.offset) { index, color in
                     Circle()
@@ -387,7 +413,7 @@ extension RenderAnnotation {
                 }
             }
             
-            // Main icon
+            // Main icon (top layer)
             Image(systemName: style.icon)
                 .foregroundColor(style.color)
                 .font(.system(size: style.size))
@@ -401,6 +427,71 @@ extension RenderAnnotation {
                     .shadow(radius: 1)
             }
         }
+        .onTapGesture {
+            // Handle balloon marker tap for manual prediction trigger
+            if id == "balloon_position" {
+                print("🎯 RenderAnnotation: Balloon tapped - triggering manual prediction")
+                NotificationCenter.default.post(name: .manualPredictionRequested, object: nil)
+            }
+        }
+    }
+    
+    /// Creates the accessibility shape view with proper styling
+    @ViewBuilder
+    private func createAccessibilityShapeView(_ shape: AnnotationStyle.AccessibilityShape) -> some View {
+        switch shape {
+        case .circle:
+            Circle()
+                .stroke(style.color.opacity(0.3), lineWidth: 2)
+        case .triangle:
+            TriangleShape()
+                .stroke(style.color.opacity(0.3), lineWidth: 2)
+        case .square:
+            Rectangle()
+                .stroke(style.color.opacity(0.3), lineWidth: 2)
+        case .star:
+            StarShape()
+                .stroke(style.color.opacity(0.3), lineWidth: 2)
+        }
+    }
+}
+
+// MARK: - Custom Shapes
+
+struct TriangleShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        path.move(to: CGPoint(x: rect.midX, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
+        path.closeSubpath()
+        return path
+    }
+}
+
+struct StarShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        let center = CGPoint(x: rect.midX, y: rect.midY)
+        let radius = min(rect.width, rect.height) / 2
+        let innerRadius = radius * 0.4
+        
+        for i in 0..<10 {
+            let angle = Double(i) * .pi / 5
+            let isOuter = i % 2 == 0
+            let currentRadius = isOuter ? radius : innerRadius
+            
+            let x = center.x + CGFloat(cos(angle - .pi/2)) * currentRadius
+            let y = center.y + CGFloat(sin(angle - .pi/2)) * currentRadius
+            
+            if i == 0 {
+                path.move(to: CGPoint(x: x, y: y))
+            } else {
+                path.addLine(to: CGPoint(x: x, y: y))
+            }
+        }
+        path.closeSubpath()
+        return path
     }
 }
 
