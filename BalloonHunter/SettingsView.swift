@@ -625,7 +625,7 @@ struct SettingsView: View {
                 }
                 Section(header: Text("Sonde Type & Frequency")) {
                     Picker("Sonde Type", selection: $tempDeviceSettings.sondeType) {
-                        ForEach(["RS41", "M20", "M20", "PILOT", "DFM"], id: \.self) { Text($0) }
+                        ForEach(["RS41", "M20", "M10", "PILOT", "DFM"], id: \.self) { Text($0) }
                     }
                     .disabled(true)
                     

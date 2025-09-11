@@ -1218,15 +1218,18 @@ final class BalloonTrackService: ObservableObject {
         // Check if we have telemetry signal (within last 3 seconds)
         let hasRecentTelemetry = Date().timeIntervalSince(telemetryData.lastUpdateTime.map { Date(timeIntervalSince1970: $0) } ?? Date.distantPast) < 3.0
         
-        // Calculate smoothed speeds
-        let smoothedVerticalSpeed = verticalSpeedBuffer.count >= 20 ? verticalSpeedBuffer.reduce(0, +) / Double(verticalSpeedBuffer.count) : telemetryData.verticalSpeed
-        let smoothedHorizontalSpeedKmh = horizontalSpeedBuffer.count >= 20 ? (horizontalSpeedBuffer.reduce(0, +) / Double(horizontalSpeedBuffer.count)) * 3.6 : telemetryData.horizontalSpeed * 3.6 // Convert m/s to km/h
+        // Calculate smoothed speeds - require minimum buffer size for reliable detection
+        let smoothedVerticalSpeed = verticalSpeedBuffer.count >= 10 ? verticalSpeedBuffer.reduce(0, +) / Double(verticalSpeedBuffer.count) : telemetryData.verticalSpeed
+        let smoothedHorizontalSpeedKmh = horizontalSpeedBuffer.count >= 10 ? (horizontalSpeedBuffer.reduce(0, +) / Double(horizontalSpeedBuffer.count)) * 3.6 : telemetryData.horizontalSpeed * 3.6 // Convert m/s to km/h
         
-        // Landing detection criteria from specification:
+        // Landing detection criteria with hysteresis to prevent false positives:
         // - Telemetry signal available during last 3 seconds
-        // - Smoothed (20) vertical speed < 2 m/s
-        // - Smoothed (20) horizontal speed < 2 km/h
+        // - Smoothed (10+) vertical speed < 2 m/s
+        // - Smoothed (10+) horizontal speed < 2 km/h
+        // - Require sufficient buffer for reliable smoothing
         let isLandedNow = hasRecentTelemetry && 
+                         verticalSpeedBuffer.count >= 10 &&
+                         horizontalSpeedBuffer.count >= 10 &&
                          abs(smoothedVerticalSpeed) < 2.0 && 
                          smoothedHorizontalSpeedKmh < 2.0
         
@@ -1284,37 +1287,27 @@ final class BalloonTrackService: ObservableObject {
 
 @MainActor
 final class PredictionService: ObservableObject {
-    private let session = URLSession.shared
+    private let session: URLSession
     private var serviceHealth: ServiceHealth = .healthy
     
-    // Auto-adjustment tracking
-    private var descentRateBuffer: [Double] = []
-    private let descentRateBufferSize = 20
-    @Published var balloonDescends: Bool = false
-    @Published var adjustedDescentRate: Double = 5.0 // Default 5 m/s
-    
     init() {
-        appLog("PredictionService: Initialized with auto-adjustments", category: .service, level: .info)
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 30.0
+        config.timeoutIntervalForResource = 60.0
+        self.session = URLSession(configuration: config)
+        
+        appLog("PredictionService: Initialized with Sondehub v2 API", category: .service, level: .info)
         publishHealthEvent(.healthy, message: "Prediction service initialized")
     }
     
     func fetchPrediction(telemetry: TelemetryData, userSettings: UserSettings, measuredDescentRate: Double, cacheKey: String) async throws -> PredictionData {
-        appLog("PredictionService: Starting prediction fetch for \(telemetry.sondeName) at altitude \(telemetry.altitude)m", category: .service, level: .info)
+        appLog("PredictionService: Starting Sondehub v2 prediction fetch for \(telemetry.sondeName) at altitude \(telemetry.altitude)m", category: .service, level: .info)
         
-        // Update auto-adjustments based on telemetry
-        updateAutoAdjustments(telemetry: telemetry)
-        
-        // Use adjusted descent rate for API call
-        let finalDescentRate = balloonDescends ? adjustedDescentRate : abs(measuredDescentRate)
-        
-        // Adjust burst altitude if balloon is descending
-        let adjustedBurstAltitude = balloonDescends ? (telemetry.altitude + 10) : userSettings.burstAltitude
-        
-        let url = buildPredictionURL(telemetry: telemetry, userSettings: userSettings, descentRate: finalDescentRate, burstAltitude: adjustedBurstAltitude)
+        let request = try buildPredictionRequest(telemetry: telemetry, userSettings: userSettings, descentRate: abs(measuredDescentRate))
         
         do {
-            appLog("PredictionService: Attempting URLSession data task.", category: .service, level: .debug)
-            let (data, response) = try await session.data(from: url)
+            appLog("PredictionService: Making GET request to Sondehub v2 API", category: .service, level: .debug)
+            let (data, response) = try await session.data(for: request)
             
             guard let httpResponse = response as? HTTPURLResponse else {
                 throw PredictionError.invalidResponse
@@ -1327,71 +1320,126 @@ final class PredictionService: ObservableObject {
                 throw PredictionError.httpError(httpResponse.statusCode)
             }
             
-            appLog("PredictionService: Data received, attempting JSON decode.", category: .service, level: .debug)
+            appLog("PredictionService: Data received, attempting JSON decode", category: .service, level: .debug)
             
-            let predictionData = try JSONDecoder().decode(PredictionData.self, from: data)
+            // First, let's see what we actually received
+            if let jsonString = String(data: data, encoding: .utf8) {
+                appLog("PredictionService: Raw JSON response: \(jsonString.prefix(500))", category: .service, level: .debug)
+            }
             
-            appLog("PredictionService: JSON decode successful.", category: .service, level: .debug)
+            // Parse the Sondehub v2 response
+            let sondehubResponse = try JSONDecoder().decode(SondehubPredictionResponse.self, from: data)
+            
+            // Convert to our internal PredictionData format
+            let predictionData = try convertSondehubToPredictionData(sondehubResponse)
             
             let landingPoint = predictionData.landingPoint
             let burstPoint = predictionData.burstPoint
             
             let landingPointDesc = landingPoint.map { "(\($0.latitude), \($0.longitude))" } ?? "nil"
             let burstPointDesc = burstPoint.map { "(\($0.latitude), \($0.longitude))" } ?? "nil"
-            appLog("PredictionService: Prediction completed successfully - Landing point: \(landingPointDesc), Burst point: \(burstPointDesc)", category: .service, level: .info)
+            appLog("PredictionService: Sondehub v2 prediction completed - Landing: \(landingPointDesc), Burst: \(burstPointDesc)", category: .service, level: .info)
             
             publishHealthEvent(.healthy, message: "Prediction successful")
             return predictionData
             
+        } catch let decodingError as DecodingError {
+            appLog("PredictionService: JSON decoding failed: \(decodingError)", category: .service, level: .error)
+            
+            // More detailed decoding error analysis
+            switch decodingError {
+            case .keyNotFound(let key, let context):
+                appLog("PredictionService: Missing key '\(key.stringValue)' at \(context.codingPath)", category: .service, level: .error)
+            case .typeMismatch(let type, let context):
+                appLog("PredictionService: Type mismatch for \(type) at \(context.codingPath)", category: .service, level: .error)
+            case .valueNotFound(let type, let context):
+                appLog("PredictionService: Value not found for \(type) at \(context.codingPath)", category: .service, level: .error)
+            case .dataCorrupted(let context):
+                appLog("PredictionService: Data corrupted at \(context.codingPath): \(context.debugDescription)", category: .service, level: .error)
+            @unknown default:
+                appLog("PredictionService: Unknown decoding error: \(decodingError)", category: .service, level: .error)
+            }
+            
+            publishHealthEvent(.unhealthy, message: "JSON decode failed")
+            throw PredictionError.decodingError(decodingError.localizedDescription)
+            
         } catch {
-            appLog("PredictionService: Prediction failed with error: \(error.localizedDescription)", category: .service, level: .error)
-            publishHealthEvent(.unhealthy, message: "Prediction failed: \(error.localizedDescription)")
+            let errorMessage = error.localizedDescription
+            appLog("PredictionService: Sondehub v2 API failed: \(errorMessage)", category: .service, level: .error)
+            publishHealthEvent(.unhealthy, message: "API failed: \(errorMessage)")
             throw error
         }
     }
     
-    private func updateAutoAdjustments(telemetry: TelemetryData) {
-        // Detect balloon descent (negative vertical speed)
-        let wasDescending = balloonDescends
-        balloonDescends = telemetry.verticalSpeed < 0
-        
-        if !wasDescending && balloonDescends {
-            appLog("PredictionService: Balloon descent detected - switching to descent mode", category: .service, level: .info)
-        }
-        
-        // Update descent rate buffer for smoothing (only if balloon is descending and below 10000m)
-        if balloonDescends && telemetry.altitude < 10000 {
-            descentRateBuffer.append(abs(telemetry.verticalSpeed))
-            if descentRateBuffer.count > descentRateBufferSize {
-                descentRateBuffer.removeFirst()
-            }
-            
-            // Calculate smoothed descent rate (20 values)
-            if descentRateBuffer.count >= 20 {
-                adjustedDescentRate = descentRateBuffer.reduce(0, +) / Double(descentRateBuffer.count)
-                appLog("PredictionService: Adjusted descent rate: \(String(format: "%.1f", adjustedDescentRate)) m/s (smoothed over \(descentRateBuffer.count) values)", category: .service, level: .debug)
-            }
-        }
-    }
-    
-    private func buildPredictionURL(telemetry: TelemetryData, userSettings: UserSettings, descentRate: Double, burstAltitude: Double) -> URL {
+    private func buildPredictionRequest(telemetry: TelemetryData, userSettings: UserSettings, descentRate: Double) throws -> URLRequest {
         var components = URLComponents()
         components.scheme = "https"
-        components.host = "predict.cusf.co.uk"
-        components.path = "/api/v1"
+        components.host = "api.v2.sondehub.org"
+        components.path = "/tawhiri"
         
         let queryItems = [
             URLQueryItem(name: "launch_latitude", value: String(telemetry.latitude)),
             URLQueryItem(name: "launch_longitude", value: String(telemetry.longitude)),
             URLQueryItem(name: "launch_altitude", value: String(telemetry.altitude)),
-            URLQueryItem(name: "launch_datetime", value: ISO8601DateFormatter().string(from: Date().addingTimeInterval(60))), // +1 minute per spec
+            URLQueryItem(name: "launch_datetime", value: ISO8601DateFormatter().string(from: Date())),
             URLQueryItem(name: "ascent_rate", value: String(userSettings.ascentRate)),
-            URLQueryItem(name: "burst_altitude", value: String(burstAltitude)), // Use adjusted burst altitude
-            URLQueryItem(name: "descent_rate", value: String(abs(descentRate))) // Use adjusted descent rate
+            URLQueryItem(name: "burst_altitude", value: String(userSettings.burstAltitude)),
+            URLQueryItem(name: "descent_rate", value: String(abs(descentRate)))
         ]
         
         components.queryItems = queryItems
-        return components.url!
+        
+        guard let url = components.url else {
+            throw PredictionError.invalidResponse
+        }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        
+        // Debug logging
+        appLog("PredictionService: Request URL: \(url.absoluteString)", category: .service, level: .debug)
+        
+        return request
+    }
+    
+    private func convertSondehubToPredictionData(_ sondehubResponse: SondehubPredictionResponse) throws -> PredictionData {
+        var trajectoryCoordinates: [CLLocationCoordinate2D] = []
+        var burstPoint: CLLocationCoordinate2D?
+        var landingPoint: CLLocationCoordinate2D?
+        
+        // Process ascent stage
+        if let ascent = sondehubResponse.prediction.first(where: { $0.stage == "ascent" }) {
+            for point in ascent.trajectory {
+                let coordinate = CLLocationCoordinate2D(latitude: point.latitude, longitude: point.longitude)
+                trajectoryCoordinates.append(coordinate)
+            }
+            
+            // Burst point is the last point of ascent
+            if let lastAscentPoint = ascent.trajectory.last {
+                burstPoint = CLLocationCoordinate2D(latitude: lastAscentPoint.latitude, longitude: lastAscentPoint.longitude)
+            }
+        }
+        
+        // Process descent stage
+        if let descent = sondehubResponse.prediction.first(where: { $0.stage == "descent" }) {
+            for point in descent.trajectory {
+                let coordinate = CLLocationCoordinate2D(latitude: point.latitude, longitude: point.longitude)
+                trajectoryCoordinates.append(coordinate)
+            }
+            
+            // Landing point is the last point of descent
+            if let lastDescentPoint = descent.trajectory.last {
+                landingPoint = CLLocationCoordinate2D(latitude: lastDescentPoint.latitude, longitude: lastDescentPoint.longitude)
+            }
+        }
+        
+        return PredictionData(
+            path: trajectoryCoordinates,
+            burstPoint: burstPoint,
+            landingPoint: landingPoint,
+            landingTime: nil,
+            latestTelemetry: nil
+        )
     }
     
     private func publishHealthEvent(_ health: ServiceHealth, message: String) {
@@ -1402,6 +1450,24 @@ final class PredictionService: ObservableObject {
             message: message
         ))
     }
+}
+
+// MARK: - Sondehub API Models
+
+struct SondehubPredictionResponse: Codable {
+    let prediction: [SondehubStage]
+}
+
+struct SondehubStage: Codable {
+    let stage: String // "ascent" or "descent"
+    let trajectory: [SondehubTrajectoryPoint]
+}
+
+struct SondehubTrajectoryPoint: Codable {
+    let latitude: Double
+    let longitude: Double
+    let altitude: Double
+    let datetime: String
 }
 
 // MARK: - Route Calculation Service
@@ -1848,6 +1914,8 @@ enum PredictionError: Error, LocalizedError {
     case invalidResponse
     case httpError(Int)
     case noData
+    case networkUnavailable(String)
+    case decodingError(String)
     
     var errorDescription: String? {
         switch self {
@@ -1857,6 +1925,10 @@ enum PredictionError: Error, LocalizedError {
             return "HTTP error \(code)"
         case .noData:
             return "No data received"
+        case .networkUnavailable(let reason):
+            return "Network unavailable: \(reason)"
+        case .decodingError(let description):
+            return "JSON decoding failed: \(description)"
         }
     }
 }

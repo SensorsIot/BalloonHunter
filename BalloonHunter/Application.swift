@@ -27,12 +27,14 @@ nonisolated func appLog(_ message: String, category: LogCategory, level: OSLogTy
     let timestampedMessage = "[\(timestamp)] \(message)"
     
     let logger = Logger(subsystem: "com.yourcompany.BalloonHunter", category: category.rawValue)
+    
+    // Use literal string formatting to avoid decode issues with special characters
     switch level {
-    case OSLogType.debug: logger.debug("\(timestampedMessage)")
-    case OSLogType.info: logger.info("\(timestampedMessage)")
-    case OSLogType.error: logger.error("\(timestampedMessage)")
-    case OSLogType.fault: logger.fault("\(timestampedMessage)")
-    default: logger.log("\(timestampedMessage)")
+    case OSLogType.debug: logger.debug("\(timestampedMessage, privacy: .public)")
+    case OSLogType.info: logger.info("\(timestampedMessage, privacy: .public)")
+    case OSLogType.error: logger.error("\(timestampedMessage, privacy: .public)")
+    case OSLogType.fault: logger.fault("\(timestampedMessage, privacy: .public)")
+    default: logger.log("\(timestampedMessage, privacy: .public)")
     }
 }
 

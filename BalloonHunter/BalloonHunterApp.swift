@@ -73,12 +73,12 @@ struct BalloonHunterApp: App {
                         Text("BalloonHunter")
                             .font(.largeTitle)
                             .fontWeight(.bold)
-                            .foregroundColor(.primary)
+                            .foregroundColor(.white)
                             .padding(.top, 20)
                         
                         Text("Weather Balloon Tracking")
                             .font(.subheadline)
-                            .foregroundColor(.secondary)
+                            .foregroundColor(.gray)
                             .padding(.top, 5)
                         
                         Spacer()
@@ -101,7 +101,7 @@ struct BalloonHunterApp: App {
                         .padding(.bottom, 50)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(Color(UIColor.systemBackground))
+                    .background(Color.black)
                     .onAppear {
                         animateLoading = true
                     }

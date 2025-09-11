@@ -37,9 +37,9 @@ struct StartupView: View {
             startupProgress = "Initializing services..."
             serviceManager.initializeEventDrivenFlow()
             
-            // Step 3: Setup location services with 25km zoom FIRST
+            // Step 3: Setup location services
             startupProgress = "Getting location..."
-            try await setupLocationWith25kmZoom()
+            try await setupLocationServices()
             
             // Signal location ready - TrackingMapView can now be shown
             NotificationCenter.default.post(name: .locationReady, object: nil)
@@ -63,8 +63,7 @@ struct StartupView: View {
                 await processCurrentBalloonData()
             }
             
-            // Step 7: Keep initial 25km map view (don't override with show-all-annotations)
-            // The 25km region was already set during location setup
+            // Step 7: Map initialization handled by UI layer
             
             startupProgress = "Ready!"
             
@@ -176,8 +175,8 @@ struct StartupView: View {
     
     // requestDeviceSettings removed - BLE service handles this automatically
     
-    private func setupLocationWith25kmZoom() async throws {
-        // Start location services
+    private func setupLocationServices() async throws {
+        // Start location services - UI will handle initial region setting
         await MainActor.run {
             serviceManager.currentLocationService.requestPermission()
             serviceManager.currentLocationService.startUpdating()
@@ -201,23 +200,7 @@ struct StartupView: View {
             throw StartupError.locationTimeout
         }
         
-        // Set 25km zoom region
-        await MainActor.run {
-            if let locationData = serviceManager.currentLocationService.locationData {
-                let center = CLLocationCoordinate2D(latitude: locationData.latitude, longitude: locationData.longitude)
-                let span = MKCoordinateSpan(latitudeDelta: 0.25, longitudeDelta: 0.25) // ~25km span
-                let region = MKCoordinateRegion(center: center, span: span)
-                
-                let update = MapStateUpdate(
-                    source: "StartupView",
-                    version: 1,
-                    region: region
-                )
-                
-                EventBus.shared.publishMapStateUpdate(update)
-                appLog("StartupView: Set initial 25km zoom region", category: .general, level: .info)
-            }
-        }
+        appLog("StartupView: Initial location obtained, UI will handle map initialization", category: .general, level: .info)
     }
     
     private func loadAllPersistenceData() async {

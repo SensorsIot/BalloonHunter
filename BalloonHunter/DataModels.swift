@@ -121,7 +121,7 @@ struct DeviceSettings: Codable, Equatable {
         let components = message.components(separatedBy: "/")
         guard components.count >= 22, components[0] == "3" else { return }
 
-        self.sondeType = components[1]
+        self.sondeType = sondeTypeFromCode(components[1])
         self.frequency = Double(components[2]) ?? 0.0
         self.oledSDA = Int(components[3]) ?? 0
         self.oledSCL = Int(components[4]) ?? 0
@@ -169,6 +169,24 @@ struct NameOnlyData {
     let batVoltage: Int
     let buzmute: Bool
     let softwareVersion: String
+}
+
+// MARK: - Sonde Type Conversion Helpers
+
+/// Converts numeric sonde type code to string name
+private func sondeTypeFromCode(_ code: String) -> String {
+    if let probeCode = Int(code) {
+        switch probeCode {
+        case 1: return "RS41"
+        case 2: return "M20"
+        case 3: return "M10"
+        case 4: return "PILOT"
+        case 5: return "DFM"
+        default: return "RS41" // Default fallback
+        }
+    } else {
+        return code // Return original string if not numeric
+    }
 }
 
 extension DeviceSettings {
@@ -328,7 +346,7 @@ struct TelemetryData: Identifiable, Equatable, Codable {
     
     private mutating func parseType0(components: [String]) {
         guard components.count >= 8 else { return }
-        self.probeType = components[Type0Index.probeType.rawValue]
+        self.probeType = sondeTypeFromCode(components[Type0Index.probeType.rawValue])
         self.frequency = Double(components[Type0Index.frequency.rawValue]) ?? 0.0
         self.signalStrength = Double(components[Type0Index.signalStrength.rawValue]) ?? 0.0
         self.batteryPercentage = Int(components[Type0Index.batteryPercentage.rawValue]) ?? 0
@@ -340,7 +358,7 @@ struct TelemetryData: Identifiable, Equatable, Codable {
     private mutating func parseType1(components: [String]) {
         guard components.count >= 20 else { return }
         // print("[DEBUG][TelemetryData] Received type 1 packet: \(components.joined(separator: ", "))")
-        self.probeType = components[Type1Index.probeType.rawValue]
+        self.probeType = sondeTypeFromCode(components[Type1Index.probeType.rawValue])
         self.frequency = Double(components[Type1Index.frequency.rawValue]) ?? 0.0
         self.sondeName = components[Type1Index.sondeName.rawValue]
         self.latitude = Double(components[Type1Index.latitude.rawValue]) ?? 0.0
@@ -361,7 +379,7 @@ struct TelemetryData: Identifiable, Equatable, Codable {
     
     private mutating func parseType2(components: [String]) {
         guard components.count >= 10 else { return }
-        self.probeType = components[Type2Index.probeType.rawValue]
+        self.probeType = sondeTypeFromCode(components[Type2Index.probeType.rawValue])
         self.frequency = Double(components[Type2Index.frequency.rawValue]) ?? 0.0
         self.sondeName = components[Type2Index.sondeName.rawValue]
         self.signalStrength = Double(components[Type2Index.signalStrength.rawValue]) ?? 0.0
@@ -460,27 +478,9 @@ final class MapAnnotationItem: ObservableObject, Identifiable, Equatable {
                     return .gray // Default or unknown state
                 }
             }()
-            ZStack {
-                Circle()
-                    .fill(color)
-                    .frame(width: 76, height: 76)
-                    .overlay(
-                        Image(systemName: "balloon.fill")
-                            .resizable()
-                            .aspectRatio(contentMode: .fit)
-                            .foregroundColor(.white)
-                            .frame(width: 76, height: 76)
-                    )
-                if let altitude = altitude {
-                    Text("\(Int(altitude))")
-                        .font(.system(size: 22, weight: .bold, design: .rounded))
-                        .foregroundColor(.black)
-                        .shadow(color: .white.opacity(0.8), radius: 5, x: 0, y: 0)
-                        .padding(.top, 8)
-                        .frame(width: 54, height: 28, alignment: .center)
-                        .position(x: 38, y: 28) // upper third
-                }
-            }
+            Image(systemName: "balloon.fill")
+                .foregroundColor(color)
+                .font(.system(size: 32))
         case .burst:
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundColor(.orange)

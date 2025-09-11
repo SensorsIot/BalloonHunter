@@ -11,13 +11,9 @@ struct TrackingMapView: View {
 
     @State private var showSettings = false
     @State private var transportMode: TransportationMode = .car
-    @State private var region = MKCoordinateRegion(
-        center: CLLocationCoordinate2D(latitude: 47.3769, longitude: 8.5417),
-        span: MKCoordinateSpan(latitudeDelta: 0.225, longitudeDelta: 0.225)
-    )
-    @State private var hasInitializedRegion = false
+    @State private var position: MapCameraPosition = .automatic
+    @State private var hasInitializedFromLocation = false
     @State private var isHeadingMode: Bool = false
-    @State private var mapView: MKMapView? = nil
 
     var body: some View {
         GeometryReader { geometry in
@@ -112,12 +108,57 @@ struct TrackingMapView: View {
                 }
 
                 // Map view
-                EventDrivenMapView(
-                    region: $region,
-                    mapView: $mapView,
-                    isHeadingMode: $isHeadingMode
-                )
+                Map(position: $position) {
+                    // User annotation
+                    if let userLocation = mapState.userLocation {
+                        Annotation("You", coordinate: CLLocationCoordinate2D(latitude: userLocation.latitude, longitude: userLocation.longitude)) {
+                            Image(systemName: "figure.walk")
+                                .foregroundColor(.blue)
+                                .font(.system(size: 24))
+                        }
+                    }
+                    
+                    // Map annotations from MapState
+                    ForEach(mapState.annotations, id: \.id) { item in
+                        Annotation(item.kind.displayName, coordinate: item.coordinate) {
+                            item.view
+                        }
+                    }
+                    
+                    // Balloon track overlay
+                    if let trackPath = mapState.balloonTrackPath {
+                        MapPolyline(coordinates: trackPath.coordinates)
+                            .stroke(.red, lineWidth: 2)
+                    }
+                    
+                    // Prediction path overlay
+                    if mapState.isPredictionPathVisible, let predictionPath = mapState.predictionPath {
+                        MapPolyline(coordinates: predictionPath.coordinates)
+                            .stroke(.blue, lineWidth: 4)
+                    }
+                    
+                    // Route overlay
+                    if mapState.isRouteVisible, let userRoute = mapState.userRoute {
+                        MapPolyline(coordinates: userRoute.coordinates)
+                            .stroke(.green, lineWidth: 3)
+                    }
+                }
+                .mapControls {
+                    MapCompass()
+                    MapScaleView()
+                    MapUserLocationButton()
+                }
                 .frame(height: geometry.size.height * 0.7)
+                .onChange(of: mapState.userLocation) { _, newLocation in
+                    guard let location = newLocation, !hasInitializedFromLocation else { return }
+                    let region = MKCoordinateRegion(
+                        center: CLLocationCoordinate2D(latitude: location.latitude, longitude: location.longitude),
+                        span: MKCoordinateSpan(latitudeDelta: 0.25, longitudeDelta: 0.25) // ~25km span
+                    )
+                    position = .region(region)
+                    hasInitializedFromLocation = true
+                    print("📍 TrackingMapView: Initialized region from user location: \(location.latitude), \(location.longitude)")
+                }
 
                 // Data panel
                 DataPanelView()
@@ -132,458 +173,21 @@ struct TrackingMapView: View {
                 .environmentObject(serviceManager.persistenceService)
                 .environmentObject(userSettings)
         }
-        .onReceive(mapState.$region) { newRegion in
-            if let newRegion = newRegion {
-                print("📍 TrackingMapView: Received new region from MapState: \(newRegion.center)")
-                self.region = newRegion
-                hasInitializedRegion = true
-                // Only reset the flag if this is the actual user location (not VIRTA)
-                let isVIRTA = abs(newRegion.center.latitude - 47.3769) < 0.001 && abs(newRegion.center.longitude - 8.5417) < 0.001
-                if !isVIRTA {
-                    print("📍 TrackingMapView: Real user region received, will apply on next update")
-                }
-            }
-        }
-        .onReceive(mapState.$userLocation) { userLocation in
-            // Fallback: if we have user location but no region set, initialize with 25km region
-            if let location = userLocation, !hasInitializedRegion {
-                let userRegion = MKCoordinateRegion(
-                    center: CLLocationCoordinate2D(latitude: location.latitude, longitude: location.longitude),
-                    span: MKCoordinateSpan(latitudeDelta: 0.25, longitudeDelta: 0.25)
-                )
-                self.region = userRegion
-                hasInitializedRegion = true
-            }
-        }
-        .onAppear {
-            // Initialize region immediately if user location is available
-            if let userLocation = mapState.userLocation, !hasInitializedRegion {
-                let userRegion = MKCoordinateRegion(
-                    center: CLLocationCoordinate2D(latitude: userLocation.latitude, longitude: userLocation.longitude),
-                    span: MKCoordinateSpan(latitudeDelta: 0.25, longitudeDelta: 0.25)
-                )
-                self.region = userRegion
-                hasInitializedRegion = true
-            }
+    }
+}
+
+// MARK: - Map Extensions
+
+extension MapAnnotationItem.AnnotationKind {
+    var displayName: String {
+        switch self {
+        case .user: return "You"
+        case .balloon: return "Balloon"
+        case .burst: return "Burst"
+        case .landing: return "Landing"
+        case .landed: return "Landed"
         }
     }
 }
 
-// MARK: - Event-Driven Map View
-
-private struct EventDrivenMapView: UIViewRepresentable {
-    @Binding var region: MKCoordinateRegion
-    @Binding var mapView: MKMapView?
-    @Binding var isHeadingMode: Bool
-    
-    @EnvironmentObject var mapState: MapState
-    @State private var hasAppliedStartupRegion = false
-
-    func makeUIView(context: Context) -> MKMapView {
-        let mapView = MKMapView()
-        mapView.delegate = context.coordinator
-        mapView.mapType = .standard
-        mapView.showsUserLocation = true
-        mapView.isUserInteractionEnabled = true
-        mapView.register(CustomAnnotationView.self, forAnnotationViewWithReuseIdentifier: "custom")
-        
-        // Set initial region - use MapState region if available, otherwise use binding
-        print("📍 makeUIView: hasAppliedStartupRegion = \(hasAppliedStartupRegion)")
-        if !hasAppliedStartupRegion {
-            if let mapStateRegion = mapState.region {
-                print("📍 makeUIView: Setting MapState region: \(mapStateRegion.center)")
-                mapView.setRegion(mapStateRegion, animated: false)
-                
-                // Use DispatchQueue to avoid modifying state during view creation
-                DispatchQueue.main.async {
-                    self.hasAppliedStartupRegion = true
-                }
-            } else {
-                print("📍 makeUIView: Setting binding region: \(region.center), MapState region is nil")
-                mapView.setRegion(region, animated: false)
-                
-                // Use DispatchQueue to avoid modifying state during view creation
-                DispatchQueue.main.async {
-                    self.hasAppliedStartupRegion = true
-                }
-            }
-        }
-        
-        DispatchQueue.main.async {
-            self.mapView = mapView
-        }
-        
-        return mapView
-    }
-
-    func updateUIView(_ uiView: MKMapView, context: Context) {
-        // Once startup region has been applied, never apply automatic region updates again
-        if hasAppliedStartupRegion {
-            print("📍 updateUIView: Startup region already applied, map is now user-controlled")
-            // Apply other updates but skip region changes
-        } else {
-            // Check if we need to apply a region update from the binding
-            let currentCenter = uiView.region.center
-            let bindingCenter = region.center
-            
-            // If the region binding changed significantly (not just the default VIRTA), apply it
-            let distanceThreshold = 0.01 // ~1km
-            let latDiff = abs(currentCenter.latitude - bindingCenter.latitude)
-            let lonDiff = abs(currentCenter.longitude - bindingCenter.longitude)
-            
-            if latDiff > distanceThreshold || lonDiff > distanceThreshold {
-                print("📍 updateUIView: Applying region: \(bindingCenter)")
-                uiView.setRegion(region, animated: false)
-                
-                // Only set the flag to true for real user locations (not default VIRTA)
-                let isVIRTA = abs(bindingCenter.latitude - 47.3769) < 0.001 && abs(bindingCenter.longitude - 8.5417) < 0.001
-                if !isVIRTA {
-                    DispatchQueue.main.async {
-                        print("📍 updateUIView: Real user region applied, map is now user-controlled")
-                        self.hasAppliedStartupRegion = true
-                    }
-                } else {
-                    print("📍 updateUIView: VIRTA region applied, waiting for real user location")
-                }
-            } else {
-                print("📍 updateUIView: No significant region change during startup")
-            }
-        }
-        
-        // Apply camera update from policies
-        if let cameraUpdate = mapState.cameraUpdate {
-            applyCameraUpdate(uiView, cameraUpdate)
-        }
-        
-        // Update annotations
-        updateAnnotations(uiView)
-        
-        // Update overlays
-        updateOverlays(uiView)
-        
-        // Handle heading mode
-        updateCameraForHeadingMode(uiView)
-    }
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(self)
-    }
-    
-    private func coordinateDistance(_ coord1: CLLocationCoordinate2D, _ coord2: CLLocationCoordinate2D) -> Double {
-        let location1 = CLLocation(latitude: coord1.latitude, longitude: coord1.longitude)
-        let location2 = CLLocation(latitude: coord2.latitude, longitude: coord2.longitude)
-        return location1.distance(from: location2)
-    }
-    
-    private func applyCameraUpdate(_ mapView: MKMapView, _ update: CameraUpdate) {
-        let camera = MKMapCamera(
-            lookingAtCenter: update.center ?? mapView.camera.centerCoordinate,
-            fromDistance: update.distance ?? mapView.camera.centerCoordinateDistance,
-            pitch: update.pitch ?? mapView.camera.pitch,
-            heading: update.heading ?? mapView.camera.heading
-        )
-        mapView.setCamera(camera, animated: update.animated)
-    }
-    
-    private func updateAnnotations(_ mapView: MKMapView) {
-        let existingAnnotations = mapView.annotations.compactMap { $0 as? CustomMapAnnotation }
-        let newIds = Set(mapState.annotations.map { $0.id })
-        
-        // Remove old annotations
-        let annotationsToRemove = existingAnnotations.filter { annotation in
-            guard let item = annotation.item else { return true }
-            return !newIds.contains(item.id)
-        }
-        if !annotationsToRemove.isEmpty {
-            mapView.removeAnnotations(annotationsToRemove)
-        }
-        
-        // Add/update annotations
-        for item in mapState.annotations {
-            if let existing = existingAnnotations.first(where: { $0.item?.id == item.id }) {
-                // Update existing annotation
-                if let existingItem = existing.item,
-                   !coordinatesEqual(existingItem.coordinate, item.coordinate) ||
-                   existingItem.altitude != item.altitude ||
-                   existingItem.isAscending != item.isAscending {
-                    existing.coordinate = item.coordinate
-                    existing.item = item
-                }
-            } else {
-                // Add new annotation
-                let annotation = CustomMapAnnotation()
-                annotation.coordinate = item.coordinate
-                annotation.item = item
-                mapView.addAnnotation(annotation)
-            }
-        }
-    }
-    
-    private func updateOverlays(_ mapView: MKMapView) {
-        let currentOverlays = mapView.overlays.compactMap { $0 as? MKPolyline }
-        
-        // Update balloon track
-        updateOverlay(mapView, current: currentOverlays.first { $0.title == "balloonTrack" }, 
-                     new: mapState.balloonTrackPath, title: "balloonTrack")
-        
-        // Update prediction path
-        let predictionPath = mapState.isPredictionPathVisible ? mapState.predictionPath : nil
-        updateOverlay(mapView, current: currentOverlays.first { $0.title == "predictionPath" }, 
-                     new: predictionPath, title: "predictionPath")
-        
-        // Update user route
-        let userRoute = mapState.isRouteVisible ? mapState.userRoute : nil
-        updateOverlay(mapView, current: currentOverlays.first { $0.title == "userRoute" }, 
-                     new: userRoute, title: "userRoute")
-    }
-    
-    private func updateOverlay(_ mapView: MKMapView, current: MKPolyline?, new: MKPolyline?, title: String) {
-        if let new = new {
-            new.title = title
-            if current == nil || !polylinesEqual(lhs: current!, rhs: new) {
-                if let current = current {
-                    mapView.removeOverlay(current)
-                }
-                mapView.addOverlay(new)
-            }
-        } else if let current = current {
-            mapView.removeOverlay(current)
-        }
-    }
-    
-    private func updateCameraForHeadingMode(_ mapView: MKMapView) {
-        if isHeadingMode {
-            mapView.isScrollEnabled = false
-            mapView.isZoomEnabled = true
-            mapView.isPitchEnabled = false
-            mapView.isRotateEnabled = false
-            
-            if let userLocation = mapState.userLocation {
-                let center = CLLocationCoordinate2D(latitude: userLocation.latitude, longitude: userLocation.longitude)
-                let camera = MKMapCamera(
-                    lookingAtCenter: center,
-                    fromDistance: mapView.camera.centerCoordinateDistance,
-                    pitch: 45.0,
-                    heading: userLocation.heading
-                )
-                mapView.setCamera(camera, animated: true)
-            }
-        } else {
-            mapView.isScrollEnabled = true
-            mapView.isZoomEnabled = true
-            mapView.isPitchEnabled = true
-            mapView.isRotateEnabled = true
-            
-            let camera = MKMapCamera(
-                lookingAtCenter: mapView.camera.centerCoordinate,
-                fromDistance: mapView.camera.centerCoordinateDistance,
-                pitch: mapView.camera.pitch,
-                heading: 0
-            )
-            mapView.setCamera(camera, animated: true)
-        }
-    }
-
-    class Coordinator: NSObject, MKMapViewDelegate {
-        var parent: EventDrivenMapView
-
-        init(_ parent: EventDrivenMapView) {
-            self.parent = parent
-        }
-
-        func mapView(_ mapView: MKMapView, regionDidChangeAnimated animated: Bool) {
-            EventBus.shared.publishUIEvent(.cameraRegionChanged(mapView.region, timestamp: Date()))
-        }
-
-        func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
-            if let polyline = overlay as? MKPolyline {
-                let renderer = MKPolylineRenderer(polyline: polyline)
-                switch polyline.title {
-                case "balloonTrack":
-                    renderer.strokeColor = .red
-                    renderer.lineWidth = 1
-                case "predictionPath":
-                    renderer.strokeColor = .blue
-                    renderer.lineWidth = 4
-                case "userRoute":
-                    renderer.strokeColor = .green
-                    renderer.lineWidth = 3
-                default:
-                    break
-                }
-                return renderer
-            }
-            return MKOverlayRenderer(overlay: overlay)
-        }
-
-        func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
-            if annotation is MKUserLocation {
-                let identifier = "userLocation"
-                var view = mapView.dequeueReusableAnnotationView(withIdentifier: identifier)
-                if view == nil {
-                    view = MKAnnotationView(annotation: annotation, reuseIdentifier: identifier)
-                    let size = CGSize(width: 30, height: 30)
-                    if let baseImage = UIImage(systemName: "figure.walk") {
-                        let renderer = UIGraphicsImageRenderer(size: size)
-                        let image = renderer.image { _ in
-                            baseImage.withTintColor(.blue, renderingMode: .alwaysOriginal).draw(in: CGRect(origin: .zero, size: size))
-                        }
-                        view?.image = image
-                    }
-                    view?.frame = CGRect(origin: .zero, size: size)
-                    view?.centerOffset = CGPoint(x: 0, y: 0)
-                    view?.backgroundColor = .clear
-                } else {
-                    view?.annotation = annotation
-                }
-                return view
-            }
-            
-            guard let annotation = annotation as? CustomMapAnnotation else { return nil }
-
-            let identifier = "custom"
-            var view: CustomAnnotationView
-            if let dequeuedView = mapView.dequeueReusableAnnotationView(withIdentifier: identifier) as? CustomAnnotationView {
-                dequeuedView.annotation = annotation
-                view = dequeuedView
-            } else {
-                view = CustomAnnotationView(annotation: annotation, reuseIdentifier: identifier)
-            }
-            
-            if let item = annotation.item {
-                view.setup(with: item)
-                
-                if item.kind == .balloon {
-                    view.isUserInteractionEnabled = true
-                    let tapGesture = UITapGestureRecognizer(target: self, action: #selector(handleAnnotationTap(_:)))
-                    view.gestureRecognizers?.forEach(view.removeGestureRecognizer)
-                    view.addGestureRecognizer(tapGesture)
-                } else {
-                    view.isUserInteractionEnabled = false
-                    view.gestureRecognizers?.forEach(view.removeGestureRecognizer)
-                }
-            }
-            return view
-        }
-        
-        @objc func handleAnnotationTap(_ gesture: UITapGestureRecognizer) {
-            guard let annotationView = gesture.view as? MKAnnotationView,
-                  let annotation = annotationView.annotation as? CustomMapAnnotation,
-                  let item = annotation.item else { return }
-            
-            EventBus.shared.publishUIEvent(.annotationSelected(item, timestamp: Date()))
-        }
-    }
-}
-
-// MARK: - Custom Annotation Classes
-
-private class CustomMapAnnotation: MKPointAnnotation {
-    var item: MapAnnotationItem?
-}
-
-private struct AnnotationHostingView: View {
-    @ObservedObject var item: MapAnnotationItem
-
-    var body: some View {
-        if item.kind == .balloon {
-            let isAscending = item.isAscending ?? false
-            ZStack {
-                Image(systemName: "balloon.fill")
-                    .foregroundColor(isAscending ? Color.green : Color.red)
-                    .font(.system(size: 38))
-                if let altitude = item.altitude {
-                    Text("\(Int(altitude))m")
-                        .font(.system(size: 12, weight: .bold, design: .rounded))
-                        .foregroundColor(.white)
-                        .shadow(color: .black.opacity(0.9), radius: 1.5, x: 0, y: 0)
-                        .offset(y: -8)
-                } else {
-                    Text("?")
-                        .font(.system(size: 12, weight: .bold, design: .rounded))
-                        .foregroundColor(.white)
-                        .shadow(color: .black.opacity(0.9), radius: 1.5, x: 0, y: 0)
-                        .offset(y: -8)
-                }
-            }
-            .accessibilityLabel("Balloon altitude \(item.altitude.map { Int($0) } ?? 0) meters, \(isAscending ? "ascending" : "descending")")
-        } else {
-            item.view
-        }
-    }
-}
-
-private class CustomAnnotationView: MKAnnotationView {
-    private var hostingController: UIHostingController<AnnotationHostingView>?
-    private var currentItem: MapAnnotationItem?
-
-    override init(annotation: MKAnnotation?, reuseIdentifier: String?) {
-        super.init(annotation: annotation, reuseIdentifier: reuseIdentifier)
-        self.frame = CGRect(x: 0, y: 0, width: 90, height: 90)
-        self.backgroundColor = .clear
-        self.canShowCallout = false
-
-        let initialItem = MapAnnotationItem(coordinate: CLLocationCoordinate2D(), kind: .user)
-        hostingController = UIHostingController(rootView: AnnotationHostingView(item: initialItem))
-        if let hcView = hostingController?.view {
-            hcView.backgroundColor = .clear
-            hcView.translatesAutoresizingMaskIntoConstraints = false
-            self.addSubview(hcView)
-            NSLayoutConstraint.activate([
-                hcView.centerXAnchor.constraint(equalTo: self.centerXAnchor),
-                hcView.centerYAnchor.constraint(equalTo: self.centerYAnchor),
-                hcView.widthAnchor.constraint(equalTo: self.widthAnchor),
-                hcView.heightAnchor.constraint(equalTo: self.heightAnchor)
-            ])
-        }
-    }
-
-    required init?(coder aDecoder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-
-    func setup(with item: MapAnnotationItem) {
-        if let hc = hostingController {
-            hc.rootView = AnnotationHostingView(item: item)
-        }
-        self.currentItem = item
-
-        switch item.kind {
-        case .user:
-            self.centerOffset = CGPoint(x: 0, y: 0)
-        case .balloon:
-            self.centerOffset = CGPoint(x: 0, y: -32)
-        case .burst:
-            self.centerOffset = CGPoint(x: 0, y: -15)
-        case .landing:
-            self.centerOffset = CGPoint(x: 0, y: -15)
-        case .landed:
-            self.centerOffset = CGPoint(x: 0, y: -15)
-        }
-    }
-
-    override var annotation: MKAnnotation? {
-        didSet {
-            if let customAnnotation = annotation as? CustomMapAnnotation, let item = customAnnotation.item {
-                if self.currentItem !== item {
-                    setup(with: item)
-                }
-            }
-        }
-    }
-}
-
-// MARK: - Utility Functions
-
-private func polylinesEqual(lhs: MKPolyline, rhs: MKPolyline) -> Bool {
-    guard lhs.pointCount == rhs.pointCount else { return false }
-    let lhsCoords = lhs.coordinates
-    let rhsCoords = rhs.coordinates
-    for (a, b) in zip(lhsCoords, rhsCoords) {
-        if a.latitude != b.latitude || a.longitude != b.longitude { return false }
-    }
-    return true
-}
-
-// coordinatesEqual function removed - duplicate definition
 

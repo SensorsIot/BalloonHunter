@@ -646,8 +646,6 @@ final class AnnotationPolicy: ObservableObject {
     private var cachedBalloonTelemetry: TelemetryData? = nil
     private var cachedLandingPointCoordinate: CLLocationCoordinate2D? = nil
     private var lastEventTimes: [String: Date] = [:]
-    private var lastPublishedBalloonPosition: CLLocationCoordinate2D? = nil
-    private var significantMovementThreshold: Double = 500.0 // Only update if balloon moved >500m
     
     init(balloonTrackService: BalloonTrackService, landingPointService: LandingPointService, policyScheduler: PolicyScheduler) {
         self.balloonTrackService = balloonTrackService
@@ -766,100 +764,71 @@ final class AnnotationPolicy: ObservableObject {
     
     
     private func updateAnnotations(reason: String) async {
-        let schedulerKey = "annotation-update"
+        appLog("AnnotationPolicy: Immediate annotation update - reason: \(reason)", category: .policy, level: .debug)
         
-        await policyScheduler.debounce(key: schedulerKey, interval: 0.5) {
-            appLog("AnnotationPolicy: Evaluating annotation update - reason: \(reason)", category: .policy, level: .debug)
-            
-            let now = Date()
-            
-            // Check if we should skip due to frequency limits
-            if let lastUpdate = self.lastEventTimes["publish"],
-               now.timeIntervalSince(lastUpdate) < 10.0 {
-                appLog("AnnotationPolicy: Skipping annotation update - too frequent (\(String(format: "%.1f", now.timeIntervalSince(lastUpdate)))s ago)", category: .policy, level: .debug)
-                return
-            }
-            
-            // For balloon annotation updates, check if balloon moved significantly
-            if reason == "track_update", let currentBalloon = self.cachedBalloonTelemetry {
-                let currentPos = CLLocationCoordinate2D(latitude: currentBalloon.latitude, longitude: currentBalloon.longitude)
-                
-                if let lastPos = self.lastPublishedBalloonPosition {
-                    let distance = CLLocation(latitude: lastPos.latitude, longitude: lastPos.longitude)
-                        .distance(from: CLLocation(latitude: currentPos.latitude, longitude: currentPos.longitude))
-                    
-                    if distance < self.significantMovementThreshold {
-                        appLog("AnnotationPolicy: Skipping balloon update - movement too small (\(Int(distance))m, need >\(Int(self.significantMovementThreshold))m)", category: .policy, level: .debug)
-                        return
-                    }
-                }
-                
-                // Update last published position
-                self.lastPublishedBalloonPosition = currentPos
-            }
-            
-            self.annotationVersion += 1
-            
-            var annotations: [MapAnnotationItem] = []
-            
-            // Add user location annotation
-            if let userLocation = self.currentUserLocation {
-                let userAnnotation = MapAnnotationItem(
-                    coordinate: CLLocationCoordinate2D(latitude: userLocation.latitude, longitude: userLocation.longitude),
-                    kind: .user
-                )
-                annotations.append(userAnnotation)
-            }
-            
-            // Add balloon annotation if we have telemetry
-            if let telemetry = self.cachedBalloonTelemetry {
-                let balloonAnnotation = MapAnnotationItem(
-                    coordinate: CLLocationCoordinate2D(latitude: telemetry.latitude, longitude: telemetry.longitude),
-                    kind: .balloon,
-                    isAscending: telemetry.verticalSpeed >= 0,
-                    altitude: telemetry.altitude
-                )
-                annotations.append(balloonAnnotation)
-                
-                appLog("AnnotationPolicy: Added balloon annotation for \(telemetry.sondeName) at (\(telemetry.latitude), \(telemetry.longitude), \(telemetry.altitude)m)", category: .policy, level: .debug)
-            }
-            
-            // Add landing point annotation if available
-            if let landingPoint = self.landingPointService.validLandingPoint {
-                let landingAnnotation = MapAnnotationItem(
-                    coordinate: landingPoint,
-                    kind: .landing
-                )
-                annotations.append(landingAnnotation)
-            }
-            
-            // Create balloon track polyline
-            let trackPoints = self.balloonTrackService.getAllTrackPoints()
-            var balloonTrackPolyline: MKPolyline? = nil
-            
-            if !trackPoints.isEmpty {
-                let coordinates = trackPoints.map { point in
-                    CLLocationCoordinate2D(latitude: point.latitude, longitude: point.longitude)
-                }
-                balloonTrackPolyline = MKPolyline(coordinates: coordinates, count: coordinates.count)
-                balloonTrackPolyline?.title = "balloonTrack"
-            }
-            
-            let update = MapStateUpdate(
-                source: "AnnotationPolicy",
-                version: self.annotationVersion,
-                annotations: annotations,
-                balloonTrack: balloonTrackPolyline
+        let now = Date()
+        
+        self.annotationVersion += 1
+        
+        var annotations: [MapAnnotationItem] = []
+        
+        // Add user location annotation
+        if let userLocation = self.currentUserLocation {
+            let userAnnotation = MapAnnotationItem(
+                coordinate: CLLocationCoordinate2D(latitude: userLocation.latitude, longitude: userLocation.longitude),
+                kind: .user
             )
-            
-            EventBus.shared.publishMapStateUpdate(update)
-            
-            self.lastEventTimes["publish"] = now
-            let timeSinceLastPublish = self.lastEventTimes["last_publish"].map { now.timeIntervalSince($0) } ?? 0
-            self.lastEventTimes["last_publish"] = now
-            
-            appLog("AnnotationPolicy: Published annotation update (v\(self.annotationVersion)) with \(annotations.count) annotations, interval: \(String(format: "%.3f", timeSinceLastPublish))s - \(reason)", category: .policy, level: .debug)
+            annotations.append(userAnnotation)
         }
+        
+        // Add balloon annotation if we have telemetry
+        if let telemetry = self.cachedBalloonTelemetry {
+            let balloonAnnotation = MapAnnotationItem(
+                coordinate: CLLocationCoordinate2D(latitude: telemetry.latitude, longitude: telemetry.longitude),
+                kind: .balloon,
+                isAscending: telemetry.verticalSpeed >= 0,
+                altitude: telemetry.altitude
+            )
+            annotations.append(balloonAnnotation)
+            
+            appLog("AnnotationPolicy: Added balloon annotation for \(telemetry.sondeName) at (\(telemetry.latitude), \(telemetry.longitude), \(telemetry.altitude)m)", category: .policy, level: .debug)
+        }
+        
+        // Add landing point annotation if available
+        if let landingPoint = self.landingPointService.validLandingPoint {
+            let landingAnnotation = MapAnnotationItem(
+                coordinate: landingPoint,
+                kind: .landing
+            )
+            annotations.append(landingAnnotation)
+        }
+        
+        // Create balloon track polyline
+        let trackPoints = self.balloonTrackService.getAllTrackPoints()
+        var balloonTrackPolyline: MKPolyline? = nil
+        
+        if !trackPoints.isEmpty {
+            let coordinates = trackPoints.map { point in
+                CLLocationCoordinate2D(latitude: point.latitude, longitude: point.longitude)
+            }
+            balloonTrackPolyline = MKPolyline(coordinates: coordinates, count: coordinates.count)
+            balloonTrackPolyline?.title = "balloonTrack"
+        }
+        
+        let update = MapStateUpdate(
+            source: "AnnotationPolicy",
+            version: self.annotationVersion,
+            annotations: annotations,
+            balloonTrack: balloonTrackPolyline
+        )
+        
+        EventBus.shared.publishMapStateUpdate(update)
+        
+        self.lastEventTimes["publish"] = now
+        let timeSinceLastPublish = self.lastEventTimes["last_publish"].map { now.timeIntervalSince($0) } ?? 0
+        self.lastEventTimes["last_publish"] = now
+        
+        appLog("AnnotationPolicy: Published annotation update (v\(self.annotationVersion)) with \(annotations.count) annotations, interval: \(String(format: "%.3f", timeSinceLastPublish))s - \(reason)", category: .policy, level: .debug)
     }
 }
 
