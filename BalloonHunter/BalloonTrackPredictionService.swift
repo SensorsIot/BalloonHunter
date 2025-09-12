@@ -15,9 +15,8 @@ final class BalloonTrackPredictionService: ObservableObject {
     
     private let predictionService: PredictionService
     private let predictionCache: PredictionCache
-    private let mapState: MapState
+    private weak var serviceCoordinator: ServiceCoordinator?  // Weak reference to avoid retain cycle
     private let userSettings: UserSettings
-    private let landingPointService: LandingPointService
     private let balloonTrackService: BalloonTrackService
     
     // MARK: - Service State
@@ -36,16 +35,14 @@ final class BalloonTrackPredictionService: ObservableObject {
     init(
         predictionService: PredictionService,
         predictionCache: PredictionCache,
-        mapState: MapState,
+        serviceCoordinator: ServiceCoordinator,
         userSettings: UserSettings,
-        landingPointService: LandingPointService,
         balloonTrackService: BalloonTrackService
     ) {
         self.predictionService = predictionService
         self.predictionCache = predictionCache
-        self.mapState = mapState
+        self.serviceCoordinator = serviceCoordinator
         self.userSettings = userSettings
-        self.landingPointService = landingPointService
         self.balloonTrackService = balloonTrackService
         
         appLog("🎯 BalloonTrackPredictionService: Initialized as independent service", category: .service, level: .info)
@@ -97,7 +94,8 @@ final class BalloonTrackPredictionService: ObservableObject {
         guard isRunning else { return }
         
         // Timer trigger: every 60 seconds
-        guard let telemetry = mapState.balloonTelemetry else {
+        guard let serviceCoordinator = serviceCoordinator,
+              let telemetry = serviceCoordinator.balloonTelemetry else {
             predictionStatus = "No telemetry available"
             appLog("🎯 BalloonTrackPredictionService: Timer trigger - no telemetry", category: .service, level: .debug)
             return
@@ -129,7 +127,8 @@ final class BalloonTrackPredictionService: ObservableObject {
             return
         }
         
-        guard let telemetry = mapState.balloonTelemetry else {
+        guard let serviceCoordinator = serviceCoordinator,
+              let telemetry = serviceCoordinator.balloonTelemetry else {
             predictionStatus = "No telemetry for manual prediction"
             appLog("🎯 BalloonTrackPredictionService: Manual trigger - no telemetry", category: .service, level: .debug)
             return
@@ -196,7 +195,7 @@ final class BalloonTrackPredictionService: ObservableObject {
     
     private func calculateEffectiveDescentRate(telemetry: TelemetryData) -> Double {
         // Requirements: Use automatically adjusted descent rate below 10000m
-        if telemetry.altitude < 10000, let smoothedRate = mapState.smoothedDescentRate {
+        if telemetry.altitude < 10000, let smoothedRate = serviceCoordinator?.smoothedDescentRate {
             appLog("🎯 BalloonTrackPredictionService: Using smoothed descent rate: \(String(format: "%.2f", abs(smoothedRate))) m/s (below 10000m)", category: .service, level: .info)
             return abs(smoothedRate)
         } else {
@@ -221,43 +220,39 @@ final class BalloonTrackPredictionService: ObservableObject {
         lastPredictionTime = Date()
         predictionStatus = "Valid prediction available"
         
-        // Direct MapState updates (no EventBus)
-        updateMapStateDirect(predictionData)
+        // Direct ServiceCoordinator updates (no EventBus)
+        updateServiceCoordinator(predictionData)
         
-        // Direct LandingPointService call (requirement: "Landing point service shall be called")
-        notifyLandingPointServiceDirect(predictionData)
+        // Landing point is already updated directly in ServiceCoordinator above
         
         appLog("🎯 BalloonTrackPredictionService: Prediction completed successfully from \(trigger)", category: .service, level: .info)
     }
     
-    private func updateMapStateDirect(_ predictionData: PredictionData) {
+    private func updateServiceCoordinator(_ predictionData: PredictionData) {
+        guard let serviceCoordinator = serviceCoordinator else {
+            appLog("🎯 BalloonTrackPredictionService: ServiceCoordinator is nil, cannot update", category: .service, level: .error)
+            return
+        }
+        
         // Convert prediction path to polyline
         if let path = predictionData.path, !path.isEmpty {
             let polyline = MKPolyline(coordinates: path, count: path.count)
-            mapState.predictionPath = polyline
+            serviceCoordinator.predictionPath = polyline
         }
         
         // Update burst point
         if let burstPoint = predictionData.burstPoint {
-            mapState.burstPoint = CLLocationCoordinate2D(latitude: burstPoint.latitude, longitude: burstPoint.longitude)
+            serviceCoordinator.burstPoint = CLLocationCoordinate2D(latitude: burstPoint.latitude, longitude: burstPoint.longitude)
         }
         
         // Update landing point
         if let landingPoint = predictionData.landingPoint {
-            mapState.landingPoint = CLLocationCoordinate2D(latitude: landingPoint.latitude, longitude: landingPoint.longitude)
+            serviceCoordinator.landingPoint = CLLocationCoordinate2D(latitude: landingPoint.latitude, longitude: landingPoint.longitude)
         }
         
-        appLog("🎯 BalloonTrackPredictionService: Updated MapState directly", category: .service, level: .info)
+        appLog("🎯 BalloonTrackPredictionService: Updated ServiceCoordinator directly", category: .service, level: .info)
     }
     
-    private func notifyLandingPointServiceDirect(_ predictionData: PredictionData) {
-        // Direct call to landing point service (requirement compliance)
-        if let landingPoint = predictionData.landingPoint {
-            let coordinate = CLLocationCoordinate2D(latitude: landingPoint.latitude, longitude: landingPoint.longitude)
-            landingPointService.updateFromPrediction(coordinate)
-            appLog("🎯 BalloonTrackPredictionService: Notified LandingPointService directly", category: .service, level: .info)
-        }
-    }
     
     // MARK: - Service Status & Monitoring
     

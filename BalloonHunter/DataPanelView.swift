@@ -3,8 +3,8 @@ import SwiftUI
 import OSLog
 
 struct DataPanelView: View {
-    @EnvironmentObject var mapState: MapState
-    @EnvironmentObject var balloonTracker: BalloonTracker
+    // MapState eliminated - ServiceCoordinator now holds all state
+    @EnvironmentObject var serviceCoordinator: ServiceCoordinator
     @State private var refreshTrigger = false
 
     var body: some View {
@@ -15,14 +15,14 @@ struct DataPanelView: View {
                 // Table 1: 4 columns
                 Grid(alignment: .leading, horizontalSpacing: 5, verticalSpacing: 10) {
                     GridRow {
-                        Image(systemName: balloonTracker.bleCommunicationService.connectionStatus == ConnectionStatus.connected ? "antenna.radiowaves.left.and.right" : "antenna.radiowaves.left.and.right.slash")
-                            .foregroundColor(balloonTracker.bleCommunicationService.connectionStatus == ConnectionStatus.connected ? .green : .red)
+                        Image(systemName: serviceCoordinator.bleCommunicationService.connectionStatus == ConnectionStatus.connected ? "antenna.radiowaves.left.and.right" : "antenna.radiowaves.left.and.right.slash")
+                            .foregroundColor(serviceCoordinator.bleCommunicationService.connectionStatus == ConnectionStatus.connected ? .green : .red)
                             .font(.system(size: 32))
-                        Text(mapState.balloonTelemetry?.probeType ?? "N/A")
+                        Text(serviceCoordinator.balloonTelemetry?.probeType ?? "N/A")
                             .frame(maxWidth: .infinity)
-                        Text(mapState.balloonTelemetry?.sondeName ?? "N/A")
+                        Text(serviceCoordinator.balloonTelemetry?.sondeName ?? "N/A")
                             .frame(width: columnWidth, alignment: .leading)
-                        Text("Alt: \(mapState.balloonTelemetry != nil ? "\(Int(mapState.balloonTelemetry!.altitude)) m" : "N/A")")
+                        Text("Alt: \(serviceCoordinator.balloonTelemetry != nil ? "\(Int(serviceCoordinator.balloonTelemetry!.altitude)) m" : "N/A")")
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
@@ -31,7 +31,7 @@ struct DataPanelView: View {
                 // Table 2: 3 columns x 3 rows
                 Grid(alignment: .leading, horizontalSpacing: 5, verticalSpacing: 10) {
                     GridRow {
-                        Text("\(String(format: "%.3f", mapState.balloonTelemetry?.frequency ?? 0.0)) MHz")
+                        Text("\(String(format: "%.3f", serviceCoordinator.balloonTelemetry?.frequency ?? 0.0)) MHz")
                             .frame(maxWidth: .infinity, alignment: .leading)
                         Text("RSSI: \(signalStrengthString) dB")
                             .frame(width: columnWidth, alignment: .leading)
@@ -41,7 +41,7 @@ struct DataPanelView: View {
                     GridRow {
                         Text("V: \(String(format: "%.1f", smoothedVerticalSpeed)) m/s")
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .foregroundColor((mapState.balloonTelemetry?.verticalSpeed ?? 0) >= 0 ? .green : .red)
+                            .foregroundColor((serviceCoordinator.balloonTelemetry?.verticalSpeed ?? 0) >= 0 ? .green : .red)
                         Text("H: \(String(format: "%.1f", smoothedHorizontalSpeed)) km/h")
                             .frame(maxWidth: .infinity, alignment: .leading)
                         Text("Dist: \(distanceString) km")
@@ -86,15 +86,15 @@ struct DataPanelView: View {
     // MARK: - Helpers for smoothing
     
     private var smoothedHorizontalSpeed: Double {
-        let last5 = Array(mapState.balloonTrackHistory.suffix(5))
+        let last5 = Array(serviceCoordinator.balloonTrackHistory.suffix(5))
         let speeds = last5.compactMap { $0.horizontalSpeed }
-        guard !speeds.isEmpty else { return mapState.balloonTelemetry?.horizontalSpeed ?? 0 }
+        guard !speeds.isEmpty else { return serviceCoordinator.balloonTelemetry?.horizontalSpeed ?? 0 }
         return speeds.reduce(0, +) / Double(speeds.count)
     }
     private var smoothedVerticalSpeed: Double {
-        let last5 = Array(mapState.balloonTrackHistory.suffix(5))
+        let last5 = Array(serviceCoordinator.balloonTrackHistory.suffix(5))
         let speeds = last5.compactMap { $0.verticalSpeed }
-        guard !speeds.isEmpty else { return mapState.balloonTelemetry?.verticalSpeed ?? 0 }
+        guard !speeds.isEmpty else { return serviceCoordinator.balloonTelemetry?.verticalSpeed ?? 0 }
         return speeds.reduce(0, +) / Double(speeds.count)
     }
 
@@ -104,7 +104,7 @@ struct DataPanelView: View {
         // Use refreshTrigger to ensure view updates when staleness changes
         _ = refreshTrigger
         
-        guard let telemetry = mapState.balloonTelemetry,
+        guard let telemetry = serviceCoordinator.balloonTelemetry,
               let lastUpdateTime = telemetry.lastUpdateTime else {
             // No telemetry available at all
             return true
@@ -122,7 +122,7 @@ struct DataPanelView: View {
     }
 
     var flightTime: String {
-        guard let landingTime = mapState.predictionData?.landingTime else { 
+        guard let landingTime = serviceCoordinator.predictionData?.landingTime else { 
             return "--:--" 
         }
         let interval = landingTime.timeIntervalSinceNow
@@ -140,15 +140,15 @@ struct DataPanelView: View {
     }
 
     private var landingTimeString: String {
-        return mapState.predictionData?.landingTime?.formatted(date: .omitted, time: .shortened) ?? "--:--"
+        return serviceCoordinator.predictionData?.landingTime?.formatted(date: .omitted, time: .shortened) ?? "--:--"
     }
 
     private var arrivalTimeString: String {
-        mapState.routeData?.arrivalTime?.formatted(date: .omitted, time: .shortened) ?? "--:--"
+        serviceCoordinator.routeData?.arrivalTime?.formatted(date: .omitted, time: .shortened) ?? "--:--"
     }
 
     private var distanceString: String {
-        if let distanceMeters = mapState.routeData?.distance {
+        if let distanceMeters = serviceCoordinator.routeData?.distance {
             let distanceKm = distanceMeters / 1000.0
             return String(format: "%.1f", distanceKm)
         }
@@ -156,7 +156,7 @@ struct DataPanelView: View {
     }
 
     private var signalStrengthString: String {
-        if let val = mapState.balloonTelemetry?.signalStrength {
+        if let val = serviceCoordinator.balloonTelemetry?.signalStrength {
             // Assuming signalStrength is a value that can be directly used as a percentage (0-100)
             // If it's RSSI in dB, this conversion is incorrect and needs clarification from the user.
             return String(format: "%.0f", val)
@@ -165,28 +165,28 @@ struct DataPanelView: View {
     }
 
     private var batteryPercentageString: String {
-        if let val = mapState.balloonTelemetry?.batteryPercentage {
+        if let val = serviceCoordinator.balloonTelemetry?.batteryPercentage {
             return "\(val)"
         }
         return "0"
     }
 
     private var verticalSpeedAvg: Double {
-        return mapState.balloonTelemetry?.verticalSpeed ?? 0
+        return serviceCoordinator.balloonTelemetry?.verticalSpeed ?? 0
     }
     private var verticalSpeedAvgString: String {
         String(format: "%.1f", verticalSpeedAvg)
     }
 
     private var horizontalSpeedString: String {
-        if let hs = mapState.balloonTelemetry?.horizontalSpeed {
+        if let hs = serviceCoordinator.balloonTelemetry?.horizontalSpeed {
             return String(format: "%.1f", hs)
         }
         return "N/A"
     }
     
     private var adjustedDescentRateString: String {
-        if let adjustedRate = mapState.smoothedDescentRate {
+        if let adjustedRate = serviceCoordinator.smoothedDescentRate {
             appLog("DataPanelView: Displaying smoothed descent rate: \(String(format: "%.2f", adjustedRate)) m/s", category: .ui, level: .debug)
             return String(format: "%.1f", abs(adjustedRate))
         }
@@ -197,8 +197,19 @@ struct DataPanelView: View {
 
 
 #Preview {
+    // Create mock services for preview
+    let mockAppServices = AppServices()
+    let mockServiceCoordinator = ServiceCoordinator(
+        bleCommunicationService: mockAppServices.bleCommunicationService,
+        currentLocationService: mockAppServices.currentLocationService,
+        persistenceService: mockAppServices.persistenceService,
+        predictionCache: mockAppServices.predictionCache,
+        routingCache: mockAppServices.routingCache,
+        balloonPositionService: mockAppServices.balloonPositionService,
+        balloonTrackService: mockAppServices.balloonTrackService
+    )
+    
     DataPanelView()
-        .environmentObject(MapState())
-        .environmentObject(BalloonTracker())
+        .environmentObject(mockServiceCoordinator)
 }
 

@@ -8,46 +8,56 @@ This is an iOS app is built with Xcode outside of Claude. No separate linting or
 
 ## Architecture Overview
 
-BalloonHunter is a SwiftUI-based iOS app for tracking weather balloons via BLE communication. The app uses an **event-driven architecture** with strict separation of concerns and policy-based orchestration.
+BalloonHunter is a SwiftUI-based iOS app for tracking weather balloons via BLE communication. The app uses a **simplified direct architecture** with ServiceCoordinator as the single source of truth.
 
-### Event-Driven Architecture (Revised)
+### Simplified Direct Architecture
 
-The app follows a clean event-driven pattern:
-**Services** → (typed events) → **Policies** → **MapState** → **UI**
+The app follows a clean direct communication pattern:
+**UI** → **ServiceCoordinator** ← **Services**
 
 **Core Components:**
 
-1. **EventBus** - Central event publishing system with typed events:
-   - `TelemetryEvent` - Real-time balloon data from BLE
-   - `UserLocationEvent` - iPhone location and heading updates
-   - `UIEvent` - User interactions (taps, mode switches, etc.)
-   - `MapStateUpdate` - Atomic map state changes from policies
-   - `ServiceHealthEvent` - Service health monitoring
+1. **ServiceCoordinator** - Single source of truth and service coordinator:
+   - Holds ALL application state via @Published properties
+   - Manages all service instances and their dependencies
+   - Provides direct communication hub between services and UI
+   - Eliminates complex event systems and separate state layers
+   - Services observe and update ServiceCoordinator directly
 
-2. **Services (Pure Event Producers)** - No UI knowledge, no cross-service dependencies:
-   - `BLECommunicationService` - Bluetooth communication, publishes TelemetryEvents
-   - `CurrentLocationService` - Location/heading tracking, publishes UserLocationEvents
-   - `PredictionService` - API calls (called by policies, not autonomous)
-   - `RouteCalculationService` - Route calculations (called by policies)
-   - `BalloonTrackingService` - Telemetry processing and track management
-   - `LandingPointService` - Landing point determination
+2. **Services** - Pure business logic with direct ServiceCoordinator communication:
+   - `BLECommunicationService` - Bluetooth communication with @Published telemetry
+   - `CurrentLocationService` - Location/heading tracking updates
+   - `PredictionService` - API calls for balloon trajectory predictions
+   - `RouteCalculationService` - Route calculations using Apple Maps
+   - `BalloonPositionService` - Processes real-time telemetry data
+   - `BalloonTrackService` - Track history and landing detection
    - `PersistenceService` - UserDefaults-based data storage
 
-3. **Policies (Decision Logic & Side Effects)** - Subscribe to events, emit MapState updates:
-   - `PredictionPolicy` - Intelligent prediction triggering with caching and backoff
-   - `RoutingPolicy` - Route calculation with distance thresholds and caching
-   - `CameraPolicy` - Map camera control with debouncing
-   - All policies use `PolicyScheduler` for consistent timing behavior
+3. **BalloonTrackPredictionService** - Independent prediction coordinator:
+   - Observes telemetry changes in ServiceCoordinator
+   - Handles prediction timing logic (60-second intervals, startup, manual triggers)
+   - Updates ServiceCoordinator directly with prediction results
+   - Manages prediction caching and effective descent rate calculation
 
-4. **MapState (Single Source of Truth)** - Atomic state updates with versioning:
-   - Receives `MapStateUpdate` events from policies
-   - Version conflict resolution prevents UI regressions
-   - Contains annotations, overlays, region, camera updates, and UI state
+4. **UI (Observer Only)** - Pure SwiftUI reactive rendering:
+   - `TrackingMapView` observes ServiceCoordinator @Published properties
+   - `DataPanelView` displays real-time data from ServiceCoordinator
+   - User interactions call ServiceCoordinator methods directly
+   - No business logic in UI - purely reactive presentation layer
 
-5. **UI (Pure Consumer)** - Only observes MapState, publishes UIEvents:
-   - `TrackingMapView` observes MapState for all map rendering
-   - User interactions publish UIEvents to EventBus
-   - No direct service coupling or business logic
+5. **AppServices** - Dependency injection container:
+   - Creates and manages service instances
+   - Provides clean service initialization and lifecycle
+   - Services injected into ServiceCoordinator for coordination
+
+### Key Eliminated Components
+
+**Removed over-engineered layers:**
+- ❌ **EventBus** - Complex event system eliminated for direct communication
+- ❌ **MapState** - Separate state layer eliminated, merged into ServiceCoordinator
+- ❌ **Policy classes** - Business logic moved directly into services
+- ❌ **LandingPointService** - Over-engineered wrapper eliminated, logic moved to ServiceCoordinator
+- ❌ **Complex event flow** - Direct method calls and property observation
 
 ### Data Models
 
@@ -58,44 +68,55 @@ Key data structures defined in `AppModels.swift`:
 - `RouteData` - Apple Maps route information
 - `MapAnnotationItem` - Map annotation with dynamic views
 
+### ServiceCoordinator State Properties
+
+ServiceCoordinator holds ALL application state:
+
+**Map Visual Elements:**
+- `annotations: [MapAnnotationItem]` - All map annotations
+- `balloonTrackPath: MKPolyline?` - Historical balloon track
+- `predictionPath: MKPolyline?` - Predicted flight path
+- `userRoute: MKPolyline?` - Navigation route to landing point
+- `region: MKCoordinateRegion?` - Map camera region
+
+**Core Data State:**
+- `balloonTelemetry: TelemetryData?` - Current balloon data
+- `userLocation: LocationData?` - Current user position
+- `landingPoint: CLLocationCoordinate2D?` - Predicted/actual landing point
+- `burstPoint: CLLocationCoordinate2D?` - Balloon burst point
+
+**UI State:**
+- `transportMode: TransportationMode` - Car/bicycle routing mode
+- `isHeadingMode: Bool` - Map follows user heading
+- `isPredictionPathVisible: Bool` - Show/hide prediction overlay
+- `isBuzzerMuted: Bool` - Device buzzer state
+
 ### Advanced Features
 
-**PolicyScheduler** - Sophisticated timing control for all policies:
-- **Debouncing** - Prevent rapid-fire triggers
-- **Throttling** - Rate limiting with leading/trailing options
-- **Cooldowns** - Minimum time between executions
-- **Exponential Backoff** - Progressive delays for failing operations
-- **Coalescing** - Latest-wins for high-frequency updates
-- **Latest-wins Cancellation** - Cancel pending operations when new ones arrive
+**Caching System** - High-performance caching:
+- **PredictionCache** - TTL/LRU eviction, spatial key quantization
+- **RoutingCache** - User location and destination bucketing
+- **Automatic cache management** - Services handle cache lifecycle
 
-**Caching System** - High-performance caching with comprehensive metrics:
-- **PredictionCache** - TTL/LRU eviction, spatial/temporal key quantization
-- **RoutingCache** - User location and balloon position bucketing
-- **Versioning** - Prevents stale data from overriding fresh results
-- **Metrics** - Hit rates, evictions, access patterns, cache performance
+**BLE Communication** - Robust MySondyGo device integration:
+- **Comprehensive debugging** - Detailed logging at every BLE step
+- **Automatic reconnection** - Handles device disconnections gracefully
+- **Protocol parsing** - Support for telemetry, status, and settings messages
 
-**Mode State Machine** - Three-mode adaptive behavior:
-- **Explore Mode** - Light fetching, routing disabled, 5-minute prediction intervals
-- **Follow Mode** - Active tracking, routing enabled, 2-minute intervals
-- **Final Approach Mode** - High-frequency updates (30s), landing detection
-- **Automatic Transitions** - Based on telemetry, signal strength, altitude, proximity
-- **Hysteresis** - Prevents mode flapping with time-based delays
-
-**Health Monitoring** - Comprehensive service health tracking:
-- **Service Health Events** - Real-time health status propagation
-- **Progressive Backoff** - Automatic retry with exponential delays
-- **Circuit Breaker Pattern** - Prevent cascading failures
-- **Structured Logging** - Decision rationale and execution metrics
+**Direct State Updates** - Simplified data flow:
+- Services update ServiceCoordinator properties directly
+- SwiftUI automatically re-renders on @Published changes
+- No complex event processing or state synchronization
 
 ### Key Design Patterns
 
-1. **Event-driven execution**: No direct service coupling, all communication through EventBus
-2. **Policy-centralized triggers**: All timing logic and thresholds live in policies only
-3. **Atomic state updates**: MapState prevents partial updates and race conditions
-4. **Versioned updates**: Late/stale results are discarded to prevent UI regressions
-5. **Pure services**: Services have no UI knowledge and no internal timers/triggers
-6. **Lazy initialization**: Complex dependency chains resolved on-demand
-7. **MainActor isolation**: UI updates guaranteed on main thread
+1. **Direct communication**: Services call ServiceCoordinator methods directly
+2. **Single source of truth**: ServiceCoordinator holds ALL state
+3. **Property observation**: UI observes ServiceCoordinator @Published properties
+4. **Dependency injection**: AppServices manages service lifecycle
+5. **Reactive UI**: SwiftUI automatically updates on state changes
+6. **Service autonomy**: Each service has clear, focused responsibilities
+7. **MainActor isolation**: All UI updates guaranteed on main thread
 
 ## Development Guidelines
 
@@ -109,35 +130,36 @@ The main app file contains comprehensive AI assistant guidelines:
 - **Clear separation**: Keep views, models, and services properly separated
 - **Minimal comments**: Only for non-obvious logic, TODOs, or FIXMEs
 
-### Event-Driven Development Guidelines
+### Simplified Architecture Development Guidelines
 
-When working with the event-driven architecture:
+**ServiceCoordinator (Central Hub):**
+- ServiceCoordinator MUST hold ALL application state via @Published properties
+- ServiceCoordinator MUST provide direct methods for service updates
+- ServiceCoordinator MUST coordinate between services when needed
+- ServiceCoordinator SHOULD consolidate related state updates atomically
+- ServiceCoordinator MUST NOT contain complex business logic (delegate to services)
 
-**Services (Event Producers):**
-- Services MUST be pure event producers with no UI knowledge
-- Services MUST NOT have timers or autonomous triggers
-- Services MUST publish events to EventBus, not to other services directly
-- Services MUST expose health status through ServiceHealthEvents
-- Services SHOULD use @MainActor isolation for UI-related services
+**Services (Pure Business Logic):**
+- Services MUST have clear, single responsibilities
+- Services MUST update ServiceCoordinator directly via method calls
+- Services MUST expose their state via @Published properties when needed
+- Services MUST NOT communicate with each other directly (use ServiceCoordinator)
+- Services SHOULD use dependency injection rather than singletons
+- Services MUST use @MainActor isolation for UI-related operations
 
-**Policies (Event Consumers & Decision Logic):**
-- Policies MUST subscribe to EventBus events, not service properties
-- Policies MUST contain ALL trigger logic and thresholds
-- Policies MUST use PolicyScheduler for consistent timing behavior
-- Policies MUST emit versioned MapStateUpdate events
-- Policies SHOULD implement caching and backoff strategies
-
-**UI (State Observers):**
-- UI MUST only observe MapState for all rendering decisions
-- UI MUST publish user interactions as UIEvents to EventBus
-- UI MUST NOT have direct service dependencies or business logic
-- UI SHOULD handle MapState updates atomically
+**UI (Pure Reactive Rendering):**
+- UI MUST only observe ServiceCoordinator @Published properties
+- UI MUST call ServiceCoordinator methods directly for user interactions  
+- UI MUST NOT contain any business logic or state management
+- UI SHOULD use SwiftUI's reactive system for all updates
 
 **General Rules:**
-- NO direct service-to-service communication
-- ALL triggers and thresholds live in policies only
-- USE versioning to prevent stale data from corrupting fresh results
-- USE structured logging for decision rationale and debugging
+- NO event systems - use direct method calls and property observation
+- NO separate state layers - ServiceCoordinator holds everything
+- NO over-engineered abstractions - prefer simple, direct patterns
+- USE dependency injection through AppServices
+- MAINTAIN clean service boundaries and single responsibilities
+- PREFER simplicity over complex architectural patterns
 
 ### BLE Communication Protocol
 
@@ -155,36 +177,37 @@ Uses UserDefaults for all persistence:
 - Landing points (keyed by sonde name)
 - Device settings from BLE configuration
 
-### Event Flow Examples
+### Data Flow Examples
 
 **Telemetry Update Flow:**
 1. MySondyGo device → BLECommunicationService receives BLE data
-2. BLECommunicationService publishes TelemetryEvent to EventBus
-3. PredictionPolicy evaluates trigger conditions (movement, time, mode)
-4. PredictionPolicy calls PredictionService with caching/backoff via PolicyScheduler
-5. PredictionPolicy publishes MapStateUpdate with new prediction polyline
-6. MapState applies versioned update atomically
-7. TrackingMapView observes MapState change and re-renders map
+2. BLECommunicationService publishes via @Published latestTelemetry
+3. BalloonTrackPredictionService observes telemetry changes
+4. BalloonTrackPredictionService calls ServiceCoordinator.updatePrediction() directly
+5. ServiceCoordinator updates predictionPath and other state properties
+6. TrackingMapView observes ServiceCoordinator @Published properties and re-renders
 
 **User Interaction Flow:**
 1. User taps balloon annotation in TrackingMapView
-2. TrackingMapView publishes UIEvent.manualPredictionTriggered to EventBus
-3. PredictionPolicy receives event and forces immediate prediction
-4. Same flow as above, bypassing time/movement checks
+2. TrackingMapView calls serviceCoordinator.triggerManualPrediction() directly  
+3. ServiceCoordinator calls balloonTrackPredictionService.triggerManualPrediction()
+4. BalloonTrackPredictionService performs prediction and updates ServiceCoordinator
+5. TrackingMapView observes ServiceCoordinator state changes and updates UI
 
-**Mode Transition Flow:**
-1. ModeStateMachine observes telemetry and location events
-2. ModeStateMachine evaluates transition conditions (altitude, speed, distance)
-3. ModeStateMachine transitions to new mode with hysteresis protection
-4. PredictionPolicy adjusts prediction interval based on new mode
-5. All policies adapt their behavior to new mode configuration
+**Service Coordination Flow:**
+1. BLECommunicationService receives telemetry and updates @Published latestTelemetry
+2. BalloonPositionService observes telemetry and processes position data
+3. BalloonTrackService observes telemetry and manages track history
+4. BalloonTrackService determines landing and calls ServiceCoordinator.setLandingPoint()
+5. ServiceCoordinator updates landingPoint property
+6. UI observes landingPoint change and displays landing annotation
 
-**Health Monitoring Flow:**
-1. Service encounters error (BLE disconnect, API failure, etc.)
-2. Service publishes ServiceHealthEvent with degraded/unhealthy status
-3. Policies observe health events and implement backoff strategies
-4. Progressive retry delays prevent hammering failing services
-5. Service recovery publishes healthy status to resume normal operation
+**Route Calculation Flow:**
+1. ServiceCoordinator detects new landing point and user location
+2. ServiceCoordinator calls RouteCalculationService.calculateRoute() directly
+3. RouteCalculationService returns route data
+4. ServiceCoordinator updates userRoute property
+5. TrackingMapView observes userRoute change and displays navigation overlay
 
 ## Service Functions and Triggers (FSD Reference)
 
@@ -208,74 +231,35 @@ Uses UserDefaults for all persistence:
 
 **Prediction Service**
 - Function: Calculates future balloon flight paths using atmospheric models
-- Triggers: Policy-determined prediction intervals (time-based), significant balloon movement or altitude changes, user manual prediction requests, mode transitions requiring updated predictions
+- Triggers: BalloonTrackPredictionService requests based on timing intervals, significant balloon movement or altitude changes, user manual prediction requests
 
-**Route Calculation Service**
+**Route Calculation Service**  
 - Function: Determines optimal travel paths to predicted landing locations
-- Triggers: New landing point predictions available, user location changes beyond distance thresholds, transportation method changes (car vs bicycle), route optimization requests
-
-**Landing Point Service**
-- Function: Determines probable balloon landing locations
-- Triggers: Updated flight predictions received, balloon altitude approaching landing threshold, final approach mode activation, historical landing data analysis needs
+- Triggers: ServiceCoordinator requests when new landing points are available, user location changes beyond distance thresholds, transportation method changes (car vs bicycle)
 
 **Data Persistence Service**
 - Function: Stores and retrieves application data and user preferences
 - Triggers: Application lifecycle events (startup, shutdown, background), configuration changes requiring permanent storage, track data updates for historical preservation, user settings modifications
 
-### Policy Services (Decision Logic)
+### Prediction Triggers (BalloonTrackPredictionService)
 
-**Prediction Policy**
-- Function: Orchestrates when and how flight predictions are requested
-- Triggers: Time intervals based on current tracking mode, balloon movement distance thresholds, altitude change significance, user interaction requests, caching and performance optimization needs
+**Time-Based Triggers:**
+- 60-second interval predictions during active tracking
+- Startup prediction after first valid telemetry received
+- Manual prediction requests from user balloon taps
 
-**Routing Policy**
-- Function: Manages route calculation timing and optimization
-- Triggers: Distance changes between user and target locations, transportation method modifications, route cache expiration or invalidation, navigation accuracy requirements
-
-**Camera Control Policy**
-- Function: Manages map view positioning and zoom behavior
-- Triggers: Balloon position updates requiring view adjustments, user location changes affecting optimal view, mode transitions requiring different zoom levels, user interaction with map controls
-
-**User Interface Event Policy**
-- Function: Handles user interactions and translates them to system events
-- Triggers: Button presses and touch interactions, settings modifications, mode switches and preference changes, manual override requests
-
-### Mode State Machine
-
-**Explore Mode**
-- Function: Low-intensity monitoring for initial balloon detection
-- Triggers: Application startup, no active balloon tracking, balloon signal lost for extended periods, user manual mode selection
-
-**Follow Mode**
-- Function: Active tracking with regular updates and routing
-- Triggers: Stable balloon signal established, balloon altitude and movement indicating active flight, user proximity to balloon within tracking range, automatic transition from explore mode
-
-**Final Approach Mode**
-- Function: High-frequency updates for landing phase tracking
-- Triggers: Balloon altitude below landing threshold, descent rate indicating imminent landing, user proximity to predicted landing area, critical phase timing requirements
-
-### Event Flow Triggers
-
-**Time-Based Triggers**
-- Prediction intervals (30 seconds to 5 minutes depending on mode)
-- Cache expiration and cleanup cycles
-- Health monitoring and status updates
-- Background data persistence operations
-
-**Threshold-Based Triggers**
-- Movement distance minimums for updates
-- Altitude change significance levels
-- Signal strength and quality thresholds
-- User proximity boundaries for mode transitions
-
-**State-Change Triggers**
+**State-Change Triggers:**
+- Significant movement or altitude changes (threshold-based)
 - Device connection/disconnection events
 - Application lifecycle state changes
-- User permission grants or revocations
-- System resource availability changes
 
-**User-Initiated Triggers**
-- Manual prediction requests
-- Settings and configuration changes
-- Mode override selections
-- Navigation and route requests
+**Adaptive Behavior:**
+- Effective descent rate calculation below 10000m altitude
+- Burst altitude logic (current + 10m for descent, settings value for ascent)
+- Cache-based deduplication to prevent redundant API calls
+
+# important-instruction-reminders
+Do what has been asked; nothing more, nothing less.
+NEVER create files unless they're absolutely necessary for achieving your goal.
+ALWAYS prefer editing an existing file to creating a new one.
+NEVER proactively create documentation files (*.md) or README files. Only create documentation files if explicitly requested by the User.

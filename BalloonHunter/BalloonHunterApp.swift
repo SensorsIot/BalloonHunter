@@ -39,17 +39,25 @@ import OSLog // Import OSLog for appLog function
 @main
 struct BalloonHunterApp: App {
     @Environment(\.scenePhase) var scenePhase
-    @StateObject var domainModel = DomainModel()
-    @StateObject var balloonTracker: BalloonTracker
+    @StateObject var appServices: AppServices
+    @StateObject var serviceCoordinator: ServiceCoordinator
     @StateObject var appSettings = AppSettings()
     @State private var locationReady = false
     @State private var animateLoading = false
     @State private var minimumDisplayTimeElapsed = false
     
     init() {
-        let model = DomainModel()
-        _domainModel = StateObject(wrappedValue: model)
-        _balloonTracker = StateObject(wrappedValue: BalloonTracker(domainModel: model))
+        let services = AppServices()
+        _appServices = StateObject(wrappedValue: services)
+        _serviceCoordinator = StateObject(wrappedValue: ServiceCoordinator(
+            bleCommunicationService: services.bleCommunicationService,
+            currentLocationService: services.currentLocationService,
+            persistenceService: services.persistenceService,
+            predictionCache: services.predictionCache,
+            routingCache: services.routingCache,
+            balloonPositionService: services.balloonPositionService,
+            balloonTrackService: services.balloonTrackService
+        ))
         _appSettings = StateObject(wrappedValue: AppSettings())
     }
 
@@ -66,14 +74,15 @@ struct BalloonHunterApp: App {
             ZStack {
                 // TrackingMapView always present (building in background)
                 TrackingMapView()
-                    .environmentObject(balloonTracker.mapState)
+                    .environmentObject(appServices)
                     .environmentObject(appSettings)
-                    .environmentObject(balloonTracker.userSettings)
-                    .environmentObject(balloonTracker)
-                    .environmentObject(domainModel)
+                    .environmentObject(appServices.userSettings)
+                    .environmentObject(serviceCoordinator)
                     .onAppear {
-                        // Initialize simplified architecture
-                        balloonTracker.initialize()
+                        // Initialize new architecture
+                        appServices.initialize()
+                        // Transitional: still initialize serviceCoordinator
+                        serviceCoordinator.initialize()
                     }
                 
                 // Logo overlay (shown until location ready AND minimum 2 seconds elapsed)
@@ -136,8 +145,9 @@ struct BalloonHunterApp: App {
                 
                 // Invisible startup view running in background
                 StartupView()
-                    .environmentObject(balloonTracker)
-                    .environmentObject(balloonTracker.userSettings)
+                    .environmentObject(appServices)  // New: AppServices access
+                    .environmentObject(serviceCoordinator)  // Transitional
+                    .environmentObject(appServices.userSettings)  // Use AppServices userSettings
                     .opacity(0)
             }
             .onReceive(NotificationCenter.default.publisher(for: .locationReady)) { _ in
@@ -149,7 +159,7 @@ struct BalloonHunterApp: App {
         .onChange(of: scenePhase) { oldScenePhase, newScenePhase in
             if newScenePhase == .inactive {
                 // Save data on app close using the track service
-                balloonTracker.persistenceService.saveOnAppClose(balloonTrackService: balloonTracker.balloonTrackService)
+                serviceCoordinator.persistenceService.saveOnAppClose(balloonTrackService: serviceCoordinator.balloonTrackService)
                 appLog("BalloonHunterApp: App became inactive, saved data.", category: .lifecycle, level: .info)
             }
         }

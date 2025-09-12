@@ -77,12 +77,24 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
     init(persistenceService: PersistenceService) {
         self.persistenceService = persistenceService
         super.init()
+        
+        appLog("🔍 BLE: Service UUID: \(UART_SERVICE_UUID)", category: .ble, level: .info)
+        appLog("🔍 BLE: RX Characteristic UUID: \(UART_RX_CHARACTERISTIC_UUID)", category: .ble, level: .info)
+        appLog("🔍 BLE: TX Characteristic UUID: \(UART_TX_CHARACTERISTIC_UUID)", category: .ble, level: .info)
+        
         appLog("BLE: Initializing CBCentralManager", category: .ble, level: .info)
         centralManager = CBCentralManager(delegate: self, queue: nil)
 
         Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 await self?.updateTelemetryAvailabilityState()
+            }
+        }
+        
+        // Periodic diagnostic timer to help debug BLE issues
+        Timer.scheduledTimer(withTimeInterval: 10.0, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                self?.printBLEDiagnostics()
             }
         }
         
@@ -109,10 +121,7 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
             telemetryAvailabilityState = isAvailable
             
             // Publish telemetry availability event
-            EventBus.shared.publishTelemetryAvailability(TelemetryAvailabilityEvent(
-                isAvailable: isAvailable,
-                reason: reason
-            ))
+            appLog("BLECommunicationService: Telemetry availability - \(isAvailable) (\(reason))", category: .service, level: .info)
             
             if isAvailable {
                 appLog("BLECommunicationService: Telemetry GAINED: \(reason)", category: .ble, level: .info)
@@ -158,30 +167,46 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
     }
 
     func startScanning() {
+        appLog("🔍 BLE: startScanning called - CBManager state: \(centralManager.state.rawValue) (\(bluetoothStateString(centralManager.state)))", category: .ble, level: .info)
+        
         guard centralManager.state == .poweredOn else {
-            appLog("BLE: Cannot start scanning - Bluetooth not powered on (state: \(centralManager.state.rawValue))", category: .ble, level: .error)
+            appLog("🔴 BLE: Cannot start scanning - Bluetooth not powered on (state: \(centralManager.state.rawValue))", category: .ble, level: .error)
             return
         }
         
-        appLog("BLE: Starting scan for peripherals (state: \(centralManager.state.rawValue))", category: .ble, level: .info)
+        appLog("🔍 BLE: Starting scan for peripherals with service UUID: \(UART_SERVICE_UUID)", category: .ble, level: .info)
         centralManager.scanForPeripherals(withServices: [UART_SERVICE_UUID], options: [CBCentralManagerScanOptionAllowDuplicatesKey: false])
         publishHealthEvent(.healthy, message: "BLE scanning started")
+        
+        // Also try scanning for all peripherals to see what's available
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+            appLog("🔍 BLE: Also scanning for ALL peripherals (for debugging)", category: .ble, level: .info)
+            self.centralManager.scanForPeripherals(withServices: nil, options: [CBCentralManagerScanOptionAllowDuplicatesKey: false])
+        }
     }
 
     func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral, advertisementData: [String : Any], rssi RSSI: NSNumber) {
+        let peripheralName = peripheral.name ?? "Unknown"
+        appLog("🔍 BLE: Discovered peripheral: '\(peripheralName)' (RSSI: \(RSSI))", category: .ble, level: .info)
+        appLog("🔍 BLE: Advertisement data: \(advertisementData)", category: .ble, level: .info)
+        
         if let name = peripheral.name, name.contains("MySondy") {
-            appLog("BLE: Found MySondyGo device: \(name)", category: .ble, level: .info)
+            appLog("🟢 BLE: Found MySondyGo device: \(name)", category: .ble, level: .info)
             central.stopScan()
             connectedPeripheral = peripheral
             peripheral.delegate = self
+            appLog("🔍 BLE: Attempting to connect to \(name)", category: .ble, level: .info)
             central.connect(peripheral, options: nil)
             publishHealthEvent(.healthy, message: "MySondyGo device found")
+        } else {
+            appLog("🔍 BLE: Not a MySondy device, continuing scan", category: .ble, level: .info)
         }
     }
 
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
-        appLog("BLE: Successfully connected to \(peripheral.name ?? "Unknown")", category: .ble, level: .info)
+        appLog("🟢 BLE: Successfully connected to \(peripheral.name ?? "Unknown")", category: .ble, level: .info)
         connectionStatus = .connected
+        appLog("🔍 BLE: Discovering services with UUID: \(UART_SERVICE_UUID)", category: .ble, level: .info)
         peripheral.discoverServices([UART_SERVICE_UUID])
         publishHealthEvent(.healthy, message: "BLE connected successfully")
     }
@@ -209,20 +234,30 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
     }
 
     func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
+        appLog("🔍 BLE: didDiscoverServices called", category: .ble, level: .info)
+        
         if let error = error {
             appLog("BLE: Error discovering services: \(error.localizedDescription)", category: .ble, level: .error)
             publishHealthEvent(.unhealthy, message: "Service discovery failed")
             return
         }
 
+        appLog("🔍 BLE: Found \(peripheral.services?.count ?? 0) services", category: .ble, level: .info)
+        
         for service in peripheral.services ?? [] {
+            appLog("🔍 BLE: Service found: \(service.uuid)", category: .ble, level: .info)
             if service.uuid == UART_SERVICE_UUID {
+                appLog("🟢 BLE: Found UART service, discovering characteristics", category: .ble, level: .info)
                 peripheral.discoverCharacteristics([UART_TX_CHARACTERISTIC_UUID, UART_RX_CHARACTERISTIC_UUID], for: service)
+            } else {
+                appLog("🔍 BLE: Service \(service.uuid) does not match UART service \(UART_SERVICE_UUID)", category: .ble, level: .info)
             }
         }
     }
 
     func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
+        appLog("🔍 BLE: didDiscoverCharacteristics called for service \(service.uuid)", category: .ble, level: .info)
+        
         if let error = error {
             appLog("BLE: Error discovering characteristics: \(error.localizedDescription)", category: .ble, level: .error)
             publishHealthEvent(.unhealthy, message: "Characteristic discovery failed")
@@ -230,42 +265,73 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
         }
 
         let characteristics = service.characteristics ?? []
+        appLog("🔍 BLE: Found \(characteristics.count) characteristics", category: .ble, level: .info)
 
         for characteristic in characteristics {
+            appLog("🔍 BLE: Characteristic found: \(characteristic.uuid) with properties: \(characteristic.properties.rawValue)", category: .ble, level: .info)
+            
             switch characteristic.uuid {
             case UART_TX_CHARACTERISTIC_UUID:
+                appLog("🔍 BLE: Found TX characteristic", category: .ble, level: .info)
                 if characteristic.properties.contains(.write) {
                     writeCharacteristic = characteristic
+                    appLog("🟢 BLE: TX characteristic supports write", category: .ble, level: .info)
                 } else if characteristic.properties.contains(.writeWithoutResponse) {
                     writeCharacteristic = characteristic
+                    appLog("🟢 BLE: TX characteristic supports writeWithoutResponse", category: .ble, level: .info)
                 } else {
-                    appLog("TX characteristic does not support writing.", category: .ble, level: .error)
+                    appLog("🔴 BLE: TX characteristic does not support writing (properties: \(characteristic.properties.rawValue))", category: .ble, level: .error)
                 }
 
             case UART_RX_CHARACTERISTIC_UUID:
+                appLog("🔍 BLE: Found RX characteristic", category: .ble, level: .info)
                 if characteristic.properties.contains(.notify) {
+                    appLog("🔍 BLE: Setting up notifications for RX characteristic", category: .ble, level: .info)
                     peripheral.setNotifyValue(true, for: characteristic)
+                    appLog("🟢 BLE: Notifications enabled for RX characteristic", category: .ble, level: .info)
                 } else {
-                    appLog("RX characteristic does not support notifications.", category: .ble, level: .error)
+                    appLog("🔴 BLE: RX characteristic does not support notifications (properties: \(characteristic.properties.rawValue))", category: .ble, level: .error)
                 }
 
             default:
-                appLog("Unknown characteristic: \(characteristic.uuid)", category: .ble, level: .debug)
+                appLog("🔍 BLE: Unknown characteristic: \(characteristic.uuid)", category: .ble, level: .debug)
             }
         }
 
         // Check if we have both characteristics configured
         if writeCharacteristic != nil {
             isReadyForCommands = true
-            appLog("BLE: Ready for commands", category: .ble, level: .info)
+            appLog("🟢 BLE: Ready for commands - TX characteristic configured", category: .ble, level: .info)
             publishHealthEvent(.healthy, message: "BLE ready for commands")
             
             // Don't automatically request settings - wait for first telemetry packet
             // Settings will be requested only when user opens settings panel
+        } else {
+            appLog("🔴 BLE: Not ready for commands - TX characteristic not found", category: .ble, level: .error)
+        }
+    }
+    
+    func peripheral(_ peripheral: CBPeripheral, didUpdateNotificationStateFor characteristic: CBCharacteristic, error: Error?) {
+        appLog("🔍 BLE: didUpdateNotificationStateFor called - characteristic: \(characteristic.uuid)", category: .ble, level: .info)
+        
+        if let error = error {
+            appLog("🔴 BLE: Error updating notification state: \(error.localizedDescription)", category: .ble, level: .error)
+            publishHealthEvent(.degraded, message: "Notification setup failed")
+            return
+        }
+        
+        if characteristic.uuid == UART_RX_CHARACTERISTIC_UUID {
+            if characteristic.isNotifying {
+                appLog("🟢 BLE: Successfully enabled notifications for RX characteristic", category: .ble, level: .info)
+            } else {
+                appLog("🔴 BLE: Failed to enable notifications for RX characteristic", category: .ble, level: .error)
+            }
         }
     }
 
     func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
+        appLog("🔵 BLE: didUpdateValueFor called - peripheral: \(peripheral.name ?? "Unknown"), characteristic: \(characteristic.uuid)", category: .ble, level: .info)
+        
         if let error = error {
             appLog("BLE: Error updating value: \(error.localizedDescription)", category: .ble, level: .error)
             publishHealthEvent(.degraded, message: "BLE update error")
@@ -273,26 +339,37 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
         }
 
         guard let data = characteristic.value else {
+            appLog("🔴 BLE: No data in characteristic.value", category: .ble, level: .error)
             return
         }
+        
+        appLog("🟢 BLE: Received \(data.count) bytes of data", category: .ble, level: .info)
 
         if let string = String(data: data, encoding: .utf8) {
-            // Removed verbose BLE RAW logging per user request
+            appLog("🟢 BLE RAW: '\(string)'", category: .ble, level: .info)
             parseMessage(string)
+        } else {
+            appLog("🔴 BLE: Failed to convert data to UTF-8 string", category: .ble, level: .error)
         }
     }
 
     private func parseMessage(_ message: String) {
+        appLog("🔍 BLE PARSE: Processing message of length \(message.count)", category: .ble, level: .info)
+        
         if !isReadyForCommands {
             isReadyForCommands = true
         }
         
         let components = message.components(separatedBy: "/")
+        appLog("🔍 BLE PARSE: Split into \(components.count) components", category: .ble, level: .info)
+        
         guard components.count > 1 else {
+            appLog("🔴 BLE PARSE: Not enough components (\(components.count)), skipping", category: .ble, level: .error)
             return
         }
         
         let messageType = components[0]
+        appLog("🔍 BLE PARSE: Message type: '\(messageType)'", category: .ble, level: .info)
         
         // Check if this is the first packet and publish telemetry availability event
         if !hasProcessedFirstPacket {
@@ -300,10 +377,7 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
             let isTelemetryAvailable = messageType == "1"
             let reason = isTelemetryAvailable ? "Type 1 telemetry packet received" : "Non-telemetry packet received (Type \(messageType))"
             
-            EventBus.shared.publishTelemetryAvailability(TelemetryAvailabilityEvent(
-                isAvailable: isTelemetryAvailable,
-                reason: reason
-            ))
+            appLog("BLECommunicationService: Telemetry availability - \(isTelemetryAvailable) (\(reason))", category: .service, level: .info)
             
             appLog("BLE: First packet processed - telemetry available: \(isTelemetryAvailable) (\(reason))", category: .ble, level: .info)
             
@@ -334,11 +408,8 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
                     self.lastTelemetryUpdateTime = Date()
                     self.telemetryData.send(telemetry)
                     
-                    // Publish telemetry event to EventBus
-                    let telemetryEvent = TelemetryEvent(telemetryData: telemetry)
-                    DispatchQueue.main.async {
-                        EventBus.shared.publishTelemetry(telemetryEvent)
-                    }
+                    // Telemetry is now available through @Published latestTelemetry property
+                    // Services observe this directly instead of using EventBus
                     
                     // Device settings request is handled by the connection ready callback
                     // No need to request again here
@@ -747,11 +818,8 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
 
     private func publishHealthEvent(_ health: ServiceHealth, message: String) {
         serviceHealth = health
-        EventBus.shared.publishServiceHealth(ServiceHealthEvent(
-            serviceName: "BLECommunicationService",
-            health: health,
-            message: message
-        ))
+        // Service health events removed - health tracked internally only
+        appLog("BLECommunicationService: Health status \(health) - \(message)", category: .service, level: .debug)
     }
 
     private func bluetoothStateString(_ state: CBManagerState) -> String {
@@ -764,6 +832,19 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
         case .poweredOn: return "poweredOn"
         @unknown default: return "unknown"
         }
+    }
+    
+    /// Debug method to print current BLE state
+    func printBLEDiagnostics() {
+        appLog("🔍 BLE DIAGNOSTICS:", category: .ble, level: .info)
+        appLog("🔍 BLE: Central Manager State: \(bluetoothStateString(centralManager.state))", category: .ble, level: .info)
+        appLog("🔍 BLE: Connection Status: \(connectionStatus)", category: .ble, level: .info)
+        appLog("🔍 BLE: Is Ready For Commands: \(isReadyForCommands)", category: .ble, level: .info)
+        appLog("🔍 BLE: Connected Peripheral: \(connectedPeripheral?.name ?? "None")", category: .ble, level: .info)
+        appLog("🔍 BLE: Write Characteristic: \(writeCharacteristic != nil ? "Available" : "None")", category: .ble, level: .info)
+        appLog("🔍 BLE: Has Processed First Packet: \(hasProcessedFirstPacket)", category: .ble, level: .info)
+        appLog("🔍 BLE: Latest Telemetry: \(latestTelemetry != nil ? "Available" : "None")", category: .ble, level: .info)
+        appLog("🔍 BLE: Last Telemetry Update: \(lastTelemetryUpdateTime?.description ?? "Never")", category: .ble, level: .info)
     }
 }
 
@@ -799,13 +880,9 @@ final class CurrentLocationService: NSObject, ObservableObject, CLLocationManage
     }
     
     private func setupBalloonTrackingSubscription() {
-        // Subscribe to telemetry events to track balloon position
-        EventBus.shared.telemetryPublisher
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] event in
-                self?.updateBalloonPosition(event.telemetryData)
-            }
-            .store(in: &cancellables)
+        // CurrentLocationService tracks balloon position for proximity-based GPS configuration
+        // This should observe balloon position updates, not telemetry directly
+        // TODO: Connect to appropriate balloon position updates
     }
     
     private func updateBalloonPosition(_ telemetry: TelemetryData) {
@@ -935,10 +1012,8 @@ final class CurrentLocationService: NSObject, ObservableObject, CLLocationManage
             self.lastLocationTime = now
             self.lastLocationUpdate = now
             
-            // Publish location event
-            EventBus.shared.publishUserLocation(UserLocationEvent(
-                locationData: newLocationData
-            ))
+            // Location is now available through @Published locationData property
+            // Services observe this directly instead of using EventBus
             
             if isFirstUpdate {
                 appLog("Initial user location: lat=\(location.coordinate.latitude), lon=\(location.coordinate.longitude)", category: .service, level: .info)
@@ -954,7 +1029,6 @@ final class CurrentLocationService: NSObject, ObservableObject, CLLocationManage
     
     func locationManager(_ manager: CLLocationManager, didUpdateHeading newHeading: CLHeading) {
         let heading = newHeading.trueHeading >= 0 ? newHeading.trueHeading : newHeading.magneticHeading
-        print("🧭 CurrentLocationService: Heading updated - true: \(newHeading.trueHeading)°, magnetic: \(newHeading.magneticHeading)°, using: \(heading)°")
         lastHeading = heading
     }
     
@@ -964,11 +1038,8 @@ final class CurrentLocationService: NSObject, ObservableObject, CLLocationManage
     }
     
     private func publishHealthEvent(_ health: ServiceHealth, message: String) {
-        EventBus.shared.publishServiceHealth(ServiceHealthEvent(
-            serviceName: "CurrentLocationService",
-            health: health,
-            message: message
-        ))
+        // Service health events removed - health tracked internally only
+        appLog("CurrentLocationService: Health status \(health) - \(message)", category: .service, level: .debug)
     }
 }
 
@@ -989,12 +1060,14 @@ final class BalloonPositionService: ObservableObject {
     @Published var hasReceivedTelemetry: Bool = false
     
     private let bleService: BLECommunicationService
+    private let currentLocationService: CurrentLocationService
     private var currentUserLocation: LocationData?
     private var lastTelemetryTime: Date?
     private var cancellables = Set<AnyCancellable>()
     
-    init(bleService: BLECommunicationService) {
+    init(bleService: BLECommunicationService, currentLocationService: CurrentLocationService) {
         self.bleService = bleService
+        self.currentLocationService = currentLocationService
         setupSubscriptions()
         appLog("BalloonPositionService: Initialized", category: .service, level: .info)
     }
@@ -1008,11 +1081,12 @@ final class BalloonPositionService: ObservableObject {
             }
             .store(in: &cancellables)
         
-        // Subscribe to user location updates for distance calculations
-        EventBus.shared.userLocationPublisher
+        // Subscribe to CurrentLocationService directly for distance calculations
+        currentLocationService.$locationData
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] event in
-                self?.handleUserLocationUpdate(event.locationData)
+            .compactMap { $0 }  // Filter out nil values
+            .sink { [weak self] locationData in
+                self?.handleUserLocationUpdate(locationData)
             }
             .store(in: &cancellables)
         
@@ -1040,13 +1114,8 @@ final class BalloonPositionService: ObservableObject {
         // Update distance to user if location available
         updateDistanceToUser()
         
-        // Publish position update event
-        let positionEvent = BalloonPositionEvent(
-            balloonId: telemetry.sondeName,
-            position: currentPosition!,
-            telemetry: telemetry
-        )
-        EventBus.shared.publishBalloonPosition(positionEvent)
+        // Position and telemetry are now available through @Published properties
+        // Services observe these directly instead of using EventBus
         
         appLog("BalloonPositionService: Updated position for balloon \(telemetry.sondeName) at (\(telemetry.latitude), \(telemetry.longitude), \(telemetry.altitude)m)", category: .service, level: .debug)
     }
@@ -1110,7 +1179,7 @@ final class BalloonTrackService: ObservableObject {
     @Published var landingPosition: CLLocationCoordinate2D?
     
     private let persistenceService: PersistenceService
-    let balloonPositionService: BalloonPositionService  // Internal access for LandingPointService
+    let balloonPositionService: BalloonPositionService
     private var cancellables = Set<AnyCancellable>()
     
     // Track management
@@ -1142,11 +1211,12 @@ final class BalloonTrackService: ObservableObject {
     }
     
     private func setupSubscriptions() {
-        // Subscribe to position service for telemetry updates (proper service layer architecture)
-        EventBus.shared.balloonPositionPublisher
+        // Subscribe to BalloonPositionService telemetry directly
+        balloonPositionService.$currentTelemetry
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] positionEvent in
-                self?.processTelemetryData(positionEvent.telemetry)
+            .compactMap { $0 }  // Filter out nil values
+            .sink { [weak self] telemetryData in
+                self?.processTelemetryData(telemetryData)
             }
             .store(in: &cancellables)
     }
@@ -1273,12 +1343,7 @@ final class BalloonTrackService: ObservableObject {
             
             appLog("BalloonTrackService: Balloon LANDED detected - vSpeed: \(smoothedVerticalSpeed)m/s, hSpeed: \(smoothedHorizontalSpeedKmh)km/h at \(landingPosition!)", category: .service, level: .info)
             
-            // Publish landing event
-            EventBus.shared.publishBalloonLanding(BalloonLandingEvent(
-                landingPosition: landingPosition!,
-                landingTime: Date(),
-                sondeName: telemetryData.sondeName
-            ))
+            // Landing event publishing removed - LandingPointService eliminated
         } else if wasPreviouslyFlying && isBalloonFlying {
             appLog("BalloonTrackService: Balloon FLYING - vSpeed: \(smoothedVerticalSpeed)m/s, hSpeed: \(smoothedHorizontalSpeedKmh)km/h", category: .service, level: .debug)
         }
@@ -1497,11 +1562,8 @@ final class PredictionService: ObservableObject {
     
     private func publishHealthEvent(_ health: ServiceHealth, message: String) {
         serviceHealth = health
-        EventBus.shared.publishServiceHealth(ServiceHealthEvent(
-            serviceName: "PredictionService",
-            health: health,
-            message: message
-        ))
+        // Service health events removed - health tracked internally only
+        appLog("PredictionService: Health status \(health) - \(message)", category: .service, level: .debug)
     }
 }
 
@@ -1527,11 +1589,9 @@ struct SondehubTrajectoryPoint: Codable {
 
 @MainActor
 final class RouteCalculationService: ObservableObject {
-    private let landingPointService: LandingPointService
     private let currentLocationService: CurrentLocationService
     
-    init(landingPointService: LandingPointService, currentLocationService: CurrentLocationService) {
-        self.landingPointService = landingPointService
+    init(currentLocationService: CurrentLocationService) {
         self.currentLocationService = currentLocationService
         appLog("RouteCalculationService init", category: .service, level: .debug)
     }
@@ -1568,279 +1628,6 @@ final class RouteCalculationService: ObservableObject {
     }
 }
 
-// MARK: - Landing Point Service
-
-@MainActor  
-final class LandingPointService: ObservableObject {
-    @Published var validLandingPoint: CLLocationCoordinate2D? = nil
-    
-    private let balloonTrackService: BalloonTrackService
-    private let predictionService: PredictionService
-    private let persistenceService: PersistenceService
-    private let predictionCache: PredictionCache
-    private let mapState: MapState
-    private var cancellables = Set<AnyCancellable>()
-    
-    init(balloonTrackService: BalloonTrackService, predictionService: PredictionService, persistenceService: PersistenceService, predictionCache: PredictionCache, mapState: MapState) {
-        self.balloonTrackService = balloonTrackService
-        self.predictionService = predictionService
-        self.persistenceService = persistenceService
-        self.predictionCache = predictionCache
-        self.mapState = mapState
-        
-        setupSubscriptions()
-        // Don't call updateLandingPointPriorities() during init - let events trigger it naturally
-        appLog("LandingPointService: Initialized, waiting for events to determine landing point priorities", category: .service, level: .info)
-    }
-    
-    private func setupSubscriptions() {
-        // Subscribe to balloon landing events (Priority 1)
-        EventBus.shared.balloonLandingPublisher
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] (landingEvent: BalloonLandingEvent) in
-                self?.handleBalloonLanding(landingEvent)
-            }
-            .store(in: &cancellables)
-            
-        // Subscribe to prediction updates (Priority 2)
-        EventBus.shared.mapStateUpdatePublisher
-            .filter { $0.predictionData != nil }
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] update in
-                if let predictionData = update.predictionData {
-                    self?.handleNewPrediction(predictionData)
-                }
-            }
-            .store(in: &cancellables)
-            
-        // Subscribe to telemetry availability events for startup decision only
-        EventBus.shared.telemetryAvailabilityPublisher
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] availabilityEvent in
-                appLog("LandingPointService: Startup telemetry availability - \(availabilityEvent.isAvailable) (\(availabilityEvent.reason))", category: .service, level: .info)
-                // Simple startup rule: if no telemetry available, clipboard is OK
-                if !availabilityEvent.isAvailable {
-                    self?.updateLandingPointPriorities()
-                }
-                // If telemetry IS available, wait for actual telemetry events to trigger updates
-            }
-            .store(in: &cancellables)
-            
-        // Subscribe to telemetry events to trigger priority evaluation when balloon state changes (after availability is determined)
-        EventBus.shared.telemetryPublisher
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in
-                // When telemetry becomes available, re-evaluate landing point priorities
-                self?.updateLandingPointPriorities()
-            }
-            .store(in: &cancellables)
-    }
-    
-    private func handleBalloonLanding(_ landingEvent: BalloonLandingEvent) {
-        appLog("LandingPointService: Priority 1 - Balloon landing detected at \(landingEvent.landingPosition)", category: .service, level: .info)
-        
-        // Priority 1: Use actual landing position from Track Management Service
-        validLandingPoint = landingEvent.landingPosition
-        
-        // Persist the confirmed landing point
-        persistenceService.saveLandingPoint(sondeName: landingEvent.sondeName, coordinate: landingEvent.landingPosition)
-        appLog("LandingPointService: Priority 1 - Persisted confirmed landing point for \(landingEvent.sondeName)", category: .service, level: .info)
-    }
-    
-    private func handleNewPrediction(_ predictionData: PredictionData) {
-        guard let newLandingPoint = predictionData.landingPoint else {
-            appLog("LandingPointService: Prediction data has no landing point", category: .service, level: .debug)
-            return
-        }
-        
-        // Check if landing point changed significantly (>100m)
-        if let currentLanding = validLandingPoint {
-            let distance = CLLocation(latitude: currentLanding.latitude, longitude: currentLanding.longitude)
-                .distance(from: CLLocation(latitude: newLandingPoint.latitude, longitude: newLandingPoint.longitude))
-            
-            if distance > 100 {
-                appLog("LandingPointService: Prediction landing point changed significantly - updating", category: .service, level: .info)
-                updateLandingPointFromPrediction(newLandingPoint)
-            }
-        } else {
-            updateLandingPointFromPrediction(newLandingPoint)
-        }
-    }
-    
-    private func updateLandingPointFromPrediction(_ landingPoint: CLLocationCoordinate2D) {
-        validLandingPoint = landingPoint
-        
-        // Persist the landing point
-        if let sondeName = balloonTrackService.currentBalloonName {
-            persistenceService.saveLandingPoint(sondeName: sondeName, coordinate: landingPoint)
-            appLog("LandingPointService: Persisted landing point from prediction for sonde: \(sondeName)", category: .service, level: .debug)
-        }
-    }
-    
-    func updateLandingPointPriorities() {
-        // STARTUP SIMPLE RULE: Check if we have ANY telemetry at all
-        let hasTelemetry = balloonTrackService.balloonPositionService.hasReceivedTelemetry
-        
-        // Priority 1: Landed balloon position from Track Management Service
-        if balloonTrackService.isBalloonLanded, let landingPos = balloonTrackService.landingPosition {
-            validLandingPoint = landingPos
-            appLog("LandingPointService: Priority 1 - Balloon landed at \(landingPos)", category: .service, level: .info)
-            
-        } else if hasTelemetry {
-            // Priority 2: We have telemetry - don't use clipboard, wait for prediction or landing detection
-            appLog("LandingPointService: Priority 2 - Telemetry available, waiting for prediction or landing detection", category: .service, level: .debug)
-            // Don't set validLandingPoint - wait for prediction service
-            
-        } else {
-            // Priority 3: No telemetry - check clipboard
-            appLog("LandingPointService: Checking clipboard for landing point...", category: .service, level: .info)
-            if let clipboardLanding = parseClipboardForLandingPoint() {
-                validLandingPoint = clipboardLanding
-                appLog("LandingPointService: Priority 3 - No telemetry available, using clipboard", category: .service, level: .info)
-                
-                // Directly sync to mapState
-                mapState.landingPoint = clipboardLanding
-                appLog("LandingPointService: Synced clipboard landing point to mapState", category: .service, level: .info)
-                
-                // Trigger annotation update via EventBus
-                EventBus.shared.publishUIEvent(.showAllAnnotationsRequested(timestamp: Date()))
-            } else {
-                appLog("LandingPointService: Clipboard check completed, no valid coordinates found", category: .service, level: .info)
-                // Priority 4: Persisted landing point from previous sessions
-                checkPersistedLandingPoint()
-            }
-        }
-    }
-    
-    func setLandingPointFromClipboard() -> Bool {
-        appLog("LandingPointService: Attempting to set landing point from clipboard", category: .service, level: .info)
-        if let clipboardLanding = parseClipboardForLandingPoint() {
-            validLandingPoint = clipboardLanding
-            
-            // Persist the landing point
-            if let sondeName = balloonTrackService.currentBalloonName {
-                persistenceService.saveLandingPoint(sondeName: sondeName, coordinate: clipboardLanding)
-                appLog("LandingPointService: Successfully set and persisted landing point from clipboard", category: .service, level: .info)
-            }
-            return true
-        }
-        return false
-    }
-    
-    private func checkPersistedLandingPoint() {
-        appLog("LandingPointService: Checking Priority 4 - Persisted landing point", category: .service, level: .debug)
-        
-        if let sondeName = balloonTrackService.currentBalloonName {
-            if let persistedLandingPoint = persistenceService.loadLandingPoint(sondeName: sondeName) {
-                validLandingPoint = persistedLandingPoint
-                appLog("LandingPointService: Using Priority 4 - Persisted landing point for \(sondeName): \(persistedLandingPoint)", category: .service, level: .info)
-                return
-            }
-        } else {
-            appLog("LandingPointService: No current balloon name available", category: .service, level: .debug)
-        }
-        
-        appLog("LandingPointService: No valid landing point available - all priorities failed", category: .service, level: .info)
-        validLandingPoint = nil
-    }
-    
-    private func getCachedPrediction(for sondeName: String) -> PredictionData? {
-        // This would need access to the cache key generation logic from PredictionPolicy
-        // For now, return nil - proper implementation would check the cache
-        return nil
-    }
-    
-    private func parseClipboardForLandingPoint() -> CLLocationCoordinate2D? {
-        let clipboardString = UIPasteboard.general.string ?? ""
-        
-        // Always show clipboard content for decision making
-        appLog("LandingPointService: Clipboard content: '\(clipboardString)' (\(clipboardString.count) chars)", category: .service, level: .info)
-        
-        guard !clipboardString.isEmpty else {
-            return nil
-        }
-        
-        // First validate that clipboard content looks like a URL
-        let trimmedString = clipboardString.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmedString.hasPrefix("http://") || trimmedString.hasPrefix("https://") else {
-            appLog("LandingPointService: Clipboard content is not a URL (no http/https prefix)", category: .service, level: .debug)
-            return nil
-        }
-        
-        // Check if it's an OpenStreetMap URL (expected format per FSD)
-        guard trimmedString.contains("openstreetmap.org") else {
-            appLog("LandingPointService: URL is not an OpenStreetMap URL as expected per FSD", category: .service, level: .debug)
-            return nil
-        }
-        
-        appLog("LandingPointService: Attempting to parse clipboard URL: '\(trimmedString)'", category: .service, level: .debug)
-        
-        // Try to parse as URL with coordinates
-        if let url = URL(string: trimmedString),
-           let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
-           let queryItems = components.queryItems {
-            
-            var lat: Double? = nil
-            var lon: Double? = nil
-            
-            for item in queryItems {
-                switch item.name {
-                case "lat", "latitude":
-                    lat = Double(item.value ?? "")
-                case "lon", "lng", "longitude":
-                    lon = Double(item.value ?? "")
-                case "route":
-                    // Parse OpenStreetMap route format: "47.4738%2C7.75929%3B47.4987%2C7.667"
-                    // Second coordinate (after %3B which is ";") is the landing point
-                    if let routeValue = item.value {
-                        let decodedRoute = routeValue.removingPercentEncoding ?? routeValue
-                        let coordinates = decodedRoute.components(separatedBy: ";")
-                        if coordinates.count >= 2 {
-                            let landingCoordParts = coordinates[1].components(separatedBy: ",")
-                            if landingCoordParts.count == 2 {
-                                lat = Double(landingCoordParts[0])
-                                lon = Double(landingCoordParts[1])
-                                appLog("LandingPointService: Parsed OpenStreetMap route format: \(landingCoordParts[0]), \(landingCoordParts[1])", category: .service, level: .debug)
-                            }
-                        }
-                    }
-                default:
-                    break
-                }
-            }
-            
-            if let latitude = lat, let longitude = lon {
-                appLog("LandingPointService: ✅ Parsed coordinates from clipboard URL", category: .service, level: .info)
-                return CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
-            }
-        }
-        
-        appLog("LandingPointService: Invalid URL format", category: .service, level: .debug)
-        appLog("LandingPointService: ❌ Clipboard content could not be parsed as coordinates", category: .service, level: .debug)
-        return nil
-    }
-    
-    // MARK: - Direct Service Integration (No EventBus)
-    
-    /// Direct method for BalloonTracker to notify of new prediction landing point
-    func updateFromPrediction(_ landingPoint: CLLocationCoordinate2D) {
-        appLog("LandingPointService: Received direct prediction update", category: .service, level: .info)
-        
-        // Check if landing point changed significantly (>100m)
-        if let currentLanding = validLandingPoint {
-            let distance = CLLocation(latitude: currentLanding.latitude, longitude: currentLanding.longitude)
-                .distance(from: CLLocation(latitude: landingPoint.latitude, longitude: landingPoint.longitude))
-            
-            if distance > 100 {
-                appLog("LandingPointService: Prediction landing point changed significantly - updating", category: .service, level: .info)
-                updateLandingPointFromPrediction(landingPoint)
-            }
-        } else {
-            // First landing point from prediction
-            updateLandingPointFromPrediction(landingPoint)
-        }
-    }
-}
 
 // MARK: - Persistence Service
 
@@ -2035,7 +1822,7 @@ final class PersistenceService: ObservableObject {
 
 // MARK: - Supporting Types and Extensions
 
-// BalloonPositionEvent is now defined in EventSystem.swift
+// EventBus types removed - using direct telemetry communication
 
 
 // Error types

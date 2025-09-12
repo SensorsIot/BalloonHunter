@@ -2,11 +2,10 @@ import SwiftUI
 import OSLog
 import Combine
 import CoreLocation
-import MapKit
 import CoreBluetooth
 
 struct StartupView: View {
-    @EnvironmentObject var balloonTracker: BalloonTracker
+    @EnvironmentObject var serviceCoordinator: ServiceCoordinator
     @EnvironmentObject var userSettings: UserSettings
     
     @State private var startupProgress: String = "Initializing..."
@@ -35,7 +34,7 @@ struct StartupView: View {
             
             // Step 2: Initialize services first
             startupProgress = "Initializing services..."
-            balloonTracker.initialize()
+            serviceCoordinator.initialize()
             
             // Step 3: Setup location services
             startupProgress = "Getting location..."
@@ -48,7 +47,9 @@ struct StartupView: View {
             // Continue with background tasks
             // Step 4: Attempt to connect to MySondyGo (non-blocking)
             startupProgress = "Connecting to MySondyGo..."
+            appLog("🔍 StartupView: About to call attemptBLEConnection()", category: .general, level: .info)
             await attemptBLEConnection()
+            appLog("🔍 StartupView: attemptBLEConnection() completed", category: .general, level: .info)
             
             // Step 5: Device settings are read automatically by BLE service
             // No need to manually request them here
@@ -58,7 +59,7 @@ struct StartupView: View {
             await loadAllPersistenceData()
             
             // Step 7: Process current balloon data if telemetry available
-            if balloonTracker.bleCommunicationService.latestTelemetry != nil {
+            if serviceCoordinator.bleCommunicationService.latestTelemetry != nil {
                 startupProgress = "Processing balloon data..."
                 await processCurrentBalloonData()
             }
@@ -75,15 +76,15 @@ struct StartupView: View {
             }
             
             // App status summary
-            let bleStatus = balloonTracker.bleCommunicationService.connectionStatus == .connected ? "Connected" : "Disconnected"
-            let telemetryStatus = balloonTracker.mapState.balloonTelemetry != nil ? "Available" : "None"
-            let locationStatus = balloonTracker.mapState.userLocation != nil ? "Available" : "None"
-            let trackCount = balloonTracker.balloonTrackService.currentBalloonTrack.count
-            let currentSonde = balloonTracker.balloonTrackService.currentBalloonName ?? "None"
+            let bleStatus = serviceCoordinator.bleCommunicationService.connectionStatus == .connected ? "Connected" : "Disconnected"
+            let telemetryStatus = serviceCoordinator.balloonTelemetry != nil ? "Available" : "None"
+            let locationStatus = serviceCoordinator.userLocation != nil ? "Available" : "None"
+            let trackCount = serviceCoordinator.balloonTrackService.currentBalloonTrack.count
+            let currentSonde = serviceCoordinator.balloonTrackService.currentBalloonName ?? "None"
             let historicTrack = trackCount > 0 ? "Yes (\(trackCount) pts)" : "None"
             
             // Landing point status
-            let landingPointStatus = if let landingPoint = balloonTracker.mapState.landingPoint {
+            let landingPointStatus = if let landingPoint = serviceCoordinator.landingPoint {
                 "Yes (\(String(format: "%.4f", landingPoint.latitude)), \(String(format: "%.4f", landingPoint.longitude)))"
             } else {
                 "None"
@@ -95,7 +96,7 @@ struct StartupView: View {
             let descentRate = userSettings.descentRate
             
             // Also show landing point from service before startup completes
-            let serviceLandingPoint = if let serviceLP = balloonTracker.landingPointService.validLandingPoint {
+            let serviceLandingPoint = if let serviceLP = serviceCoordinator.landingPoint {
                 "Service: Yes (\(String(format: "%.4f", serviceLP.latitude)), \(String(format: "%.4f", serviceLP.longitude)))"
             } else {
                 "Service: None"
@@ -103,7 +104,7 @@ struct StartupView: View {
             
             appLog("🚀 BalloonHunter Ready - BLE: \(bleStatus), Telemetry: \(telemetryStatus), Location: \(locationStatus)", category: .general, level: .info)
             appLog("📍 Track Status - Sonde: \(currentSonde), Historic track: \(historicTrack)", category: .general, level: .info)
-            appLog("🎯 Landing Points - MapState: \(landingPointStatus), \(serviceLandingPoint)", category: .general, level: .info)
+            appLog("🎯 Landing Points - ServiceCoordinator: \(landingPointStatus), \(serviceLandingPoint)", category: .general, level: .info)
             appLog("⚙️ Prediction Params - Burst: \(burstAlt)m, Ascent: \(ascentRate)m/s, Descent: \(descentRate)m/s", category: .general, level: .info)
             
         } catch {
@@ -118,7 +119,7 @@ struct StartupView: View {
     
     private func loadUserSettings() async {
         // Load persisted prediction parameters into user settings
-        if let persisted = balloonTracker.persistenceService.readPredictionParameters() {
+        if let persisted = serviceCoordinator.persistenceService.readPredictionParameters() {
             await MainActor.run {
                 userSettings.burstAltitude = persisted.burstAltitude
                 userSettings.ascentRate = persisted.ascentRate
@@ -129,20 +130,19 @@ struct StartupView: View {
     }
     
     private func attemptBLEConnection() async {
+        appLog("🔍 StartupView: attemptBLEConnection() started", category: .general, level: .info)
+        
         // Wait for Bluetooth to be powered on first
         let bluetoothTimeout = Date().addingTimeInterval(10) // 10 seconds timeout for Bluetooth
-        while balloonTracker.bleCommunicationService.centralManager.state != .poweredOn && Date() < bluetoothTimeout {
+        while serviceCoordinator.bleCommunicationService.centralManager.state != .poweredOn && Date() < bluetoothTimeout {
             appLog("StartupView: Waiting for Bluetooth to power on", category: .general, level: .info)
             try? await Task.sleep(nanoseconds: 1_000_000_000) // 1 second check interval
         }
         
-        guard balloonTracker.bleCommunicationService.centralManager.state == .poweredOn else {
+        guard serviceCoordinator.bleCommunicationService.centralManager.state == .poweredOn else {
             appLog("StartupView: Bluetooth not powered on, publishing telemetry unavailable and continuing startup", category: .general, level: .error)
             // Publish telemetry unavailable event and continue
-            EventBus.shared.publishTelemetryAvailability(TelemetryAvailabilityEvent(
-                isAvailable: false,
-                reason: "Bluetooth not powered on"
-            ))
+            appLog("StartupView: Telemetry unavailable - Bluetooth not powered on", category: .general, level: .info)
             return
         }
         
@@ -151,8 +151,11 @@ struct StartupView: View {
         // Show "no RadiosondyGo detected" message
         startupProgress = "No RadiosondyGo detected"
         
+        // Print BLE diagnostics before scanning
+        serviceCoordinator.bleCommunicationService.printBLEDiagnostics()
+        
         // Now start BLE scanning
-        balloonTracker.bleCommunicationService.startScanning()
+        serviceCoordinator.bleCommunicationService.startScanning()
         
         // Wait for BLE connection (with 5 second timeout)
         let connectionTimeout = Date().addingTimeInterval(5) // 5 seconds timeout
@@ -163,6 +166,9 @@ struct StartupView: View {
         
         if bleConnectionStatus == .connected {
             appLog("StartupView: BLE connection established", category: .general, level: .info)
+            
+            // Print BLE diagnostics after connection
+            serviceCoordinator.bleCommunicationService.printBLEDiagnostics()
             
             // Update message when device is connected
             startupProgress = "RadiosondyGo connected, waiting for data..."
@@ -178,28 +184,27 @@ struct StartupView: View {
                 appLog("StartupView: First telemetry received", category: .general, level: .info)
             } else {
                 appLog("StartupView: No telemetry received, but continuing startup", category: .general, level: .info)
+                // Print final diagnostics to help debug
+                serviceCoordinator.bleCommunicationService.printBLEDiagnostics()
                 // Note: BLE service will publish telemetry availability event when first packet is processed
             }
         } else {
             appLog("StartupView: No device connected within 5 seconds, publishing telemetry unavailable and continuing startup", category: .general, level: .info)
             // Publish telemetry unavailable event and continue
-            EventBus.shared.publishTelemetryAvailability(TelemetryAvailabilityEvent(
-                isAvailable: false,
-                reason: "No RadiosondyGo device found within 5 seconds"
-            ))
+            appLog("StartupView: Telemetry unavailable - No RadiosondyGo device found within 5 seconds", category: .general, level: .info)
             // BLE service continues trying to connect in background
         }
     }
     
     private func observeBLEConnectionStatus() async {
         await MainActor.run {
-            bleConnectionStatus = balloonTracker.bleCommunicationService.connectionStatus
+            bleConnectionStatus = serviceCoordinator.bleCommunicationService.connectionStatus
         }
     }
     
     private func observeFirstTelemetry() async {
         await MainActor.run {
-            if balloonTracker.bleCommunicationService.latestTelemetry != nil {
+            if serviceCoordinator.bleCommunicationService.latestTelemetry != nil {
                 hasReceivedFirstTelemetry = true
             }
         }
@@ -210,8 +215,8 @@ struct StartupView: View {
     private func setupLocationServices() async throws {
         // Start location services - UI will handle initial region setting
         await MainActor.run {
-            balloonTracker.currentLocationService.requestPermission()
-            balloonTracker.currentLocationService.startUpdating()
+            serviceCoordinator.currentLocationService.requestPermission()
+            serviceCoordinator.currentLocationService.startUpdating()
         }
         
         // Wait for initial location (with timeout)
@@ -220,7 +225,7 @@ struct StartupView: View {
         
         while !hasLocation && Date() < locationTimeout {
             await MainActor.run {
-                if balloonTracker.currentLocationService.locationData != nil {
+                if serviceCoordinator.currentLocationService.locationData != nil {
                     hasLocation = true
                 }
             }
@@ -238,7 +243,7 @@ struct StartupView: View {
     private func loadAllPersistenceData() async {
         // This will be handled by individual services as they initialize
         // Track history will be loaded by BalloonTrackService
-        // Landing points will be loaded by LandingPointService
+        // Landing points will be loaded by ServiceCoordinator
         // Prediction parameters already loaded in loadUserSettings()
         
         try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds for data loading
@@ -246,7 +251,7 @@ struct StartupView: View {
     }
     
     private func processCurrentBalloonData() async {
-        guard let telemetry = balloonTracker.bleCommunicationService.latestTelemetry else {
+        guard let telemetry = serviceCoordinator.bleCommunicationService.latestTelemetry else {
             appLog("StartupView: No telemetry available for balloon data processing", category: .general, level: .debug)
             return
         }
@@ -261,28 +266,25 @@ struct StartupView: View {
         await callBalloonPredictionService(telemetry: telemetry)
         
         // Step 7b: Call routing service if user location is available
-        if let userLocation = balloonTracker.currentLocationService.locationData {
+        if let userLocation = serviceCoordinator.currentLocationService.locationData {
             startupProgress = "Calculating route..."
             await callRoutingService(userLocation: userLocation, balloonPosition: balloonPosition)
         }
         
         // Step 7c: Call landing point service
         startupProgress = "Determining landing point..."
-        await callLandingPointService()
+        await checkLandingPoint()
         
         appLog("StartupView: Balloon data processing completed", category: .general, level: .info)
     }
     
     private func callBalloonPredictionService(telemetry: TelemetryData) async {
-        // Use the event-driven prediction policy to trigger prediction
-        await MainActor.run {
-            // Force prediction by publishing telemetry event
-            EventBus.shared.publishTelemetry(TelemetryEvent(telemetryData: telemetry))
-        }
+        // Telemetry-based prediction triggers removed - services now observe telemetry changes directly
+        // ServiceCoordinator automatically triggers predictions based on telemetry changes
         
         // Wait for prediction to complete (reasonable timeout)
         let timeout = Date().addingTimeInterval(10) // 10 seconds timeout
-        while await balloonTracker.predictionCache.getStats()["totalEntries"] as? Int == 0 && Date() < timeout {
+        while await serviceCoordinator.predictionCache.getStats()["totalEntries"] as? Int == 0 && Date() < timeout {
             try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 second intervals
         }
         
@@ -291,35 +293,30 @@ struct StartupView: View {
     
     private func callRoutingService(userLocation: LocationData, balloonPosition: CLLocationCoordinate2D) async {
         // Use the routing policy to trigger route calculation
-        await MainActor.run {
-            let _ = CLLocationCoordinate2D(latitude: userLocation.latitude, longitude: userLocation.longitude)  // userCoordinate
-            // Trigger routing by publishing location events
-            EventBus.shared.publishUserLocation(UserLocationEvent(
-                locationData: userLocation
-            ))
-        }
+        // User location triggers removed - services now observe location changes directly
+        // Routing policies automatically trigger based on location service updates
         
         // Wait for routing to complete (reasonable timeout)  
         let timeout = Date().addingTimeInterval(10) // 10 seconds timeout
-        while await balloonTracker.routingCache.getStats()["totalEntries"] as? Int == 0 && Date() < timeout {
+        while await serviceCoordinator.routingCache.getStats()["totalEntries"] as? Int == 0 && Date() < timeout {
             try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 second intervals
         }
         
         appLog("StartupView: Routing service completed", category: .general, level: .debug)
     }
     
-    private func callLandingPointService() async {
-        // The landing point service is automatically triggered by the prediction policy
-        // through the event-driven architecture, so we just wait for it to process
+    private func checkLandingPoint() async {
+        // Landing point determination is now handled directly by ServiceCoordinator
+        // Check clipboard parsing and persistence loading
         try? await Task.sleep(nanoseconds: 1_000_000_000) // 1 second for processing
         
-        appLog("StartupView: Landing point service completed", category: .general, level: .debug)
+        appLog("StartupView: Landing point check completed", category: .general, level: .debug)
     }
     
     private func triggerInitialMapDisplay() async {
         // Trigger show all annotations to fit all data on screen
         await MainActor.run {
-            EventBus.shared.publishUIEvent(.showAllAnnotationsRequested(timestamp: Date()))
+            serviceCoordinator.triggerShowAllAnnotations()
         }
         
         // Give the event time to process
