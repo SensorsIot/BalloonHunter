@@ -2,264 +2,200 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Build Commands
+## Project Overview
 
-This is an iOS app is built with Xcode outside of Claude. No separate linting or testing commands are configured.
+BalloonHunter is an iOS weather balloon tracking app built in SwiftUI that connects to MySondyGo devices via Bluetooth Low Energy to track balloon sondes in real-time. The app provides prediction, routing, and mapping functionality for balloon recovery.
+
+## Development Commands
+
+### Build and Run
+- **Build**: `xcodebuild -project BalloonHunter.xcodeproj -scheme BalloonHunter -destination 'platform=iOS Simulator,name=iPhone 15' build`
+- **Run in Simulator**: Open `BalloonHunter.xcodeproj` in Xcode and run on iOS Simulator
+- **Archive for App Store**: `xcodebuild -project BalloonHunter.xcodeproj -scheme BalloonHunter -archivePath build/BalloonHunter.xcarchive archive`
+
+### Testing
+- **Run Tests**: `xcodebuild -project BalloonHunter.xcodeproj -scheme BalloonHunter -destination 'platform=iOS Simulator,name=iPhone 15' test`
+- **Test on Device**: Tests require physical iOS device due to Bluetooth and location dependencies
+
+### Code Validation
+- **Swift Syntax Check**: `swift -syntax-test BalloonHunter/*.swift`
+- **Build Warnings Check**: Monitor build output for warnings and deprecations
 
 ## Architecture Overview
 
-BalloonHunter is a SwiftUI-based iOS app for tracking weather balloons via BLE communication. The app uses a **simplified direct architecture** with ServiceCoordinator as the single source of truth.
+### High-Level Architecture
+The app follows a simplified service-coordinator pattern with direct subscriptions replacing the previous complex EventBus architecture:
 
-### Simplified Direct Architecture
+```
+Services (Data Sources) → ServiceCoordinator (Coordinator) → Views (SwiftUI)
+     ↓                           ↓                         ↓
+BLEService, LocationService → Published Properties → TrackingMapView, DataPanelView
+```
 
-The app follows a clean direct communication pattern:
-**UI** → **ServiceCoordinator** ← **Services**
+### Key Components
 
-**Core Components:**
+#### Core Services (in Services.swift)
+- **BLECommunicationService**: Manages Bluetooth connectivity to MySondyGo devices
+- **CurrentLocationService**: Handles user location tracking with CoreLocation
+- **PredictionService**: Calculates balloon trajectory and landing predictions using Tawhiri API
+- **RouteCalculationService**: Generates navigation routes using Apple Maps
+- **PersistenceService**: Manages Core Data storage for tracks, settings, and landing points
 
-1. **ServiceCoordinator** - Single source of truth and service coordinator:
-   - Holds ALL application state via @Published properties
-   - Manages all service instances and their dependencies
-   - Provides direct communication hub between services and UI
-   - Eliminates complex event systems and separate state layers
-   - Services observe and update ServiceCoordinator directly
+#### Service Coordination
+- **ServiceCoordinator**: Central coordinator that manages service interactions and publishes combined state
+- **AppServices**: Factory class that initializes and provides service instances
+- **UserSettings**: ObservableObject for user preferences (ascent/descent rates, burst altitude)
 
-2. **Services** - Pure business logic with direct ServiceCoordinator communication:
-   - `BLECommunicationService` - Bluetooth communication with @Published telemetry
-   - `CurrentLocationService` - Location/heading tracking updates
-   - `PredictionService` - API calls for balloon trajectory predictions
-   - `RouteCalculationService` - Route calculations using Apple Maps
-   - `BalloonPositionService` - Processes real-time telemetry data
-   - `BalloonTrackService` - Track history and landing detection
-   - `PersistenceService` - UserDefaults-based data storage
+#### Data Models
+- **TelemetryData**: Contains balloon position, altitude, speeds, and sensor data
+- **PredictionData**: Trajectory prediction results including landing point and burst point
+- **RouteData**: Navigation route with coordinates, distance, and travel time
+- **LocationData**: User position data from GPS
 
-3. **BalloonTrackPredictionService** - Independent prediction coordinator:
-   - Observes telemetry changes in ServiceCoordinator
-   - Handles prediction timing logic (60-second intervals, startup, manual triggers)
-   - Updates ServiceCoordinator directly with prediction results
-   - Manages prediction caching and effective descent rate calculation
+#### Caching System
+- **PredictionCache**: Caches prediction results to reduce API calls
+- **RoutingCache**: Caches route calculations for performance
 
-4. **UI (Observer Only)** - Pure SwiftUI reactive rendering:
-   - `TrackingMapView` observes ServiceCoordinator @Published properties
-   - `DataPanelView` displays real-time data from ServiceCoordinator
-   - User interactions call ServiceCoordinator methods directly
-   - No business logic in UI - purely reactive presentation layer
-
-5. **AppServices** - Dependency injection container:
-   - Creates and manages service instances
-   - Provides clean service initialization and lifecycle
-   - Services injected into ServiceCoordinator for coordination
-
-### Key Eliminated Components
-
-**Removed over-engineered layers:**
-- ❌ **EventBus** - Complex event system eliminated for direct communication
-- ❌ **MapState** - Separate state layer eliminated, merged into ServiceCoordinator
-- ❌ **Policy classes** - Business logic moved directly into services
-- ❌ **LandingPointService** - Over-engineered wrapper eliminated, logic moved to ServiceCoordinator
-- ❌ **Complex event flow** - Direct method calls and property observation
-
-### Data Models
-
-Key data structures defined in `AppModels.swift`:
-- `TelemetryData` - Real-time balloon telemetry from BLE
-- `BalloonTrackPoint` - Serializable track point for persistence
-- `PredictionData` - API response data with flight path predictions
-- `RouteData` - Apple Maps route information
-- `MapAnnotationItem` - Map annotation with dynamic views
-
-### ServiceCoordinator State Properties
-
-ServiceCoordinator holds ALL application state:
-
-**Map Visual Elements:**
-- `annotations: [MapAnnotationItem]` - All map annotations
-- `balloonTrackPath: MKPolyline?` - Historical balloon track
-- `predictionPath: MKPolyline?` - Predicted flight path
-- `userRoute: MKPolyline?` - Navigation route to landing point
-- `region: MKCoordinateRegion?` - Map camera region
-
-**Core Data State:**
-- `balloonTelemetry: TelemetryData?` - Current balloon data
-- `userLocation: LocationData?` - Current user position
-- `landingPoint: CLLocationCoordinate2D?` - Predicted/actual landing point
-- `burstPoint: CLLocationCoordinate2D?` - Balloon burst point
-
-**UI State:**
-- `transportMode: TransportationMode` - Car/bicycle routing mode
-- `isHeadingMode: Bool` - Map follows user heading
-- `isPredictionPathVisible: Bool` - Show/hide prediction overlay
-- `isBuzzerMuted: Bool` - Device buzzer state
-
-### Advanced Features
-
-**Caching System** - High-performance caching:
-- **PredictionCache** - TTL/LRU eviction, spatial key quantization
-- **RoutingCache** - User location and destination bucketing
-- **Automatic cache management** - Services handle cache lifecycle
-
-**BLE Communication** - Robust MySondyGo device integration:
-- **Comprehensive debugging** - Detailed logging at every BLE step
-- **Automatic reconnection** - Handles device disconnections gracefully
-- **Protocol parsing** - Support for telemetry, status, and settings messages
-
-**Direct State Updates** - Simplified data flow:
-- Services update ServiceCoordinator properties directly
-- SwiftUI automatically re-renders on @Published changes
-- No complex event processing or state synchronization
-
-### Key Design Patterns
-
-1. **Direct communication**: Services call ServiceCoordinator methods directly
-2. **Single source of truth**: ServiceCoordinator holds ALL state
-3. **Property observation**: UI observes ServiceCoordinator @Published properties
-4. **Dependency injection**: AppServices manages service lifecycle
-5. **Reactive UI**: SwiftUI automatically updates on state changes
-6. **Service autonomy**: Each service has clear, focused responsibilities
-7. **MainActor isolation**: All UI updates guaranteed on main thread
+### Key Views
+- **BalloonHunterApp**: Main app entry point with service initialization
+- **TrackingMapView**: Primary map interface (70% of screen) with balloon tracking
+- **DataPanelView**: Lower panel (30% of screen) showing telemetry data in two tables
+- **SettingsView**: Configuration interface for user parameters
+- **StartupView**: Initial loading screen with logo and service initialization
 
 ## Development Guidelines
 
-### From BalloonHunterApp.swift Comments
+### Service Integration Pattern
+When adding new functionality, follow the established service pattern:
+1. Create service in `Services.swift` with `@Published` properties
+2. Inject service into `ServiceCoordinator` via `AppServices`
+3. Subscribe to service updates in `ServiceCoordinator.setupDirectSubscriptions()`
+4. Update published state in ServiceCoordinator
+5. Bind to state in SwiftUI views via `@EnvironmentObject`
 
-The main app file contains comprehensive AI assistant guidelines:
+### Separation of Concerns Architecture
+**CRITICAL PRINCIPLE**: True separation of concerns with views handling only presentation logic and services managing all business operations.
 
-- **Follow the FSD**: The Functional Specification Document is the source of truth
-- **Modern Swift**: Use async/await, SwiftData, SwiftUI property wrappers
-- **Apple-native tools**: Prefer built-in frameworks over third-party dependencies
-- **Clear separation**: Keep views, models, and services properly separated
-- **Minimal comments**: Only for non-obvious logic, TODOs, or FIXMEs
+#### Data Flow Requirements
+- Services publish data changes via Combine `@Published` properties
+- ServiceCoordinator subscribes to service changes and consolidates state
+- Views observe ServiceCoordinator state only (no direct service access)
+- All UI updates must go through ServiceCoordinator published properties
 
-### Simplified Architecture Development Guidelines
+#### View Layer Responsibilities (Presentation Only)
+- Display UI elements and handle user interactions
+- Observe and react to ServiceCoordinator state changes
+- NO business logic, calculations, data processing, or service calls
+- NO timer management, data validation, or persistence operations
+- Use @EnvironmentObject to access ServiceCoordinator state only
 
-**ServiceCoordinator (Central Hub):**
-- ServiceCoordinator MUST hold ALL application state via @Published properties
-- ServiceCoordinator MUST provide direct methods for service updates
-- ServiceCoordinator MUST coordinate between services when needed
-- ServiceCoordinator SHOULD consolidate related state updates atomically
-- ServiceCoordinator MUST NOT contain complex business logic (delegate to services)
+#### Service Layer Responsibilities (Business Logic)
+- All data processing, calculations, and business rules
+- API calls, BLE communication, and external service interactions
+- Data validation, transformation, and persistence operations
+- Timer management and background task coordination
+- Cross-service communication through ServiceCoordinator
 
-**Services (Pure Business Logic):**
-- Services MUST have clear, single responsibilities
-- Services MUST update ServiceCoordinator directly via method calls
-- Services MUST expose their state via @Published properties when needed
-- Services MUST NOT communicate with each other directly (use ServiceCoordinator)
-- Services SHOULD use dependency injection rather than singletons
-- Services MUST use @MainActor isolation for UI-related operations
+#### ServiceCoordinator Responsibilities (Coordination)
+- Manages all service interactions and lifecycle
+- Controls startup sequence and application flow
+- Consolidates and publishes combined state for views
+- Handles complex operations requiring multiple services
+- Exposes high-level methods to reduce view complexity
 
-**UI (Pure Reactive Rendering):**
-- UI MUST only observe ServiceCoordinator @Published properties
-- UI MUST call ServiceCoordinator methods directly for user interactions  
-- UI MUST NOT contain any business logic or state management
-- UI SHOULD use SwiftUI's reactive system for all updates
+### BLE Communication
+- MySondyGo devices communicate via custom BLE protocol with 4 message types (0-3)
+- Type 1 messages contain telemetry data for balloon tracking
+- BLE service handles scanning, connection, and message parsing automatically
+- Connection timeout is 5 seconds per startup requirements
 
-**General Rules:**
-- NO event systems - use direct method calls and property observation
-- NO separate state layers - ServiceCoordinator holds everything
-- NO over-engineered abstractions - prefer simple, direct patterns
-- USE dependency injection through AppServices
-- MAINTAIN clean service boundaries and single responsibilities
-- PREFER simplicity over complex architectural patterns
+### Startup Sequence (Critical Implementation Detail)
+**IMPORTANT**: ServiceCoordinator controls the entire startup sequence. StartupView only handles presentation.
 
-### BLE Communication Protocol
+The app follows a specific 7-step startup sequence managed by `ServiceCoordinator.performCompleteStartupSequence()`:
+1. **Initial Map**: Location service activation with 25km zoom, show tracking map
+2. **Connect Device**: BLE connection attempt (5-second timeout)
+3. **Publish Telemetry**: Wait for first BLE package and telemetry status
+4. **Read Settings**: Issue settings command to MySondyGo device
+5. **Read Persistence**: Load persistence data (tracks, landing points, parameters)  
+6. **Landing Point Determination**: Determine landing point using 4-priority system
+7. **Final Map Display**: Display initial map with all annotations at maximum zoom
 
-The app communicates with MySondyGo devices using a custom protocol:
-- Message types: 0 (status), 1 (telemetry), 2 (minimal), 3 (settings)
-- All messages are forward-slash delimited strings
-- Device settings are bidirectional (read/write)
-- Telemetry data includes position, speed, signal strength, and device status
+StartupView responsibilities limited to:
+- Display logo and progress updates from ServiceCoordinator state
+- Show TrackingMapView when ServiceCoordinator sets `showTrackingMap = true`
+- Trigger startup sequence via `serviceCoordinator.performCompleteStartupSequence()`
 
-### Data Persistence Strategy
+### Landing Point Priority System
+Landing points are determined using this priority order:
+1. **Priority 1**: Current balloon position if landed (verticalSpeed ≥ -0.5, altitude < 500m)
+2. **Priority 2**: Predicted landing position if balloon in flight
+3. **Priority 3**: Parse coordinates from clipboard (OpenStreetMap URLs)
+4. **Priority 4**: Use persisted landing point from previous session
 
-Uses UserDefaults for all persistence:
-- User prediction settings (burst altitude, ascent/descent rates)
-- Balloon track history (keyed by sonde name)  
-- Landing points (keyed by sonde name)
-- Device settings from BLE configuration
+### Prediction System
+- Uses Tawhiri API (predict.sondehub.org) for trajectory calculations
+- Automatic predictions every 60 seconds when telemetry available
+- Manual predictions triggered via button press
+- Results cached with coordinate/time-based keys
+- Effective descent rate: smoothed calculation below 10000m, user settings above
 
-### Data Flow Examples
+### Map Display Requirements
+- **70% vertical space** for map, **30% for data panel**
+- Button row fixed at bottom of map area
+- Color coding: Green (ascending), Red (descending), Blue (prediction path)
+- Icons: `balloon.fill` for balloon, `figure.run` for user, specific pins for markers
+- Route hidden when balloon within 100m of user position
 
-**Telemetry Update Flow:**
-1. MySondyGo device → BLECommunicationService receives BLE data
-2. BLECommunicationService publishes via @Published latestTelemetry
-3. BalloonTrackPredictionService observes telemetry changes
-4. BalloonTrackPredictionService calls ServiceCoordinator.updatePrediction() directly
-5. ServiceCoordinator updates predictionPath and other state properties
-6. TrackingMapView observes ServiceCoordinator @Published properties and re-renders
+### Testing Considerations
+- Requires iOS device for full BLE functionality
+- Location services need actual GPS or simulator location
+- Prediction API requires network connectivity
+- Use mock data for automated testing scenarios
 
-**User Interaction Flow:**
-1. User taps balloon annotation in TrackingMapView
-2. TrackingMapView calls serviceCoordinator.triggerManualPrediction() directly  
-3. ServiceCoordinator calls balloonTrackPredictionService.triggerManualPrediction()
-4. BalloonTrackPredictionService performs prediction and updates ServiceCoordinator
-5. TrackingMapView observes ServiceCoordinator state changes and updates UI
+## Important Notes
 
-**Service Coordination Flow:**
-1. BLECommunicationService receives telemetry and updates @Published latestTelemetry
-2. BalloonPositionService observes telemetry and processes position data
-3. BalloonTrackService observes telemetry and manages track history
-4. BalloonTrackService determines landing and calls ServiceCoordinator.setLandingPoint()
-5. ServiceCoordinator updates landingPoint property
-6. UI observes landingPoint change and displays landing annotation
+### Current Development Status
+The project has undergone significant architectural simplification, removing complex EventBus and Policy systems in favor of direct service coordination. Recent changes focused on:
+- Simplified ServiceCoordinator with direct subscriptions
+- Consolidated service layer in Services.swift
+- Startup sequence implementation per requirements
+- Data panel refactoring to use ServiceCoordinator state
+- **StartupView refactored**: Moved all business logic to ServiceCoordinator, now handles only presentation
 
-**Route Calculation Flow:**
-1. ServiceCoordinator detects new landing point and user location
-2. ServiceCoordinator calls RouteCalculationService.calculateRoute() directly
-3. RouteCalculationService returns route data
-4. ServiceCoordinator updates userRoute property
-5. TrackingMapView observes userRoute change and displays navigation overlay
+### Known Architecture Improvements Needed
+The codebase currently has some separation of concerns violations that require refactoring:
 
-## Service Functions and Triggers (FSD Reference)
+#### High Priority Refactoring Required
+- **DataPanelView**: Contains business logic for data smoothing, time calculations, and staleness detection
+- **SettingsView**: Contains BLE command generation, device configuration, and data format conversion
+- **TrackingMapView**: Makes direct service calls instead of using ServiceCoordinator methods
 
-### Core Services and Functions
+#### Services to Extract
+Based on analysis, these new services should be created:
+- **DataProcessingService**: Handle all calculations and data transformations
+- **DeviceConfigurationService**: Manage BLE commands and device settings
+- **TelemetryValidationService**: Handle data validation and staleness detection
+- **FlightTimeService**: Manage time-based calculations and predictions
+- **MapStateService**: Handle map positioning and region management
+- **SettingsService**: Unified settings persistence and management
 
-**Bluetooth Communication Service**
-- Function: Manages wireless communication with the balloon tracking device
-- Triggers: Automatic connection attempts when devices are discovered, incoming data packets from the balloon device, user commands sent to configure device settings, connection status changes (connect/disconnect events)
+#### Architectural Patterns to Implement
+- **Command Pattern**: For user actions (mute, prediction, settings changes)
+- **Strategy Pattern**: For different calculation algorithms
+- **Enhanced Observer Pattern**: For improved view-service communication
 
-**Location Tracking Service**
-- Function: Monitors the user's geographic position and movement
-- Triggers: Significant location changes (movement threshold exceeded), heading/compass direction changes, location accuracy improvements, system location permission changes
+### Critical Implementation Details
+- All services must be initialized through AppServices factory
+- ServiceCoordinator manages all cross-service communication
+- Views should never directly access services (use ServiceCoordinator only)
+- Startup sequence timing is critical for proper initialization
+- BLE service runs non-blocking background process
+- Prediction caching essential for performance with API limits
 
-**Balloon Position Service**
-- Function: Processes and interprets real-time balloon telemetry data
-- Triggers: New telemetry data received from bluetooth communication, data validation and filtering requirements, signal strength and quality assessments
-
-**Track Management Service**
-- Function: Maintains historical balloon flight path data
-- Triggers: New position data points received, track persistence requirements (save/load operations), track analysis requests (distance, altitude, speed calculations)
-
-**Prediction Service**
-- Function: Calculates future balloon flight paths using atmospheric models
-- Triggers: BalloonTrackPredictionService requests based on timing intervals, significant balloon movement or altitude changes, user manual prediction requests
-
-**Route Calculation Service**  
-- Function: Determines optimal travel paths to predicted landing locations
-- Triggers: ServiceCoordinator requests when new landing points are available, user location changes beyond distance thresholds, transportation method changes (car vs bicycle)
-
-**Data Persistence Service**
-- Function: Stores and retrieves application data and user preferences
-- Triggers: Application lifecycle events (startup, shutdown, background), configuration changes requiring permanent storage, track data updates for historical preservation, user settings modifications
-
-### Prediction Triggers (BalloonTrackPredictionService)
-
-**Time-Based Triggers:**
-- 60-second interval predictions during active tracking
-- Startup prediction after first valid telemetry received
-- Manual prediction requests from user balloon taps
-
-**State-Change Triggers:**
-- Significant movement or altitude changes (threshold-based)
-- Device connection/disconnection events
-- Application lifecycle state changes
-
-**Adaptive Behavior:**
-- Effective descent rate calculation below 10000m altitude
-- Burst altitude logic (current + 10m for descent, settings value for ascent)
-- Cache-based deduplication to prevent redundant API calls
-
-# important-instruction-reminders
-Do what has been asked; nothing more, nothing less.
-NEVER create files unless they're absolutely necessary for achieving your goal.
-ALWAYS prefer editing an existing file to creating a new one.
-NEVER proactively create documentation files (*.md) or README files. Only create documentation files if explicitly requested by the User.
+### iOS Specific Requirements
+- Minimum iOS 17.6 deployment target
+- Requires Bluetooth and Location permissions
+- App Sandbox enabled for App Store distribution
+- Development team ID: 2REN69VTQ3
+- Bundle ID: HB9BLA.BalloonHunter

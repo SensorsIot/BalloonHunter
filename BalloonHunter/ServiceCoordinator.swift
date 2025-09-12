@@ -2,6 +2,7 @@ import Foundation
 import Combine
 import SwiftUI
 import CoreLocation
+import CoreBluetooth
 import MapKit
 import OSLog
 import UIKit
@@ -38,6 +39,21 @@ final class ServiceCoordinator: ObservableObject {
     @Published var balloonTrackHistory: [TelemetryData] = []
     @Published var connectionStatus: ConnectionStatus = .disconnected
     @Published var smoothedDescentRate: Double? = nil
+    @Published var smoothedVerticalSpeed: Double = 0.0
+    @Published var smoothedHorizontalSpeed: Double = 0.0
+    @Published var isTelemetryStale: Bool = false
+    @Published var remainingFlightTimeString: String = "--:--"
+    @Published var predictedLandingTimeString: String = "--:--"
+    
+    // AFC tracking (moved from SettingsView for proper separation of concerns)
+    @Published var afcFrequencies: [Int] = []
+    
+    // Startup sequence state
+    @Published var startupProgress: String = "Initializing services..."
+    @Published var currentStartupStep: Int = 0
+    @Published var isStartupComplete: Bool = false
+    @Published var showLogo: Bool = true
+    @Published var showTrackingMap: Bool = false
     
     // UI state
     @Published var transportMode: TransportationMode = .car
@@ -50,14 +66,13 @@ final class ServiceCoordinator: ObservableObject {
     // Core services (initialized in init for MapState dependencies)  
     let currentLocationService: CurrentLocationService
     let bleCommunicationService: BLECommunicationService
-    lazy var predictionService = PredictionService()
     
-    // Phase 3: Independent Balloon Track Prediction Service (lazy to avoid retain cycle)
-    lazy var balloonTrackPredictionService: BalloonTrackPredictionService = {
-        return BalloonTrackPredictionService(
-            predictionService: self.predictionService,
+    // Phase 3: Prediction Service (lazy to avoid retain cycle)
+    // Full-featured PredictionService with scheduling capabilities
+    lazy var predictionService: PredictionService = {
+        return PredictionService(
             predictionCache: self.predictionCache,
-            serviceCoordinator: self,  // This creates a retain cycle that needs to be broken
+            serviceCoordinator: self,
             userSettings: self.userSettings,
             balloonTrackService: self.balloonTrackService
         )
@@ -118,6 +133,7 @@ final class ServiceCoordinator: ObservableObject {
     }
     
     func initialize() {
+        appLog("========================================", category: .general, level: .info)
         // Start core services
         _ = currentLocationService
         _ = bleCommunicationService
@@ -129,15 +145,214 @@ final class ServiceCoordinator: ObservableObject {
         _ = routeCalculationService
         
         // Phase 3: Start independent prediction service
-        balloonTrackPredictionService.start()
-        
-        // Per FSD: Load persistence data after service initialization
-        loadPersistenceData()
+        appLog("STARTUP: Starting automatic prediction service with 60-second intervals", category: .general, level: .info)
+        predictionService.startAutomaticPredictions()
         
         // Setup manual prediction listener
         setupManualPredictionListener()
         
-        appLog("ServiceCoordinator: All services initialized with direct calls (no EventBus)", category: .general, level: .info)
+        // Services initialized - startup sequence will be triggered by BalloonHunterApp
+    }
+    
+    // MARK: - Startup Sequence (moved to CoordinatorServices.swift)
+    
+    // setupInitialMapView moved to CoordinatorServices.swift
+    
+    private func startBLEConnectionWithTimeout() async -> (connected: Bool, hasMessage: Bool) {
+        appLog("ServiceCoordinator: BLE communication service connects to device", category: .general, level: .info)
+        
+        // Wait for Bluetooth to be powered on (reasonable timeout)
+        let bluetoothTimeout = Date().addingTimeInterval(5) // 5 seconds for Bluetooth
+        while bleCommunicationService.centralManager.state != .poweredOn && Date() < bluetoothTimeout {
+            appLog("ServiceCoordinator: Waiting for Bluetooth to power on", category: .general, level: .info)
+            try? await Task.sleep(nanoseconds: 1_000_000_000) // 1 second check interval
+        }
+        
+        guard bleCommunicationService.centralManager.state == .poweredOn else {
+            appLog("ServiceCoordinator: Bluetooth not powered on - display message and wait for connection", category: .general, level: .info)
+            return (connected: false, hasMessage: false)
+        }
+        
+        // Start scanning for MySondyGo devices
+        appLog("ServiceCoordinator: Starting BLE scanning for MySondyGo devices", category: .general, level: .info)
+        bleCommunicationService.startScanning()
+        
+        // Try to establish connection with 5-second timeout as per revised FSD
+        let connectionTimeout = Date().addingTimeInterval(5) // 5 seconds to find and connect
+        while !bleCommunicationService.isReadyForCommands && Date() < connectionTimeout {
+            try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 second checks
+        }
+        
+        if bleCommunicationService.isReadyForCommands {
+            appLog("ServiceCoordinator: Connection established, ready for commands", category: .general, level: .info)
+            return (connected: true, hasMessage: true)
+        } else {
+            appLog("ServiceCoordinator: No connection established - display message and wait", category: .general, level: .info)
+            return (connected: false, hasMessage: false)
+        }
+    }
+    
+    private func waitForFirstBLEPackageAndPublishTelemetryStatus() async {
+        appLog("ServiceCoordinator: Waiting for first BLE package to determine telemetry availability", category: .general, level: .info)
+        
+        // Wait up to 3 seconds for the first BLE message of any type
+        let timeout = Date().addingTimeInterval(3)
+        var hasReceivedFirstMessage = false
+        
+        while Date() < timeout && !hasReceivedFirstMessage {
+            // Check if we've received any BLE messages (Type 0, 1, 2, or 3)
+            if bleCommunicationService.latestTelemetry != nil || 
+               !bleCommunicationService.deviceSettings.probeType.isEmpty ||
+               bleCommunicationService.deviceSettings.frequency != 434.0 {
+                hasReceivedFirstMessage = true
+                
+                // Publish telemetry availability status
+                let telemetryAvailable = bleCommunicationService.latestTelemetry != nil
+                appLog("ServiceCoordinator: First BLE package received, telemetry available: \(telemetryAvailable)", category: .general, level: .info)
+                break
+            }
+            
+            try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 second checks
+        }
+        
+        if !hasReceivedFirstMessage {
+            appLog("ServiceCoordinator: No BLE package received within timeout", category: .general, level: .info)
+        }
+    }
+    
+    private func waitForSettingsResponse() async {
+        appLog("ServiceCoordinator: Waiting for settings response from MySondyGo", category: .general, level: .info)
+        
+        let initialDeviceSettings = bleCommunicationService.deviceSettings
+        let timeout = Date().addingTimeInterval(3) // 3 seconds for settings response
+        
+        while Date() < timeout {
+            // Check if device settings have been updated (different from initial)
+            if bleCommunicationService.deviceSettings.frequency != initialDeviceSettings.frequency ||
+               !bleCommunicationService.deviceSettings.probeType.isEmpty {
+                appLog("ServiceCoordinator: Settings response received and stored locally", category: .general, level: .info)
+                return
+            }
+            
+            try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 second checks
+        }
+        
+        appLog("ServiceCoordinator: Settings response timeout - proceeding with defaults", category: .general, level: .info)
+    }
+    
+    // loadAllPersistenceData moved to CoordinatorServices.swift
+    
+    private func waitForBLEPacketsAndDetermineLandingPoint(bleConnected: Bool) async {
+        appLog("ServiceCoordinator: Wait max 5 seconds for BLE packet signals", category: .general, level: .info)
+        
+        if !bleConnected {
+            // No BLE connection - go straight to landing point determination
+            appLog("ServiceCoordinator: No BLE connection - proceeding to landing point determination", category: .general, level: .info)
+            await determineLandingPoint()
+            return
+        }
+        
+        // Use the BLE service's published telemetry availability state
+        let isTelemetryAvailable = bleCommunicationService.telemetryAvailabilityState
+        
+        if isTelemetryAvailable {
+            appLog("ServiceCoordinator: Telemetry available - BLE service confirms Type 1 message received", category: .general, level: .info)
+            
+            // Get telemetry data and process it
+            if let telemetry = bleCommunicationService.latestTelemetry {
+                balloonTelemetry = telemetry
+                // Call balloon prediction service and routing service and wait for completion
+                await processBalloonTelemetry()
+            }
+        } else {
+            appLog("ServiceCoordinator: No telemetry available - BLE service reports no Type 1 messages", category: .general, level: .info)
+        }
+        
+        // Determine valid landing point with FSD priority
+        await determineLandingPoint()
+    }
+    
+    private func processBalloonTelemetry() async {
+        guard balloonTelemetry != nil else { return }
+        
+        appLog("ServiceCoordinator: Processing balloon telemetry - calling prediction and routing services", category: .general, level: .info)
+        
+        // Call balloon prediction service
+        await predictionService.triggerManualPrediction()
+        
+        // Call routing service if we have user location
+        if userLocation != nil {
+            await updateRoute()
+        }
+        
+        // Wait for completion
+        try? await Task.sleep(nanoseconds: 1_000_000_000) // 1 second for services to complete
+    }
+    
+    private func determineLandingPoint() async {
+        appLog("ServiceCoordinator: Determining landing point per FSD priority order", category: .general, level: .info)
+        
+        // Priority 1: If telemetry received and balloon has landed, current position is landing point
+        if let telemetry = balloonTelemetry, telemetry.verticalSpeed >= -0.5 && telemetry.altitude < 500 {
+            let currentPosition = CLLocationCoordinate2D(latitude: telemetry.latitude, longitude: telemetry.longitude)
+            landingPoint = currentPosition
+            appLog("ServiceCoordinator: Landing point set from current balloon position (landed)", category: .general, level: .info)
+            return
+        }
+        
+        // Priority 2: If balloon in flight, wait for and use predicted landing position
+        if balloonTelemetry != nil {
+            appLog("ServiceCoordinator: Telemetry available - waiting for prediction to complete", category: .general, level: .info)
+            
+            // Wait up to 10 seconds for prediction to complete
+            let predictionTimeout = Date().addingTimeInterval(10)
+            while Date() < predictionTimeout {
+                if let predictedLanding = predictionData?.landingPoint {
+                    landingPoint = predictedLanding
+                    appLog("ServiceCoordinator: Landing point set from prediction", category: .general, level: .info)
+                    return
+                }
+                try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 second checks
+            }
+            
+            appLog("ServiceCoordinator: Prediction timeout - falling back to other sources", category: .general, level: .info)
+        }
+        
+        // Priority 3: Parse from clipboard
+        await parseClipboardForLandingPoint()
+        
+        if landingPoint != nil {
+            appLog("ServiceCoordinator: Landing point set from clipboard", category: .general, level: .info)
+            return
+        }
+        
+        // Priority 4: Use persisted landing point (already loaded in loadPersistenceData())
+        if landingPoint != nil {
+            appLog("ServiceCoordinator: Landing point set from persistence", category: .general, level: .info)
+            return
+        }
+        
+        appLog("ServiceCoordinator: No valid landing point available", category: .general, level: .info)
+    }
+    
+    private func parseClipboardForLandingPoint() async {
+        appLog("ServiceCoordinator: Attempting to parse landing point from clipboard", category: .general, level: .info)
+        
+        // Use existing clipboard parsing logic
+        let _ = setLandingPointFromClipboard()
+    }
+    
+    private func setupInitialMapDisplay() async {
+        appLog("ServiceCoordinator: Display initial map with maximum zoom level showing all annotations", category: .general, level: .info)
+        
+        // Per FSD: Initial map uses maximum zoom level to show:
+        // - The user position
+        // - The landing position  
+        // - If a balloon is flying, the route and predicted path
+        triggerShowAllAnnotations()
+        
+        try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds for map to update
+        appLog("ServiceCoordinator: Initial map display complete with all annotations", category: .general, level: .info)
     }
     
     // MARK: - Direct Event Handling (No Policy Layers)
@@ -160,14 +375,92 @@ final class ServiceCoordinator: ObservableObject {
             }
             .store(in: &cancellables)
         
-        appLog("ServiceCoordinator: Setup direct telemetry and location subscriptions", category: .general, level: .debug)
+        // Subscribe to BLE connection status changes
+        bleCommunicationService.$connectionStatus
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] status in
+                self?.connectionStatus = status
+            }
+            .store(in: &cancellables)
+        
+        // Subscribe to balloon track service for smoothed values
+        balloonTrackService.$smoothedVerticalSpeed
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] speed in
+                self?.smoothedVerticalSpeed = speed
+            }
+            .store(in: &cancellables)
+            
+        balloonTrackService.$smoothedHorizontalSpeed
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] speed in
+                self?.smoothedHorizontalSpeed = speed
+            }
+            .store(in: &cancellables)
+            
+        balloonTrackService.$isTelemetryStale
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] stale in
+                self?.isTelemetryStale = stale
+            }
+            .store(in: &cancellables)
+            
+        // Subscribe to prediction service for time strings
+        predictionService.$remainingFlightTimeString
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] time in
+                self?.remainingFlightTimeString = time
+            }
+            .store(in: &cancellables)
+            
+        predictionService.$predictedLandingTimeString
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] time in
+                self?.predictedLandingTimeString = time
+            }
+            .store(in: &cancellables)
+        
+        appLog("ServiceCoordinator: Setup direct telemetry, location, and BLE connection subscriptions", category: .general, level: .debug)
     }
         
-    // MARK: - Transitional UI Methods
+    // MARK: - High-Level UI Methods for View Actions
     
     func triggerShowAllAnnotations() {
         showAllAnnotations = true
         appLog("ServiceCoordinator: Triggered show all annotations", category: .general, level: .debug)
+    }
+    
+    func triggerPrediction() {
+        appLog("ServiceCoordinator: Manual prediction triggered from UI", category: .general, level: .info)
+        
+        guard let telemetry = balloonTelemetry else {
+            appLog("ServiceCoordinator: No telemetry available for prediction", category: .general, level: .error)
+            return
+        }
+        
+        Task {
+            await executePrediction(
+                telemetry: telemetry,
+                measuredDescentRate: smoothedDescentRate,
+                force: true
+            )
+        }
+    }
+    
+    func requestDeviceParameters() {
+        appLog("ServiceCoordinator: Requesting device parameters from BLE device", category: .general, level: .info)
+        bleCommunicationService.getParameters()
+    }
+    
+    func setMuteState(_ muted: Bool) {
+        appLog("ServiceCoordinator: Setting mute state to \(muted)", category: .general, level: .info)
+        isBuzzerMuted = muted
+        bleCommunicationService.setMute(muted)
+    }
+    
+    func saveDataOnAppClose() {
+        appLog("ServiceCoordinator: Saving data on app close", category: .general, level: .info)
+        persistenceService.saveOnAppClose(balloonTrackService: balloonTrackService)
     }
     
     private func setupManualPredictionListener() {
@@ -189,10 +482,16 @@ final class ServiceCoordinator: ObservableObject {
     
     // Direct telemetry handling with prediction timing (replaces PredictionPolicy)
     private func handleBalloonTelemetry(_ telemetry: TelemetryData) {
-        appLog("ServiceCoordinator: Processing telemetry for \(telemetry.sondeName)", category: .general, level: .debug)
+        // Processing telemetry (log removed for reduction)
         
         // Update ServiceCoordinator with telemetry data (direct subscription)
         balloonTelemetry = telemetry
+        
+        // Update AFC frequency tracking (moved from SettingsView for proper separation of concerns)
+        updateAFCTracking(telemetry)
+        
+        // Calculate smoothed descent rate for data panel
+        calculateAutomaticDescentRate(telemetry)
         
         // Update map with balloon position and annotations
         updateMapWithBalloonPosition(telemetry)
@@ -220,7 +519,7 @@ final class ServiceCoordinator: ObservableObject {
         
         guard let locationData = locationData else { return }
         
-        appLog("ServiceCoordinator: Processing user location update", category: .general, level: .debug)
+        // Processing user location update
         
         // Direct ServiceCoordinator update - no parallel state needed
         
@@ -279,7 +578,7 @@ final class ServiceCoordinator: ObservableObject {
         let timeSinceLastPrediction = Date().timeIntervalSince(lastPredictionTime)
         let shouldTrigger = timeSinceLastPrediction > predictionInterval
         
-        appLog("ServiceCoordinator: shouldRequestPrediction - timeSince: \(timeSinceLastPrediction)s, interval: \(predictionInterval)s, result: \(shouldTrigger)", category: .general, level: .debug)
+        // shouldRequestPrediction evaluation (log removed)
         
         return shouldTrigger
     }
@@ -390,15 +689,15 @@ final class ServiceCoordinator: ObservableObject {
         balloonTrackPath = balloonTrackPolyline
         balloonTelemetry = telemetry
         
-        appLog("ServiceCoordinator: Updated map with \(annotations.count) annotations", category: .general, level: .debug)
+        // Updated map annotations (log removed)
     }
     
     // Prediction logic now handled directly in ServiceCoordinator (PredictionPolicy removed)
     
-    private func updateMapWithPrediction(_ prediction: PredictionData) {
+    func updateMapWithPrediction(_ prediction: PredictionData) {
         // Update prediction data for DataPanelView (flight time, landing time)
         predictionData = prediction
-        appLog("ServiceCoordinator: Set predictionData - landingTime: \("N/A")", category: .general, level: .debug)
+        appLog("ServiceCoordinator: Set predictionData - landingTime: \(prediction.landingTime?.description ?? "N/A")", category: .general, level: .debug)
         
         // Update prediction path
         if let path = prediction.path, !path.isEmpty {
@@ -473,7 +772,7 @@ final class ServiceCoordinator: ObservableObject {
         return timeSinceLastUserUpdate > 60.0
     }
     
-    private func updateRoute() async {
+    func updateRoute() async {
         guard let userLocation = userLocation,
               let landingPoint = landingPoint else {
             appLog("ServiceCoordinator: Cannot calculate route - missing user location or landing point", category: .general, level: .debug)
@@ -593,7 +892,7 @@ final class ServiceCoordinator: ObservableObject {
     
     // MARK: - Persistence Data Loading (Per FSD)
     
-    private func loadPersistenceData() {
+    func loadPersistenceData() {
         appLog("ServiceCoordinator: Loading persistence data per FSD requirements", category: .general, level: .info)
         
         // 1. Prediction parameters - already loaded in UserSettings ✅
@@ -610,16 +909,16 @@ final class ServiceCoordinator: ObservableObject {
             // Landing point already set in ServiceCoordinator state above
         }
         
-        // 4. Check clipboard for landing point (moved from LandingPointService)
-        if landingPoint == nil {
-            setLandingPointFromClipboard()
-        }
+        // 4. Clipboard parsing removed from startup - now handled in determineLandingPoint() per FSD priority
+        // Priority 3 (clipboard) only runs if Priority 1 (telemetry) and Priority 2 (prediction) fail
         
         appLog("ServiceCoordinator: Persistence data loading complete", category: .general, level: .info)
         
         // Update annotations with current data (user location + landing point, even without telemetry)
         updateAnnotationsWithoutTelemetry()
     }
+    
+    // determineLandingPointWithPriorities moved to CoordinatorServices.swift
     
     private func updateAnnotationsWithoutTelemetry() {
         var annotations: [MapAnnotationItem] = []
@@ -735,6 +1034,20 @@ final class ServiceCoordinator: ObservableObject {
         
         // Sync smoothed descent rate to DomainModel for better ascent/descent detection
         // Smoothed rate already stored in ServiceCoordinator property above
+    }
+    
+    // MARK: - AFC Frequency Tracking (moved from SettingsView for proper separation of concerns)
+    
+    private func updateAFCTracking(_ telemetry: TelemetryData) {
+        let afc = telemetry.afcFrequency
+        afcFrequencies.append(afc)
+        
+        // Keep only the last 20 values for moving average
+        if afcFrequencies.count > 20 {
+            afcFrequencies.removeFirst()
+        }
+        
+        // AFC tracking updated (log removed)
     }
     
     // MARK: - Landing Point Management (moved from LandingPointService)

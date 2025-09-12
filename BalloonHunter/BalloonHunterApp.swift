@@ -42,9 +42,7 @@ struct BalloonHunterApp: App {
     @StateObject var appServices: AppServices
     @StateObject var serviceCoordinator: ServiceCoordinator
     @StateObject var appSettings = AppSettings()
-    @State private var locationReady = false
     @State private var animateLoading = false
-    @State private var minimumDisplayTimeElapsed = false
     
     init() {
         let services = AppServices()
@@ -61,32 +59,20 @@ struct BalloonHunterApp: App {
         _appSettings = StateObject(wrappedValue: AppSettings())
     }
 
-    private func checkAndHideLogo() {
-        // Logo will hide automatically when both locationReady AND minimumDisplayTimeElapsed are true
-        // due to the condition: if !locationReady || !minimumDisplayTimeElapsed
-        if locationReady && minimumDisplayTimeElapsed {
-            appLog("BalloonHunterApp: Both location and minimum display time ready - hiding logo.", category: .lifecycle, level: .info)
-        }
-    }
+    // Simplified startup - ServiceCoordinator handles all timing
     
     var body: some Scene {
         WindowGroup {
-            ZStack {
-                // TrackingMapView always present (building in background)
-                TrackingMapView()
-                    .environmentObject(appServices)
-                    .environmentObject(appSettings)
-                    .environmentObject(appServices.userSettings)
-                    .environmentObject(serviceCoordinator)
-                    .onAppear {
-                        // Initialize new architecture
-                        appServices.initialize()
-                        // Transitional: still initialize serviceCoordinator
-                        serviceCoordinator.initialize()
-                    }
-                
-                // Logo overlay (shown until location ready AND minimum 2 seconds elapsed)
-                if !locationReady || !minimumDisplayTimeElapsed {
+            Group {
+                if serviceCoordinator.isStartupComplete {
+                    // Main app UI after startup complete
+                    TrackingMapView()
+                        .environmentObject(appServices)
+                        .environmentObject(appSettings)
+                        .environmentObject(appServices.userSettings)
+                        .environmentObject(serviceCoordinator)
+                } else {
+                    // Logo and startup sequence
                     VStack {
                         Spacer()
                         
@@ -114,19 +100,25 @@ struct BalloonHunterApp: App {
                         
                         Spacer()
                         
-                        // Subtle progress indicator
-                        HStack(spacing: 8) {
-                            ForEach(0..<3) { index in
-                                Circle()
-                                    .fill(Color.blue.opacity(0.6))
-                                    .frame(width: 8, height: 8)
-                                    .scaleEffect(animateLoading ? 1.3 : 0.7)
-                                    .animation(
-                                        Animation.easeInOut(duration: 0.6)
-                                            .repeatForever()
-                                            .delay(Double(index) * 0.2),
-                                        value: animateLoading
-                                    )
+                        // Progress indicator
+                        VStack(spacing: 15) {
+                            Text(serviceCoordinator.startupProgress)
+                                .font(.subheadline)
+                                .foregroundColor(.gray)
+                            
+                            HStack(spacing: 8) {
+                                ForEach(0..<3) { index in
+                                    Circle()
+                                        .fill(Color.blue.opacity(0.6))
+                                        .frame(width: 8, height: 8)
+                                        .scaleEffect(animateLoading ? 1.3 : 0.7)
+                                        .animation(
+                                            Animation.easeInOut(duration: 0.6)
+                                                .repeatForever()
+                                                .delay(Double(index) * 0.2),
+                                            value: animateLoading
+                                        )
+                                }
                             }
                         }
                         .padding(.bottom, 50)
@@ -135,31 +127,24 @@ struct BalloonHunterApp: App {
                     .background(Color.black)
                     .onAppear {
                         animateLoading = true
-                        // Start 2-second minimum display timer (non-blocking)
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                            minimumDisplayTimeElapsed = true
-                            checkAndHideLogo()
-                        }
                     }
                 }
-                
-                // Invisible startup view running in background
-                StartupView()
-                    .environmentObject(appServices)  // New: AppServices access
-                    .environmentObject(serviceCoordinator)  // Transitional
-                    .environmentObject(appServices.userSettings)  // Use AppServices userSettings
-                    .opacity(0)
             }
-            .onReceive(NotificationCenter.default.publisher(for: .locationReady)) { _ in
-                appLog("BalloonHunterApp: Received locationReady notification.", category: .lifecycle, level: .info)
-                locationReady = true
-                checkAndHideLogo()
+            .onAppear {
+                // Initialize services
+                appServices.initialize()
+                serviceCoordinator.initialize()
+                
+                // Start the 8-step startup sequence
+                Task {
+                    await serviceCoordinator.performCompleteStartupSequence()
+                }
             }
         }
         .onChange(of: scenePhase) { oldScenePhase, newScenePhase in
             if newScenePhase == .inactive {
                 // Save data on app close using the track service
-                serviceCoordinator.persistenceService.saveOnAppClose(balloonTrackService: serviceCoordinator.balloonTrackService)
+                serviceCoordinator.saveDataOnAppClose()
                 appLog("BalloonHunterApp: App became inactive, saved data.", category: .lifecycle, level: .info)
             }
         }

@@ -19,7 +19,6 @@ final class AppServices: ObservableObject {
     // MARK: - Core Services
     let bleCommunicationService: BLECommunicationService
     let currentLocationService: CurrentLocationService
-    let predictionService: PredictionService
     
     // MARK: - Specialized Services
     let balloonPositionService: BalloonPositionService
@@ -41,7 +40,6 @@ final class AppServices: ObservableObject {
         // 2. Initialize core services with dependencies
         self.bleCommunicationService = BLECommunicationService(persistenceService: persistenceService)
         self.currentLocationService = CurrentLocationService()
-        self.predictionService = PredictionService()
         
         // 3. Initialize specialized services
         self.balloonPositionService = BalloonPositionService(bleService: bleCommunicationService, currentLocationService: currentLocationService)
@@ -70,12 +68,13 @@ final class AppServices: ObservableObject {
     // MARK: - Service Lifecycle
     
     func initialize() {
-        appLog("AppServices: Initializing all services", category: .general, level: .info)
+        let startTime = Date()
         
         // Service initialization handled by ServiceCoordinator
         // AppServices now focuses on service coordination only
         
-        appLog("AppServices: All services initialized", category: .general, level: .info)
+        let initTime = Date().timeIntervalSince(startTime)
+        appLog("AppServices: All services initialized (\(String(format: "%.2f", initTime))s)", category: .general, level: .info)
     }
     
     // MARK: - UI Command Methods

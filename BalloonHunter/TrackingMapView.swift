@@ -20,7 +20,7 @@ struct TrackingMapView: View {
                     HStack(spacing: 12) {
                         // Settings button
                         Button {
-                            serviceCoordinator.bleCommunicationService.getParameters()
+                            serviceCoordinator.requestDeviceParameters()
                             showSettings = true
                         } label: {
                             Image(systemName: "gearshape")
@@ -89,8 +89,7 @@ struct TrackingMapView: View {
 
                         // Buzzer mute toggle
                         Button {
-                            serviceCoordinator.isBuzzerMuted.toggle()
-                            serviceCoordinator.bleCommunicationService.setMute(serviceCoordinator.isBuzzerMuted)
+                            serviceCoordinator.setMuteState(!serviceCoordinator.isBuzzerMuted)
                         } label: {
                             Image(systemName: (serviceCoordinator.balloonTelemetry?.buzmute ?? false) ? "speaker.slash.fill" : "speaker.2.fill")
                                 .imageScale(.large)
@@ -132,7 +131,7 @@ struct TrackingMapView: View {
                             latitude: userLocation.latitude,
                             longitude: userLocation.longitude
                         )
-                        Annotation("You", coordinate: userCoordinate) {
+                        Annotation("", coordinate: userCoordinate) {
                             Image(systemName: "figure.run")
                                 .font(.title2)
                                 .foregroundColor(.blue)
@@ -148,23 +147,13 @@ struct TrackingMapView: View {
                         )
                         let isAscending = balloonTelemetry.verticalSpeed >= 0
                         
-                        Annotation("Balloon", coordinate: balloonCoordinate) {
-                            VStack {
-                                Image(systemName: "balloon.fill")
-                                    .font(.system(size: 30))
-                                    .foregroundColor(isAscending ? .green : .red)
-                                Text("\(Int(balloonTelemetry.altitude))m")
-                                    .font(.caption)
-                                    .fontWeight(.bold)
-                                    .foregroundColor(.white)
-                                    .background(Capsule().fill(.black.opacity(0.7)))
-                                    .padding(.horizontal, 4)
-                            }
+                        Annotation("", coordinate: balloonCoordinate) {
+                            Image(systemName: "balloon.fill")
+                                .font(.system(size: 30))
+                                .foregroundColor(isAscending ? .green : .red)
                             .onTapGesture {
                                 // Manual prediction trigger
-                                Task {
-                                    await serviceCoordinator.balloonTrackPredictionService.triggerManualPrediction()
-                                }
+                                serviceCoordinator.triggerPrediction()
                             }
                         }
                     }
@@ -182,7 +171,7 @@ struct TrackingMapView: View {
                     
                     // 7. Landing Point: Always visible if available
                     if let landingPoint = serviceCoordinator.landingPoint {
-                        Annotation("Landing", coordinate: landingPoint) {
+                        Annotation("", coordinate: landingPoint) {
                             Image(systemName: "target")
                                 .font(.title2)
                                 .foregroundColor(.purple)
@@ -211,6 +200,20 @@ struct TrackingMapView: View {
                         updateMapPositionForHeadingMode(true)
                     }
                 }
+                .onReceive(serviceCoordinator.$showAllAnnotations) { shouldShowAll in
+                    if shouldShowAll {
+                        position = .automatic
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                            serviceCoordinator.showAllAnnotations = false // Reset the trigger
+                        }
+                    }
+                }
+                .onReceive(serviceCoordinator.$transportMode) { _ in
+                    // Transport mode changed - trigger route recalculation
+                    Task {
+                        await serviceCoordinator.updateRoute()
+                    }
+                }
 
                 // Data panel
                 DataPanelView()
@@ -236,10 +239,24 @@ struct TrackingMapView: View {
     
     private func updateMapPositionForHeadingMode(_ isHeadingMode: Bool) {
         if isHeadingMode {
-            guard let _ = serviceCoordinator.userLocation else {
+            guard let userLocation = serviceCoordinator.userLocation else {
                 return
             }
-            position = .userLocation(followsHeading: true, fallback: .automatic)
+            let userCoordinate = CLLocationCoordinate2D(
+                latitude: userLocation.latitude,
+                longitude: userLocation.longitude
+            )
+            // Use consistent zoom level with heading mode
+            let region = MKCoordinateRegion(
+                center: userCoordinate,
+                span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01) // ~1km zoom
+            )
+            position = .region(region)
+            
+            // Enable heading tracking after setting position
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                position = .userLocation(followsHeading: true, fallback: .region(region))
+            }
         } else {
             position = .automatic
         }

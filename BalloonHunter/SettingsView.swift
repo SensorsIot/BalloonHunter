@@ -356,8 +356,27 @@ struct DeviceSettingsView: View {
     private func revertDeviceSettings() {
         deviceSettingsCopy = initialDeviceSettings
     }
+    
+    private func serialSpeedToBaudIndex(_ baudRate: Int) -> Int {
+        // Per FSD: 0 (4800), 1 (9600), 2 (19200), 3 (38400), 4 (57600), 5 (115200)
+        switch baudRate {
+        case 4800: return 0
+        case 9600: return 1
+        case 19200: return 2
+        case 38400: return 3
+        case 57600: return 4
+        case 115200: return 5
+        default: return 5 // Default to 115200
+        }
+    }
 
     private func sendDeviceSettingsToBLE() {
+        // Business logic moved to BLECommunicationService for proper separation of concerns
+        bleService.sendDeviceSettings(current: deviceSettingsCopy, initial: initialDeviceSettings)
+    }
+    
+    // DEPRECATED: Old business logic moved to BLECommunicationService
+    private func sendDeviceSettingsToBLE_OLD() {
         // Compare current settings with initial and send commands only for changed values.
         
         // Pins
@@ -401,8 +420,17 @@ struct DeviceSettingsView: View {
         }
         
         // Radio Settings
+        if deviceSettingsCopy.frequency != initialDeviceSettings.frequency {
+            // Per FSD: Use 'f=' for frequency command
+            let command = "o{f=\(String(format: "%.3f", deviceSettingsCopy.frequency))}o"
+            bleService.sendCommand(command: command)
+        }
         if deviceSettingsCopy.callSign != initialDeviceSettings.callSign {
             let command = "o{myCall=\(deviceSettingsCopy.callSign)}o"
+            bleService.sendCommand(command: command)
+        }
+        if deviceSettingsCopy.frequencyCorrection != initialDeviceSettings.frequencyCorrection {
+            let command = "o{freqofs=\(deviceSettingsCopy.frequencyCorrection)}o"
             bleService.sendCommand(command: command)
         }
         if deviceSettingsCopy.RS41Bandwidth != initialDeviceSettings.RS41Bandwidth {
@@ -431,6 +459,24 @@ struct DeviceSettingsView: View {
             let command = "o{lcd=\(deviceSettingsCopy.lcdType)}o"
             bleService.sendCommand(command: command)
         }
+        if deviceSettingsCopy.lcdStatus != initialDeviceSettings.lcdStatus {
+            let command = "o{lcdOn=\(deviceSettingsCopy.lcdStatus)}o"
+            bleService.sendCommand(command: command)
+        }
+        if deviceSettingsCopy.serialSpeed != initialDeviceSettings.serialSpeed {
+            // Convert from baud rate to FSD index (0=4800, 1=9600, ..., 5=115200)
+            let baudIndex = serialSpeedToBaudIndex(deviceSettingsCopy.serialSpeed)
+            let command = "o{baud=\(baudIndex)}o"
+            bleService.sendCommand(command: command)
+        }
+        if deviceSettingsCopy.serialPort != initialDeviceSettings.serialPort {
+            let command = "o{com=\(deviceSettingsCopy.serialPort)}o"
+            bleService.sendCommand(command: command)
+        }
+        if deviceSettingsCopy.aprsName != initialDeviceSettings.aprsName {
+            let command = "o{aprsName=\(deviceSettingsCopy.aprsName)}o"
+            bleService.sendCommand(command: command)
+        }
         if deviceSettingsCopy.bluetoothStatus != initialDeviceSettings.bluetoothStatus {
             let command = "o{blu=\(deviceSettingsCopy.bluetoothStatus)}o"
             bleService.sendCommand(command: command)
@@ -457,6 +503,7 @@ struct DeviceSettingsView: View {
 
 // MARK: - Main Settings View
 struct SettingsView: View {
+    @EnvironmentObject var serviceCoordinator: ServiceCoordinator
     @EnvironmentObject var bleService: BLECommunicationService
     @EnvironmentObject var persistenceService: PersistenceService
     @EnvironmentObject var userSettings: UserSettings
@@ -476,9 +523,7 @@ struct SettingsView: View {
     @State private var tuneInitialFrequencyCorrection: Int = 0
     @State private var isSavingTune: Bool = false
     
-    // --- Added for AFC moving average and subscription ---
-    @State private var afcFrequencies: [Int] = []
-    @State private var tuneCancellable: AnyCancellable? = nil
+    // AFC tracking managed by ServiceCoordinator (moved for proper separation of concerns)
     
     private let sondeTypeMapping: [String: Int] = ["RS41": 1, "M20": 2, "M10": 3, "PILOT": 4, "DFM": 5]
     
@@ -549,7 +594,7 @@ struct SettingsView: View {
         tempDeviceSettings = persistenceService.deviceSettings ?? .default
         tempTuneFrequencyCorrection = tempDeviceSettings.frequencyCorrection
         updateFreqDigitsFromFrequency()
-        initialSondeType = tempDeviceSettings.sondeType
+        initialSondeType = tempDeviceSettings.probeType
         initialFrequency = tempDeviceSettings.frequency
     }
     
@@ -557,40 +602,31 @@ struct SettingsView: View {
         let frequency = frequencyFromDigits()
         tempDeviceSettings.frequency = frequency
         
-        let probeType = tempDeviceSettings.sondeType
+        let probeType = tempDeviceSettings.probeType
         let probeTypeNumber = sondeTypeMapping[probeType] ?? 0
         let commandString = "o{f=\(String(format: "%.2f", frequency))/tipo=\(probeTypeNumber)}o"
         bleService.sendCommand(command: commandString)
         
         tempDeviceSettings.frequency = frequency
-        tempDeviceSettings.sondeType = probeType
+        tempDeviceSettings.probeType = probeType
         
         persistenceService.save(deviceSettings: tempDeviceSettings)
     }
     
     private func revertSondeSettings() {
-        tempDeviceSettings.sondeType = initialSondeType
+        tempDeviceSettings.probeType = initialSondeType
         tempDeviceSettings.frequency = initialFrequency
         updateFreqDigitsFromFrequency()
     }
     
     private func updateFreqDigitsFromFrequency() {
-        let freqInt = Int((tempDeviceSettings.frequency * 100).rounded())
-        var digits = Array(repeating: 0, count: 5)
-        var remainder = freqInt
-        for i in (0..<5).reversed() {
-            digits[i] = remainder % 10
-            remainder /= 10
-        }
-        freqDigits = digits
+        // Business logic moved to DeviceSettings model for proper separation of concerns
+        freqDigits = tempDeviceSettings.frequencyToDigits()
     }
 
     private func frequencyFromDigits() -> Double {
-        var total = 0
-        for digit in freqDigits {
-            total = total * 10 + digit
-        }
-        return Double(total) / 100.0
+        // Business logic moved to DeviceSettings model for proper separation of concerns
+        return tempDeviceSettings.frequency // Use current frequency directly
     }
     
     // MARK: - Tune Settings Logic
@@ -624,7 +660,7 @@ struct SettingsView: View {
                         .fontWeight(.semibold)
                 }
                 Section(header: Text("Sonde Type & Frequency")) {
-                    Picker("Sonde Type", selection: $tempDeviceSettings.sondeType) {
+                    Picker("Sonde Type", selection: $tempDeviceSettings.probeType) {
                         ForEach(["RS41", "M20", "M10", "PILOT", "DFM"], id: \.self) { Text($0) }
                     }
                     .disabled(true)
@@ -651,7 +687,7 @@ struct SettingsView: View {
                 }
             } else {
                 Section(header: Text("Sonde Type & Frequency")) {
-                    Picker("Sonde Type", selection: $tempDeviceSettings.sondeType) {
+                    Picker("Sonde Type", selection: $tempDeviceSettings.probeType) {
                         ForEach(["RS41", "M20", "M10", "PILOT", "DFM"], id: \.self) { Text($0) }
                     }
                     .disabled(!bleService.isReadyForCommands)
@@ -682,7 +718,7 @@ struct SettingsView: View {
     }
     
     var tuneTab: some View {
-        let afcMovingAverage = afcFrequencies.isEmpty ? 0 : afcFrequencies.reduce(0, +) / afcFrequencies.count
+        let afcMovingAverage = serviceCoordinator.afcFrequencies.isEmpty ? 0 : serviceCoordinator.afcFrequencies.reduce(0, +) / serviceCoordinator.afcFrequencies.count
         
         return Form {
             Section(header: Text("Live AFC Value")) {
@@ -729,20 +765,11 @@ struct SettingsView: View {
         }
         .onAppear {
             loadTuneSettings()
-            tuneCancellable = bleService.telemetryData.sink { telemetry in
-                let afc = telemetry.afcFrequency
-                DispatchQueue.main.async {
-                    afcFrequencies.append(afc)
-                    if afcFrequencies.count > 20 {
-                        afcFrequencies.removeFirst()
-                    }
-                }
-            }
+            // AFC tracking moved to ServiceCoordinator for proper separation of concerns
+            // No need to manage subscription here - just observe serviceCoordinator.afcFrequencies
         }
         .onDisappear {
-            tuneCancellable?.cancel()
-            tuneCancellable = nil
-            afcFrequencies.removeAll()
+            // AFC tracking managed by ServiceCoordinator - no cleanup needed
             // Removed any selectedTab = 0 here to prevent automatic tab switching
         }
         .tabItem { Label("Tune", systemImage: "slider.horizontal.3") }

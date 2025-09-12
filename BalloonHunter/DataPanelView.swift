@@ -6,56 +6,59 @@ import Foundation
 struct DataPanelView: View {
     // MapState eliminated - ServiceCoordinator now holds all state
     @EnvironmentObject var serviceCoordinator: ServiceCoordinator
-    @State private var refreshTrigger = false
 
     var body: some View {
         GeometryReader { geometry in // Added GeometryReader
-            let columnWidth: CGFloat = 120
+            let _ : CGFloat = 120 // Column width no longer needed after FSD restructure
 
             VStack {
-                // Table 1: 4 columns
+                // Table 1: 4 columns - Connected, Sonde Type, Sonde Name, Altitude
                 Grid(alignment: .leading, horizontalSpacing: 5, verticalSpacing: 10) {
                     GridRow {
-                        Image(systemName: serviceCoordinator.bleCommunicationService.connectionStatus == ConnectionStatus.connected ? "antenna.radiowaves.left.and.right" : "antenna.radiowaves.left.and.right.slash")
-                            .foregroundColor(serviceCoordinator.bleCommunicationService.connectionStatus == ConnectionStatus.connected ? .green : .red)
+                        Image(systemName: serviceCoordinator.connectionStatus == ConnectionStatus.connected ? "antenna.radiowaves.left.and.right" : "antenna.radiowaves.left.and.right.slash")
+                            .foregroundColor(serviceCoordinator.connectionStatus == ConnectionStatus.connected ? .green : .red)
                             .font(.system(size: 32))
                         Text(serviceCoordinator.balloonTelemetry?.probeType ?? "N/A")
-                            .frame(maxWidth: .infinity)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                         Text(serviceCoordinator.balloonTelemetry?.sondeName ?? "N/A")
-                            .frame(width: columnWidth, alignment: .leading)
-                        Text("Alt: \(serviceCoordinator.balloonTelemetry != nil ? "\(Int(serviceCoordinator.balloonTelemetry!.altitude)) m" : "N/A")")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Text("\(serviceCoordinator.balloonTelemetry != nil ? "\(Int(serviceCoordinator.balloonTelemetry!.altitude)) m" : "N/A")")
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
                 .padding(.horizontal)
 
-                // Table 2: 3 columns x 3 rows
+                // Table 2: 3 columns - Per FSD specification
                 Grid(alignment: .leading, horizontalSpacing: 5, verticalSpacing: 10) {
+                    // Row 1: Frequency, Signal Strength, Battery %
                     GridRow {
-                        Text("\(String(format: "%.3f", serviceCoordinator.balloonTelemetry?.frequency ?? 0.0)) MHz")
+                        Text("\(String(format: "%.1f", serviceCoordinator.balloonTelemetry?.frequency ?? 0.0)) MHz")
                             .frame(maxWidth: .infinity, alignment: .leading)
-                        Text("RSSI: \(signalStrengthString) dB")
-                            .frame(width: columnWidth, alignment: .leading)
-                        Text("Batt: \(batteryPercentageString)%")
+                        Text("\(signalStrengthString) dBm")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Text("\(batteryPercentageString) Batt%")
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
+                    // Row 2: Vertical speed, Horizontal speed, Distance
                     GridRow {
-                        Text("V: \(String(format: "%.1f", smoothedVerticalSpeed)) m/s")
+                        Text("V: \(String(format: "%.1f", serviceCoordinator.smoothedVerticalSpeed)) m/s")
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .foregroundColor((serviceCoordinator.balloonTelemetry?.verticalSpeed ?? 0) >= 0 ? .green : .red)
-                        Text("H: \(String(format: "%.1f", smoothedHorizontalSpeed)) km/h")
+                        Text("H: \(String(format: "%.1f", serviceCoordinator.smoothedHorizontalSpeed * 3.6)) km/h")
                             .frame(maxWidth: .infinity, alignment: .leading)
                         Text("Dist: \(distanceString) km")
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
+                    // Row 3: Flight time, Landing time, Arrival time
                     GridRow {
-                        Text("Flight: \(flightTime)")
+                        Text("Flight: \(remainingFlightTimeString)")
                             .frame(maxWidth: .infinity, alignment: .leading)
-                        Text("Landing: \(landingTimeString)")
+                        Text("Landing: \(predictedLandingTimeString)")
                             .frame(maxWidth: .infinity, alignment: .leading)
                         Text("Arrival: \(arrivalTimeString)")
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
+                    // Row 4: Adjusted descent rate (per FSD requirement)
                     GridRow {
                         Text("Descent: \(adjustedDescentRateString) m/s")
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -73,71 +76,31 @@ struct DataPanelView: View {
             .background(Color(.systemGray6))
             .overlay(
                 RoundedRectangle(cornerRadius: 8)
-                    .stroke(isTelemetryStale ? Color.red : Color.clear, lineWidth: 3)
+                    .stroke(serviceCoordinator.isTelemetryStale ? Color.red : Color.clear, lineWidth: 3)
             )
         } // End GeometryReader
-        .onAppear {
-            // Start timer to check for stale telemetry every second
-            Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
-                refreshTrigger.toggle() // Force view refresh to check telemetry staleness
-            }
-        }
     }
 
-    // MARK: - Helpers for smoothing
+    // MARK: - Computed properties for presentation only (business logic moved to services)
     
-    private var smoothedHorizontalSpeed: Double {
-        let last5 = Array(serviceCoordinator.balloonTrackHistory.suffix(5))
-        let speeds = last5.compactMap { $0.horizontalSpeed }
-        guard !speeds.isEmpty else { return serviceCoordinator.balloonTelemetry?.horizontalSpeed ?? 0 }
-        return speeds.reduce(0, +) / Double(speeds.count)
+    private var remainingFlightTimeString: String {
+        return serviceCoordinator.remainingFlightTimeString
     }
-    private var smoothedVerticalSpeed: Double {
-        let last5 = Array(serviceCoordinator.balloonTrackHistory.suffix(5))
-        let speeds = last5.compactMap { $0.verticalSpeed }
-        guard !speeds.isEmpty else { return serviceCoordinator.balloonTelemetry?.verticalSpeed ?? 0 }
-        return speeds.reduce(0, +) / Double(speeds.count)
-    }
-
-    // MARK: - Computed properties and helpers
     
-    private var isTelemetryStale: Bool {
-        // Use refreshTrigger to ensure view updates when staleness changes
-        _ = refreshTrigger
-        
-        guard let telemetry = serviceCoordinator.balloonTelemetry else {
-            // No telemetry available at all
-            return true
-        }
-        
-        let timeSinceUpdate = Date().timeIntervalSince(telemetry.timestamp)
-        let isStale = timeSinceUpdate > 3.0 // 3 seconds threshold
-        
-        if isStale {
-            appLog("DataPanelView: Telemetry is stale - last update \(String(format: "%.1f", timeSinceUpdate))s ago", category: .ui, level: .debug)
-        }
-        
-        return isStale
+    private var predictedLandingTimeString: String {
+        return serviceCoordinator.predictedLandingTimeString
     }
-
-    var flightTime: String {
-        return "--:--"  // Flight time calculation not implemented yet
-    }
-
-    private var landingTimeString: String {
-        return "--:--"  // Landing time calculation not implemented yet
-    }
-
+    
     private var arrivalTimeString: String {
-        if let travelTime = serviceCoordinator.routeData?.expectedTravelTime {
-            let arrivalTime = Date().addingTimeInterval(travelTime)
+        if let routeData = serviceCoordinator.routeData {
+            let arrivalTime = Date().addingTimeInterval(routeData.expectedTravelTime)
             let formatter = DateFormatter()
-            formatter.timeStyle = .short
+            formatter.dateFormat = "HH:mm"
             return formatter.string(from: arrivalTime)
         }
         return "--:--"
     }
-
+    
     private var distanceString: String {
         if let distanceMeters = serviceCoordinator.routeData?.distance {
             let distanceKm = distanceMeters / 1000.0
@@ -148,9 +111,8 @@ struct DataPanelView: View {
 
     private var signalStrengthString: String {
         if let val = serviceCoordinator.balloonTelemetry?.signalStrength {
-            // Assuming signalStrength is a value that can be directly used as a percentage (0-100)
-            // If it's RSSI in dB, this conversion is incorrect and needs clarification from the user.
-            return String(format: "%.0f", val)
+            // signalStrength is RSSI in dBm (typically negative values like -50 to -120)
+            return String(format: "%d", val)
         }
         return "0"
     }
@@ -176,9 +138,9 @@ struct DataPanelView: View {
         return "N/A"
     }
     
+    // Per FSD: Adjusted descent rate calculated by balloon track service
     private var adjustedDescentRateString: String {
         if let adjustedRate = serviceCoordinator.smoothedDescentRate {
-            appLog("DataPanelView: Displaying smoothed descent rate: \(String(format: "%.2f", adjustedRate)) m/s", category: .ui, level: .debug)
             return String(format: "%.1f", abs(adjustedRate))
         }
         return "--"
