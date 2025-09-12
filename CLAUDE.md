@@ -162,21 +162,19 @@ The project has undergone significant architectural simplification, removing com
 - Startup sequence implementation per requirements
 - Data panel refactoring to use ServiceCoordinator state
 - **StartupView refactored**: Moved all business logic to ServiceCoordinator, now handles only presentation
+- **DataPanelView refactored**: Removed all calculations and business logic, now only displays pre-formatted strings
+- **Descent rate logic**: Always calculated and displayed regardless of altitude; API usage decision moved to PredictionService
 
 ### Known Architecture Improvements Needed
 The codebase currently has some separation of concerns violations that require refactoring:
 
 #### High Priority Refactoring Required
-- **DataPanelView**: Contains business logic for data smoothing, time calculations, and staleness detection
 - **SettingsView**: Contains BLE command generation, device configuration, and data format conversion
 - **TrackingMapView**: Makes direct service calls instead of using ServiceCoordinator methods
 
 #### Services to Extract
 Based on analysis, these new services should be created:
-- **DataProcessingService**: Handle all calculations and data transformations
 - **DeviceConfigurationService**: Manage BLE commands and device settings
-- **TelemetryValidationService**: Handle data validation and staleness detection
-- **FlightTimeService**: Manage time-based calculations and predictions
 - **MapStateService**: Handle map positioning and region management
 - **SettingsService**: Unified settings persistence and management
 

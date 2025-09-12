@@ -614,8 +614,6 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
     private func parseType1Message(_ components: [String]) -> TelemetryData? {
         guard components.count >= 20 else { return nil }
         
-        let _ = components[1]  // probeType
-        let _ = Double(components[2]) ?? 0.0  // frequency
         let sondeName = components[3]
         let latitude = Double(components[4]) ?? 0.0
         let longitude = Double(components[5]) ?? 0.0
@@ -623,16 +621,7 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
         let horizontalSpeed = Double(components[7]) ?? 0.0
         let verticalSpeed = Double(components[8]) ?? 0.0
         let rssi = Double(components[9]) ?? 0.0
-        let _ = Int(components[10]) ?? 0  // batPercentage
-        let _ = Int(components[11]) ?? 0  // afcFrequency
-        let _ = components[12] == "1"  // burstKillerEnabled
-        let _ = Int(components[13]) ?? 0  // burstKillerTime
-        let _ = Int(components[14]) ?? 0  // batVoltage
         let buzmute = components[15] == "1"
-        let _ = Int(components[16]) ?? 0  // reserved1
-        let _ = Int(components[17]) ?? 0  // reserved2
-        let _ = Int(components[18]) ?? 0  // reserved3
-        let _ = components[19]  // softwareVersion
         
         return TelemetryData(
             sondeName: sondeName,

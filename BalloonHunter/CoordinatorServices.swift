@@ -231,13 +231,10 @@ extension ServiceCoordinator {
             appLog("Priority 1: SUCCESS - Landing point set from current balloon position (landed)", category: .general, level: .info)
             return
         }
-        // Priority 1: Not applicable
         
         // Priority 2: If balloon in flight, use predicted landing position
-        // Priority 2: Check prediction
         if balloonTelemetry != nil {
-            // Priority 2: Telemetry available
-            
+                
             // Trigger prediction if needed and wait for result
             await predictionService.triggerManualPrediction()
             
@@ -259,15 +256,12 @@ extension ServiceCoordinator {
         }
         
         // Priority 3: Read and parse from clipboard
-        // Priority 3: Check clipboard
         if setLandingPointFromClipboard() {
             appLog("Priority 3: SUCCESS - Landing point set from clipboard", category: .general, level: .info)
             return
         }
-        // Priority 3: No clipboard coordinates
         
         // Priority 4: Use persisted landing point
-        // Priority 4: Check persistence
         if let telemetry = balloonTelemetry, !telemetry.sondeName.isEmpty {
             if let persistedLanding = persistenceService.loadLandingPoint(sondeName: telemetry.sondeName) {
                 await MainActor.run {

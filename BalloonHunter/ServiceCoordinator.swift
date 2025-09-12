@@ -9,7 +9,6 @@ import UIKit
 
 // MARK: - Service Coordinator
 // Transitional class for service coordination and dependency injection
-// EventBus architecture has been fully removed
 
 @MainActor
 final class ServiceCoordinator: ObservableObject {
@@ -44,6 +43,9 @@ final class ServiceCoordinator: ObservableObject {
     @Published var isTelemetryStale: Bool = false
     @Published var remainingFlightTimeString: String = "--:--"
     @Published var predictedLandingTimeString: String = "--:--"
+    @Published var frequencyString: String = "0.000"
+    @Published var deviceSettings: DeviceSettings?
+    @Published var displayDescentRateString: String = "--"
     
     // AFC tracking (moved from SettingsView for proper separation of concerns)
     @Published var afcFrequencies: [Int] = []
@@ -83,8 +85,7 @@ final class ServiceCoordinator: ObservableObject {
     let balloonTrackService: BalloonTrackService
     lazy var routeCalculationService = RouteCalculationService(currentLocationService: self.currentLocationService)
     
-    // REMOVE: Policy architecture, ModeStateMachine, PolicyScheduler
-    // REPLACE: With direct service communication
+        // REPLACE: With direct service communication
     
     private var cancellables = Set<AnyCancellable>()
     private var lastRouteCalculationTime = Date.distantPast
@@ -137,7 +138,6 @@ final class ServiceCoordinator: ObservableObject {
         // Start core services
         _ = currentLocationService
         _ = bleCommunicationService
-        // NOTE: predictionService is lazy-initialized only when first telemetry is received
         
         // Initialize the services that create events and manage data
         _ = balloonPositionService
@@ -148,8 +148,6 @@ final class ServiceCoordinator: ObservableObject {
         appLog("STARTUP: Starting automatic prediction service with 60-second intervals", category: .general, level: .info)
         predictionService.startAutomaticPredictions()
         
-        // Setup manual prediction listener
-        setupManualPredictionListener()
         
         // Services initialized - startup sequence will be triggered by BalloonHunterApp
     }
@@ -355,7 +353,7 @@ final class ServiceCoordinator: ObservableObject {
         appLog("ServiceCoordinator: Initial map display complete with all annotations", category: .general, level: .info)
     }
     
-    // MARK: - Direct Event Handling (No Policy Layers)
+    // MARK: - Direct Event Handling
     
     private func setupDirectSubscriptions() {
         // Subscribe to telemetry changes for automatic predictions  
@@ -419,6 +417,15 @@ final class ServiceCoordinator: ObservableObject {
                 self?.predictedLandingTimeString = time
             }
             .store(in: &cancellables)
+            
+        // Subscribe to device settings changes
+        bleCommunicationService.$deviceSettings
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] settings in
+                self?.deviceSettings = settings
+                self?.frequencyString = String(format: "%.3f", settings.frequency)
+            }
+            .store(in: &cancellables)
         
         appLog("ServiceCoordinator: Setup direct telemetry, location, and BLE connection subscriptions", category: .general, level: .debug)
     }
@@ -463,24 +470,12 @@ final class ServiceCoordinator: ObservableObject {
         persistenceService.saveOnAppClose(balloonTrackService: balloonTrackService)
     }
     
-    private func setupManualPredictionListener() {
-        NotificationCenter.default.addObserver(
-            forName: .manualPredictionRequested,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                self?.handleManualPredictionRequest()
-            }
-        }
-    }
     
     // MARK: - Simplified Event Handlers
     
-    // REMOVED: handleBalloonPosition method - EventBus eliminated
     
     
-    // Direct telemetry handling with prediction timing (replaces PredictionPolicy)
+    // Direct telemetry handling with prediction timing
     private func handleBalloonTelemetry(_ telemetry: TelemetryData) {
         // Processing telemetry (log removed for reduction)
         
@@ -548,25 +543,8 @@ final class ServiceCoordinator: ObservableObject {
         }
     }
     
-    // Manual prediction request handler
-    func handleManualPredictionRequest() {
-        appLog("ServiceCoordinator: Manual prediction requested", category: .general, level: .info)
-        
-        guard let telemetry = balloonTelemetry else {
-            appLog("ServiceCoordinator: No telemetry available for manual prediction", category: .general, level: .error)
-            return
-        }
-        
-        Task {
-            await executePrediction(
-                telemetry: telemetry,
-                measuredDescentRate: smoothedDescentRate,
-                force: true
-            )
-        }
-    }
     
-    // MARK: - Prediction Logic (moved from PredictionPolicy)
+    // MARK: - Prediction Logic
     
     private func shouldRequestPrediction(_ telemetry: TelemetryData, force: Bool = false) -> Bool {
         if force {
@@ -692,7 +670,7 @@ final class ServiceCoordinator: ObservableObject {
         // Updated map annotations (log removed)
     }
     
-    // Prediction logic now handled directly in ServiceCoordinator (PredictionPolicy removed)
+    // Prediction logic now handled directly in ServiceCoordinator
     
     func updateMapWithPrediction(_ prediction: PredictionData) {
         // Update prediction data for DataPanelView (flight time, landing time)
@@ -979,10 +957,6 @@ final class ServiceCoordinator: ObservableObject {
     // MARK: - Automatic Descent Rate Calculation
     
     private func calculateAutomaticDescentRate(_ telemetry: TelemetryData) {
-        // Only calculate if below 10000m altitude
-        guard telemetry.altitude < 10000 else {
-            return
-        }
         
         // Get current balloon track from the track service
         let trackPoints = balloonTrackService.getAllTrackPoints()
@@ -1002,6 +976,8 @@ final class ServiceCoordinator: ObservableObject {
         
         guard let historical = historicalPoint else {
             appLog("ServiceCoordinator: No historical point found from 60 seconds ago - need more track history", category: .general, level: .debug)
+            // Insufficient track data - show settings value, but still display it
+            displayDescentRateString = String(format: "%.1f", userSettings.descentRate)
             return
         }
         
@@ -1031,6 +1007,7 @@ final class ServiceCoordinator: ObservableObject {
         
         // Update map state with smoothed descent rate
         smoothedDescentRate = smoothedRate
+        displayDescentRateString = String(format: "%.1f", abs(smoothedRate))
         
         // Sync smoothed descent rate to DomainModel for better ascent/descent detection
         // Smoothed rate already stored in ServiceCoordinator property above

@@ -161,6 +161,9 @@ struct PredictionData {
     let burstPoint: CLLocationCoordinate2D?
     let landingPoint: CLLocationCoordinate2D?
     let landingTime: Date?
+    let launchPoint: CLLocationCoordinate2D?
+    let burstAltitude: Double?
+    let flightTime: TimeInterval?
     let metadata: [String: Any]?
 }
 
@@ -200,7 +203,6 @@ class AppSettings: ObservableObject {
 
 enum LogCategory: String {
     case event = "Event"
-    case policy = "Policy"
     case service = "Service"
     case ui = "UI"
     case cache = "Cache"
@@ -208,7 +210,6 @@ enum LogCategory: String {
     case persistence = "Persistence"
     case ble = "BLE"
     case lifecycle = "Lifecycle"
-    case modeState = "ModeState"
 }
 
 nonisolated func appLog(_ message: String, category: LogCategory, level: OSLogType = .default) {
@@ -264,7 +265,6 @@ final class CurrentLocationService: NSObject, ObservableObject, CLLocationManage
     private func setupBalloonTrackingSubscription() {
         // CurrentLocationService tracks balloon position for proximity-based GPS configuration
         // This should observe balloon position updates, not telemetry directly
-        // TODO: Connect to appropriate balloon position updates
     }
     
     private func updateBalloonPosition(_ telemetry: TelemetryData) {
@@ -399,8 +399,7 @@ final class CurrentLocationService: NSObject, ObservableObject, CLLocationManage
             self.lastLocationUpdate = now
             
             // Location is now available through @Published locationData property
-            // Services observe this directly instead of using EventBus
-            
+                
             if isFirstUpdate {
                 appLog("Initial user location: lat=\(location.coordinate.latitude), lon=\(location.coordinate.longitude)", category: .service, level: .info)
             } else if distanceDiff > 50 { // Only log significant movement (>50m)
@@ -424,7 +423,6 @@ final class CurrentLocationService: NSObject, ObservableObject, CLLocationManage
     }
     
     private func publishHealthEvent(_ health: ServiceHealth, message: String) {
-        // Service health events removed - health tracked internally only
         // Health status logging removed for log reduction
     }
 }
@@ -501,7 +499,6 @@ final class BalloonPositionService: ObservableObject {
         updateDistanceToUser()
         
         // Position and telemetry are now available through @Published properties
-        // Services observe these directly instead of using EventBus
         
         appLog("BalloonPositionService: Updated position for balloon \(telemetry.sondeName) at (\(telemetry.latitude), \(telemetry.longitude), \(telemetry.altitude)m)", category: .service, level: .debug)
     }
@@ -746,7 +743,6 @@ final class BalloonTrackService: ObservableObject {
             
             appLog("BalloonTrackService: Balloon LANDED detected - vSpeed: \(smoothedVerticalSpeed)m/s, hSpeed: \(smoothedHorizontalSpeedKmh)km/h at \(landingPosition!)", category: .service, level: .info)
             
-            // Landing event publishing removed - LandingPointService eliminated
         } else if wasPreviouslyFlying && isBalloonFlying {
             appLog("BalloonTrackService: Balloon FLYING - vSpeed: \(smoothedVerticalSpeed)m/s, hSpeed: \(smoothedHorizontalSpeedKmh)km/h", category: .service, level: .debug)
         }
@@ -834,7 +830,7 @@ final class PredictionService: ObservableObject {
     private let userSettings: UserSettings
     private let balloonTrackService: BalloonTrackService?
     
-    // MARK: - Published State (merged from both services)
+    // MARK: - Published State
     @Published var isRunning: Bool = false
     @Published var hasValidPrediction: Bool = false
     @Published var lastPredictionTime: Date?
@@ -969,7 +965,7 @@ final class PredictionService: ObservableObject {
         await performPrediction(telemetry: telemetry, trigger: "timer")
     }
     
-    // MARK: - Core Prediction Logic (merged from BalloonTrackPredictionService)
+    // MARK: - Core Prediction Logic
     
     private func performPrediction(telemetry: TelemetryData, trigger: String) async {
         predictionStatus = "Processing prediction..."
@@ -1178,6 +1174,9 @@ final class PredictionService: ObservableObject {
         var burstPoint: CLLocationCoordinate2D?
         var landingPoint: CLLocationCoordinate2D?
         var landingTime: Date?
+        var launchPoint: CLLocationCoordinate2D?
+        var burstAltitude: Double?
+        var flightTime: TimeInterval?
         
         // ISO8601 date formatter for parsing Sondehub datetime strings with fractional seconds
         let dateFormatter = ISO8601DateFormatter()
@@ -1190,9 +1189,15 @@ final class PredictionService: ObservableObject {
                 trajectoryCoordinates.append(coordinate)
             }
             
-            // Burst point is the last point of ascent
+            // Launch point is the first point of ascent
+            if let firstAscentPoint = ascent.trajectory.first {
+                launchPoint = CLLocationCoordinate2D(latitude: firstAscentPoint.latitude, longitude: firstAscentPoint.longitude)
+            }
+            
+            // Burst point and altitude are from the last point of ascent
             if let lastAscentPoint = ascent.trajectory.last {
                 burstPoint = CLLocationCoordinate2D(latitude: lastAscentPoint.latitude, longitude: lastAscentPoint.longitude)
+                burstAltitude = lastAscentPoint.altitude
             }
         }
         
@@ -1218,6 +1223,18 @@ final class PredictionService: ObservableObject {
                 } else {
                     appLog("PredictionService: Successfully parsed landing time: \(landingTime!) from '\(lastDescentPoint.datetime)'", category: .service, level: .info)
                 }
+                
+                // Calculate flight time from NOW to predicted landing time (per FSD)
+                if let landingTime = landingTime {
+                    flightTime = landingTime.timeIntervalSinceNow
+                    if flightTime! > 0 {
+                        let hours = Int(flightTime!) / 3600
+                        let minutes = Int(flightTime!) % 3600 / 60
+                        appLog("PredictionService: Calculated flight time from NOW to landing: \(flightTime!) seconds (\(hours)h \(minutes)m)", category: .service, level: .info)
+                    } else {
+                        appLog("PredictionService: Predicted landing time is in the past", category: .service, level: .info)
+                    }
+                }
             } else {
                 appLog("PredictionService: No trajectory points found in descent stage", category: .service, level: .error)
             }
@@ -1230,6 +1247,9 @@ final class PredictionService: ObservableObject {
             burstPoint: burstPoint,
             landingPoint: landingPoint,
             landingTime: landingTime,
+            launchPoint: launchPoint,
+            burstAltitude: burstAltitude,
+            flightTime: flightTime,
             metadata: nil
         )
     }
@@ -1292,7 +1312,6 @@ final class PredictionService: ObservableObject {
     
     private func publishHealthEvent(_ health: ServiceHealth, message: String) {
         serviceHealth = health
-        // Service health events removed - health tracked internally only
         // Health status logging removed for log reduction
     }
 }
@@ -1563,7 +1582,6 @@ final class PersistenceService: ObservableObject {
 
 // MARK: - Supporting Types and Extensions
 
-// EventBus types removed - using direct telemetry communication
 
 
 // Error types
@@ -1604,274 +1622,4 @@ enum RouteError: Error, LocalizedError {
     }
 }
 
-// MARK: - BalloonTrackPredictionService
 
-@MainActor
-// REMOVED: BalloonTrackPredictionService merged into PredictionService above
-/* final class BalloonTrackPredictionService: ObservableObject {
-    
-    // MARK: - Dependencies (Direct References)
-    
-    private let predictionService: PredictionService
-    private let predictionCache: PredictionCache
-    private weak var serviceCoordinator: ServiceCoordinator?  // Weak reference to avoid retain cycle
-    private let userSettings: UserSettings
-    private let balloonTrackService: BalloonTrackService
-    
-    // MARK: - Service State
-    
-    @Published var isRunning: Bool = false
-    @Published var hasValidPrediction: Bool = false
-    @Published var lastPredictionTime: Date?
-    @Published var predictionStatus: String = "Not started"
-    
-    private var internalTimer: Timer?
-    private let predictionInterval: TimeInterval = 60.0  // 60 seconds per requirements
-    private var lastProcessedTelemetry: TelemetryData?
-    
-    // MARK: - Initialization
-    
-    init(
-        predictionService: PredictionService,
-        predictionCache: PredictionCache,
-        serviceCoordinator: ServiceCoordinator,
-        userSettings: UserSettings,
-        balloonTrackService: BalloonTrackService
-    ) {
-        self.predictionService = predictionService
-        self.predictionCache = predictionCache
-        self.serviceCoordinator = serviceCoordinator
-        self.userSettings = userSettings
-        self.balloonTrackService = balloonTrackService
-        
-        appLog("🎯 BalloonTrackPredictionService: Initialized as independent service", category: .service, level: .info)
-    }
-    
-    // MARK: - Service Lifecycle
-    
-    func start() {
-        guard !isRunning else {
-            appLog("🎯 BalloonTrackPredictionService: Already running", category: .service, level: .debug)
-            return
-        }
-        
-        isRunning = true
-        predictionStatus = "Running"
-        startInternalTimer()
-        
-        appLog("🎯 BalloonTrackPredictionService: Service started with 60-second interval", category: .service, level: .info)
-    }
-    
-    func stop() {
-        isRunning = false
-        predictionStatus = "Stopped"
-        stopInternalTimer()
-        
-        appLog("🎯 BalloonTrackPredictionService: Service stopped", category: .service, level: .info)
-    }
-    
-    // MARK: - Internal Timer Implementation
-    
-    private func startInternalTimer() {
-        stopInternalTimer() // Ensure no duplicate timers
-        
-        internalTimer = Timer.scheduledTimer(withTimeInterval: predictionInterval, repeats: true) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                await self?.handleTimerTrigger()
-            }
-        }
-        
-        appLog("🎯 BalloonTrackPredictionService: Internal 60-second timer started", category: .service, level: .info)
-    }
-    
-    private func stopInternalTimer() {
-        internalTimer?.invalidate()
-        internalTimer = nil
-    }
-    
-    private func handleTimerTrigger() async {
-        guard isRunning else { return }
-        
-        // Timer trigger: every 60 seconds
-        guard let serviceCoordinator = serviceCoordinator,
-              let telemetry = serviceCoordinator.balloonTelemetry else {
-            predictionStatus = "No telemetry available"
-            appLog("🎯 BalloonTrackPredictionService: Timer trigger - no telemetry", category: .service, level: .debug)
-            return
-        }
-        
-        appLog("🎯 BalloonTrackPredictionService: Timer trigger - performing prediction", category: .service, level: .info)
-        await performPrediction(telemetry: telemetry, trigger: "60s_timer")
-    }
-    
-    // MARK: - Public Trigger Methods
-    
-    /// Trigger: At startup after first valid telemetry
-    func handleStartupTelemetry(_ telemetry: TelemetryData) async {
-        guard isRunning else { return }
-        
-        // Check if this is first telemetry
-        if lastProcessedTelemetry == nil {
-            appLog("🎯 BalloonTrackPredictionService: Startup trigger - first telemetry received", category: .service, level: .info)
-            await performPrediction(telemetry: telemetry, trigger: "startup")
-        }
-        
-        lastProcessedTelemetry = telemetry
-    }
-    
-    /// Trigger: Manual prediction request (balloon tap)
-    func triggerManualPrediction() async {
-        guard isRunning else {
-            appLog("🎯 BalloonTrackPredictionService: Manual trigger ignored - service not running", category: .service, level: .debug)
-            return
-        }
-        
-        guard let serviceCoordinator = serviceCoordinator,
-              let telemetry = serviceCoordinator.balloonTelemetry else {
-            predictionStatus = "No telemetry for manual prediction"
-            appLog("🎯 BalloonTrackPredictionService: Manual trigger - no telemetry", category: .service, level: .debug)
-            return
-        }
-        
-        appLog("🎯 BalloonTrackPredictionService: Manual trigger - performing prediction", category: .service, level: .info)
-        await performPrediction(telemetry: telemetry, trigger: "manual")
-    }
-    
-    /// Trigger: Significant movement or altitude changes
-    func handleSignificantChange(_ telemetry: TelemetryData) async {
-        guard isRunning else { return }
-        
-        // TODO: Implement movement/altitude thresholds
-        // For now, let the timer handle regular updates
-        
-        lastProcessedTelemetry = telemetry
-    }
-    
-    // MARK: - Core Prediction Logic
-    
-    private func performPrediction(telemetry: TelemetryData, trigger: String) async {
-        predictionStatus = "Processing prediction..."
-        
-        do {
-            // Determine if balloon is descending (balloonDescends flag)
-            let balloonDescends = telemetry.verticalSpeed < 0
-            appLog("🎯 BalloonTrackPredictionService: Balloon descending: \(balloonDescends) (verticalSpeed: \(telemetry.verticalSpeed) m/s)", category: .service, level: .info)
-            
-            // Calculate effective descent rate per requirements
-            let effectiveDescentRate = calculateEffectiveDescentRate(telemetry: telemetry)
-            
-            // Create cache key for deduplication
-            let cacheKey = createCacheKey(telemetry)
-            
-            // Check cache first for performance
-            if let cachedPrediction = await predictionCache.get(key: cacheKey) {
-                appLog("🎯 BalloonTrackPredictionService: Using cached prediction", category: .service, level: .info)
-                await handlePredictionResult(cachedPrediction, trigger: trigger)
-                return
-            }
-            
-            // Call prediction service with all requirements implemented
-            let predictionData = try await predictionService.fetchPrediction(
-                telemetry: telemetry,
-                userSettings: userSettings,
-                measuredDescentRate: effectiveDescentRate,
-                cacheKey: cacheKey,
-                balloonDescends: balloonDescends
-            )
-            
-            // Cache the result
-            await predictionCache.set(key: cacheKey, value: predictionData)
-            
-            // Handle successful prediction
-            await handlePredictionResult(predictionData, trigger: trigger)
-            
-        } catch {
-            hasValidPrediction = false
-            predictionStatus = "Prediction failed: \(error.localizedDescription)"
-            appLog("🎯 BalloonTrackPredictionService: Prediction failed from \(trigger): \(error)", category: .service, level: .error)
-        }
-    }
-    
-    private func calculateEffectiveDescentRate(telemetry: TelemetryData) -> Double {
-        // Requirements: Use automatically adjusted descent rate below 10000m
-        if telemetry.altitude < 10000, let smoothedRate = serviceCoordinator?.smoothedDescentRate {
-            appLog("🎯 BalloonTrackPredictionService: Using smoothed descent rate: \(String(format: "%.2f", abs(smoothedRate))) m/s (below 10000m)", category: .service, level: .info)
-            return abs(smoothedRate)
-        } else {
-            appLog("🎯 BalloonTrackPredictionService: Using settings descent rate: \(String(format: "%.2f", userSettings.descentRate)) m/s (above 10000m)", category: .service, level: .info)
-            return userSettings.descentRate
-        }
-    }
-    
-    private func createCacheKey(_ telemetry: TelemetryData) -> String {
-        // Simple cache key based on rounded coordinates and altitude
-        let latRounded = round(telemetry.latitude * 1000) / 1000
-        let lonRounded = round(telemetry.longitude * 1000) / 1000
-        let altRounded = round(telemetry.altitude / 100) * 100 // Round to nearest 100m
-        return "\(telemetry.sondeName)-\(latRounded)-\(lonRounded)-\(Int(altRounded))"
-    }
-    
-    // MARK: - Result Handling & Direct Service Integration
-    
-    private func handlePredictionResult(_ predictionData: PredictionData, trigger: String) async {
-        // Update service state
-        hasValidPrediction = true
-        lastPredictionTime = Date()
-        predictionStatus = "Valid prediction available"
-        
-        // Direct ServiceCoordinator updates (no EventBus)
-        updateServiceCoordinator(predictionData)
-        
-        // Landing point is already updated directly in ServiceCoordinator above
-        
-        appLog("🎯 BalloonTrackPredictionService: Prediction completed successfully from \(trigger)", category: .service, level: .info)
-    }
-    
-    private func updateServiceCoordinator(_ predictionData: PredictionData) {
-        guard let serviceCoordinator = serviceCoordinator else {
-            appLog("🎯 BalloonTrackPredictionService: ServiceCoordinator is nil, cannot update", category: .service, level: .error)
-            return
-        }
-        
-        // Convert prediction path to polyline
-        if let path = predictionData.path, !path.isEmpty {
-            let polyline = MKPolyline(coordinates: path, count: path.count)
-            serviceCoordinator.predictionPath = polyline
-        }
-        
-        // Update burst point
-        if let burstPoint = predictionData.burstPoint {
-            serviceCoordinator.burstPoint = CLLocationCoordinate2D(latitude: burstPoint.latitude, longitude: burstPoint.longitude)
-        }
-        
-        // Update landing point
-        if let landingPoint = predictionData.landingPoint {
-            serviceCoordinator.landingPoint = CLLocationCoordinate2D(latitude: landingPoint.latitude, longitude: landingPoint.longitude)
-        }
-        
-        appLog("🎯 BalloonTrackPredictionService: Updated ServiceCoordinator directly", category: .service, level: .info)
-    }
-    
-    
-    // MARK: - Service Status & Monitoring
-    
-    var statusSummary: String {
-        let status = isRunning ? "Running" : "Stopped"
-        let prediction = hasValidPrediction ? "Valid" : "None"
-        let lastTime = lastPredictionTime?.timeIntervalSinceNow ?? 0
-        return "🎯 BalloonTrackPredictionService: \(status), Prediction: \(prediction), Last: \(String(format: "%.0f", abs(lastTime)))s ago"
-    }
-    
-    deinit {
-        internalTimer?.invalidate()
-        internalTimer = nil
-    }
-*/ // End of removed BalloonTrackPredictionService
-
-// MARK: - Manual Trigger Integration
-
-extension Notification.Name {
-    static let manualPredictionRequested = Notification.Name("manualPredictionRequested")
-    static let startupCompleted = Notification.Name("startupCompleted")
-    static let locationReady = Notification.Name("locationReady")
-}

@@ -32,7 +32,7 @@ struct DataPanelView: View {
                 Grid(alignment: .leading, horizontalSpacing: 5, verticalSpacing: 10) {
                     // Row 1: Frequency, Signal Strength, Battery %
                     GridRow {
-                        Text("\(String(format: "%.1f", serviceCoordinator.balloonTelemetry?.frequency ?? 0.0)) MHz")
+                        Text("\(serviceCoordinator.frequencyString) MHz")
                             .frame(maxWidth: .infinity, alignment: .leading)
                         Text("\(signalStrengthString) dBm")
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -58,14 +58,11 @@ struct DataPanelView: View {
                         Text("Arrival: \(arrivalTimeString)")
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    // Row 4: Adjusted descent rate (per FSD requirement)
+                    // Row 4: Adjusted descent rate (per FSD requirement) - spans all 3 columns
                     GridRow {
-                        Text("Descent: \(adjustedDescentRateString) m/s")
+                        Text("Descent Rate: \(serviceCoordinator.displayDescentRateString) m/s")
                             .frame(maxWidth: .infinity, alignment: .leading)
-                        Text("")
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        Text("")
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .gridCellColumns(3)
                     }
                 }
                 .padding(.horizontal)
@@ -138,13 +135,8 @@ struct DataPanelView: View {
         return "N/A"
     }
     
-    // Per FSD: Adjusted descent rate calculated by balloon track service
-    private var adjustedDescentRateString: String {
-        if let adjustedRate = serviceCoordinator.smoothedDescentRate {
-            return String(format: "%.1f", abs(adjustedRate))
-        }
-        return "--"
-    }
+    
+    
 }
 
 
