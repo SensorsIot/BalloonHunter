@@ -2,23 +2,15 @@ import SwiftUI
 import MapKit
 import Combine
 import OSLog
-import UIKit
 
 struct TrackingMapView: View {
     @EnvironmentObject var appServices: AppServices
     @EnvironmentObject var userSettings: UserSettings
-    // MapState eliminated - ServiceCoordinator now holds all state
-    @EnvironmentObject var serviceCoordinator: ServiceCoordinator  // Transitional
-    @EnvironmentObject var domainModel: DomainModel
+    @EnvironmentObject var serviceCoordinator: ServiceCoordinator
 
     @State private var showSettings = false
     @State private var position: MapCameraPosition = .automatic
     @State private var hasInitializedFromLocation = false
-    @State private var currentZoomLevel: Double = 15.0
-    @State private var currentDistance: CLLocationDistance = 1000
-    @State private var renderSets: [RenderSet] = []
-    @State private var overlays: [RenderOverlay] = []
-    @State private var annotations: [RenderAnnotation] = []
 
     var body: some View {
         GeometryReader { geometry in
@@ -28,7 +20,6 @@ struct TrackingMapView: View {
                     HStack(spacing: 12) {
                         // Settings button
                         Button {
-                            // Send device settings request before showing settings
                             serviceCoordinator.bleCommunicationService.getParameters()
                             showSettings = true
                         } label: {
@@ -41,12 +32,8 @@ struct TrackingMapView: View {
 
                         // Transport mode picker
                         Picker("Mode", selection: Binding(
-                            get: { 
-                                return serviceCoordinator.transportMode 
-                            },
-                            set: { (newMode: TransportationMode) in
-                                serviceCoordinator.transportMode = newMode
-                            }
+                            get: { serviceCoordinator.transportMode },
+                            set: { newValue in serviceCoordinator.transportMode = newValue }
                         )) {
                             Image(systemName: "car.fill").tag(TransportationMode.car)
                             Image(systemName: "bicycle").tag(TransportationMode.bike)
@@ -65,20 +52,16 @@ struct TrackingMapView: View {
                         .background(.ultraThinMaterial)
                         .cornerRadius(8)
 
-                        // Show All or Point button mutually exclusively based on landing point availability
+                        // Show All or Point button
                         if serviceCoordinator.landingPoint != nil {
-                            // Landing point available - show "All" button
                             Button("All") {
-                                // If in heading mode, exit it first
                                 if serviceCoordinator.isHeadingMode {
                                     serviceCoordinator.isHeadingMode = false
-                                    // Delay the show all request to let heading mode exit first
                                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
                                         serviceCoordinator.triggerShowAllAnnotations()
                                     }
                                 } else {
                                     serviceCoordinator.triggerShowAllAnnotations()
-                                    // Update map position after direct call
                                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                                         updateMapToShowAllAnnotations()
                                     }
@@ -86,9 +69,7 @@ struct TrackingMapView: View {
                             }
                             .buttonStyle(.bordered)
                         } else {
-                            // No landing point available - show "Point" button
                             Button("Point") {
-                                // For now, just log since landing point setting needs to be implemented
                                 appLog("TrackingMapView: Landing point setting requested (not yet implemented)", category: .general, level: .info)
                             }
                             .buttonStyle(.bordered)
@@ -110,11 +91,6 @@ struct TrackingMapView: View {
                         Button {
                             serviceCoordinator.isBuzzerMuted.toggle()
                             serviceCoordinator.bleCommunicationService.setMute(serviceCoordinator.isBuzzerMuted)
-
-                            // Haptic feedback
-                            let generator = UINotificationFeedbackGenerator()
-                            let newMuteState = !(serviceCoordinator.balloonTelemetry?.buzmute ?? false)
-                            generator.notificationOccurred(newMuteState ? .warning : .success)
                         } label: {
                             Image(systemName: (serviceCoordinator.balloonTelemetry?.buzmute ?? false) ? "speaker.slash.fill" : "speaker.2.fill")
                                 .imageScale(.large)
@@ -128,25 +104,89 @@ struct TrackingMapView: View {
                     .padding(.bottom, 8)
                 }
 
-                // Map view with RenderSet system
+                // Direct ServiceCoordinator Map Rendering
                 Map(position: $position, interactionModes: serviceCoordinator.isHeadingMode ? [] : .all) {
-                    // Phase 6: Render overlays and annotations from cached RenderSets
                     
-                    // Render overlays in z-order
-                    ForEach(overlays, id: \.id) { overlay in
-                        MapPolyline(coordinates: overlay.polyline.coordinates)
-                            .stroke(overlay.style.color, 
-                                   style: StrokeStyle(
-                                       lineWidth: overlay.style.lineWidth(for: currentZoomLevel),
-                                       lineCap: .round,
-                                       lineJoin: .round
-                                   ))
+                    // 1. Balloon Track: Historic track as thin red line
+                    if let balloonTrackPath = serviceCoordinator.balloonTrackPath {
+                        MapPolyline(coordinates: balloonTrackPath.coordinates)
+                            .stroke(.red, lineWidth: 2)
                     }
                     
-                    // Render annotations in z-order
-                    ForEach(annotations, id: \.id) { annotation in
-                        Annotation("", coordinate: annotation.coordinate) {
-                            annotation.createAnnotationView()
+                    // 2. Balloon Predicted Path: Thick blue line (controlled by visibility toggle)
+                    if serviceCoordinator.isPredictionPathVisible,
+                       let predictionPath = serviceCoordinator.predictionPath {
+                        MapPolyline(coordinates: predictionPath.coordinates)
+                            .stroke(.blue, lineWidth: 4)
+                    }
+                    
+                    // 3. Planned Route: Green path from user to landing point
+                    if let userRoute = serviceCoordinator.userRoute {
+                        MapPolyline(coordinates: userRoute.coordinates)
+                            .stroke(.green, lineWidth: 3)
+                    }
+                    
+                    // 4. User Position: Runner icon at user location
+                    if let userLocation = serviceCoordinator.userLocation {
+                        let userCoordinate = CLLocationCoordinate2D(
+                            latitude: userLocation.latitude,
+                            longitude: userLocation.longitude
+                        )
+                        Annotation("You", coordinate: userCoordinate) {
+                            Image(systemName: "figure.run")
+                                .font(.title2)
+                                .foregroundColor(.blue)
+                                .background(Circle().fill(.white).stroke(.blue, lineWidth: 2))
+                        }
+                    }
+                    
+                    // 5. Balloon Live Position: Green (ascending) or Red (descending) balloon
+                    if let balloonTelemetry = serviceCoordinator.balloonTelemetry {
+                        let balloonCoordinate = CLLocationCoordinate2D(
+                            latitude: balloonTelemetry.latitude,
+                            longitude: balloonTelemetry.longitude
+                        )
+                        let isAscending = balloonTelemetry.verticalSpeed >= 0
+                        
+                        Annotation("Balloon", coordinate: balloonCoordinate) {
+                            VStack {
+                                Image(systemName: "balloon.fill")
+                                    .font(.system(size: 30))
+                                    .foregroundColor(isAscending ? .green : .red)
+                                Text("\(Int(balloonTelemetry.altitude))m")
+                                    .font(.caption)
+                                    .fontWeight(.bold)
+                                    .foregroundColor(.white)
+                                    .background(Capsule().fill(.black.opacity(0.7)))
+                                    .padding(.horizontal, 4)
+                            }
+                        }
+                        .onTapGesture {
+                            // Manual prediction trigger
+                            Task {
+                                await serviceCoordinator.balloonTrackPredictionService.triggerManualPrediction()
+                            }
+                        }
+                    }
+                    
+                    // 6. Burst Point: Only visible when balloon is ascending
+                    if let burstPoint = serviceCoordinator.burstPoint,
+                       let balloonTelemetry = serviceCoordinator.balloonTelemetry,
+                       balloonTelemetry.verticalSpeed >= 0 {
+                        Annotation("Burst", coordinate: burstPoint) {
+                            Image(systemName: "burst.fill")
+                                .font(.title2)
+                                .foregroundColor(.orange)
+                        }
+                    }
+                    
+                    // 7. Landing Point: Always visible if available
+                    if let landingPoint = serviceCoordinator.landingPoint {
+                        Annotation("Landing", coordinate: landingPoint) {
+                            Image(systemName: "target")
+                                .font(.title2)
+                                .foregroundColor(.purple)
+                                .background(Circle().fill(.white).stroke(.purple, lineWidth: 2))
                         }
                     }
                 }
@@ -161,7 +201,6 @@ struct TrackingMapView: View {
                 .onReceive(serviceCoordinator.$region) { region in
                     if let region = region, !serviceCoordinator.isHeadingMode {
                         position = .region(region)
-                    } else if serviceCoordinator.isHeadingMode {
                     }
                 }
                 .onReceive(serviceCoordinator.$isHeadingMode) { isHeadingMode in
@@ -170,39 +209,6 @@ struct TrackingMapView: View {
                 .onReceive(serviceCoordinator.$userLocation) { userLocation in
                     if serviceCoordinator.isHeadingMode {
                         updateMapPositionForHeadingMode(true)
-                    }
-                }
-                .onChange(of: serviceCoordinator.isHeadingMode) { _, isHeadingMode in
-                    if isHeadingMode {
-                        // Force immediate update when entering heading mode
-                        updateMapPositionForHeadingMode(true)
-                    }
-                }
-                .onMapCameraChange { context in
-                    // Track current distance for heading mode
-                    currentDistance = context.camera.distance
-                }
-                .onReceive(NotificationCenter.default.publisher(for: .startupCompleted)) { _ in
-                    // Leave map in .automatic mode for natural positioning
-                    
-                    // Phase 1 Test: Create MapFeatures and log them
-                    let features = MapFeatureCoordinator.createFeatures(from: serviceCoordinator)
-                    let _ = MapFeatureCoordinator.getAllAnnotations(from: features)  // annotations
-                    let _ = MapFeatureCoordinator.getAllOverlays(from: features)  // overlays
-                    
-                    
-                    // Phase 2 Test: Sync DomainModel with ServiceCoordinator and compare
-                    domainModel.syncWithServiceCoordinator(serviceCoordinator)
-                    domainModel.observeServiceCoordinator(serviceCoordinator) // Setup direct observation for ongoing changes
-                    domainModel.compareWithServiceCoordinator(serviceCoordinator)
-                    
-                    // Phase 5: Initialize RenderSets
-                    updateRenderSets()
-                }
-                .onReceive(domainModel.objectWillChange) { _ in
-                    // Update RenderSets when DomainModel changes
-                    DispatchQueue.main.async {
-                        updateRenderSets()
                     }
                 }
 
@@ -222,49 +228,38 @@ struct TrackingMapView: View {
     }
     
     private func updateMapToShowAllAnnotations() {
-        // Don't change position if in heading mode
         if serviceCoordinator.isHeadingMode {
             return
         }
-        
-        // Keep map in .automatic mode for natural positioning
-        // Note: Map will automatically adjust to show annotations using .automatic position
+        // Map will automatically adjust using .automatic position
     }
     
     private func updateMapPositionForHeadingMode(_ isHeadingMode: Bool) {
         if isHeadingMode {
-            guard let _ = serviceCoordinator.userLocation else {  // userLocationData
+            guard let _ = serviceCoordinator.userLocation else {
                 return
             }
-            
-            // Use follow-with-heading mode - centers and rotates with user
             position = .userLocation(followsHeading: true, fallback: .automatic)
         } else {
-            // Return to automatic mode
             position = .automatic
         }
     }
+}
+
+#Preview {
+    let mockAppServices = AppServices()
+    let mockServiceCoordinator = ServiceCoordinator(
+        bleCommunicationService: mockAppServices.bleCommunicationService,
+        currentLocationService: mockAppServices.currentLocationService,
+        persistenceService: mockAppServices.persistenceService,
+        predictionCache: mockAppServices.predictionCache,
+        routingCache: mockAppServices.routingCache,
+        balloonPositionService: mockAppServices.balloonPositionService,
+        balloonTrackService: mockAppServices.balloonTrackService
+    )
     
-    private func updateRenderSets() {
-        renderSets = RenderSetCoordinator.createRenderSets(from: domainModel)
-        overlays = RenderSetCoordinator.getAllOverlays(from: renderSets)
-        annotations = RenderSetCoordinator.getAllAnnotations(from: renderSets)
-    }
+    TrackingMapView()
+        .environmentObject(mockAppServices)
+        .environmentObject(mockAppServices.userSettings)
+        .environmentObject(mockServiceCoordinator)
 }
-
-// MARK: - Map Extensions
-
-extension MapAnnotationItem.AnnotationKind {
-    var displayName: String {
-        switch self {
-        case .user: return "You"
-        case .balloon: return "Balloon"
-        case .burst: return "Burst"
-        case .landing: return "Landing"
-        case .landed: return "Landed"
-        }
-    }
-}
-
-
-
