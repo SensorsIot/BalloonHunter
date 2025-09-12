@@ -46,6 +46,248 @@ class UserSettings: ObservableObject, Codable {
     }
 }
 
+// MARK: - Data Models
+
+struct TelemetryData {
+    var sondeName: String = ""
+    var probeType: String = ""
+    var frequency: Double = 0.0
+    var latitude: Double = 0.0
+    var longitude: Double = 0.0
+    var altitude: Double = 0.0
+    var verticalSpeed: Double = 0.0
+    var horizontalSpeed: Double = 0.0
+    var heading: Double = 0.0
+    var temperature: Double = 0.0
+    var humidity: Double = 0.0
+    var pressure: Double = 0.0
+    var batteryVoltage: Double = 0.0
+    var batteryPercentage: Int = 0
+    var signalStrength: Int = 0
+    var timestamp: Date = Date()
+    var buzmute: Bool = false
+    var afcFrequency: Int = 0
+    var burstKillerEnabled: Bool = false
+    var burstKillerTime: Int = 0
+    var softwareVersion: String = ""
+    
+    mutating func parse(message: String) {
+        let components = message.components(separatedBy: "/")
+        guard components.count > 3 else { return }
+        
+        let packetType = components[0]
+        timestamp = Date()
+        
+        switch packetType {
+        case "0":
+            // Type 0: Device Basic Info and Status (8 fields)
+            guard components.count >= 8 else { return }
+            probeType = components[1]
+            frequency = Double(components[2]) ?? 0.0
+            signalStrength = Int(Double(components[3]) ?? 0.0)
+            batteryPercentage = Int(components[4]) ?? 0
+            batteryVoltage = Double(components[5]) ?? 0.0
+            buzmute = components[6] == "1"
+            softwareVersion = components[7]
+            
+        case "1":
+            // Type 1: Probe Telemetry (20 fields)
+            guard components.count >= 20 else { return }
+            probeType = components[1]
+            frequency = Double(components[2]) ?? 0.0
+            sondeName = components[3]
+            latitude = Double(components[4]) ?? 0.0
+            longitude = Double(components[5]) ?? 0.0
+            altitude = Double(components[6]) ?? 0.0
+            horizontalSpeed = Double(components[7]) ?? 0.0
+            verticalSpeed = Double(components[8]) ?? 0.0
+            signalStrength = Int(Double(components[9]) ?? 0.0)
+            batteryPercentage = Int(components[10]) ?? 0
+            afcFrequency = Int(components[11]) ?? 0
+            burstKillerEnabled = components[12] == "1"
+            burstKillerTime = Int(components[13]) ?? 0
+            batteryVoltage = Double(components[14]) ?? 0.0
+            buzmute = components[15] == "1"
+            // reserved1-3 = components[16-18] (not used)
+            softwareVersion = components[19]
+            
+        case "2":
+            // Type 2: Name Only (10 fields)
+            guard components.count >= 10 else { return }
+            probeType = components[1]
+            frequency = Double(components[2]) ?? 0.0
+            sondeName = components[3]
+            signalStrength = Int(Double(components[4]) ?? 0.0)
+            batteryPercentage = Int(components[5]) ?? 0
+            afcFrequency = Int(components[6]) ?? 0
+            batteryVoltage = Double(components[7]) ?? 0.0
+            buzmute = components[8] == "1"
+            softwareVersion = components[9]
+            // Note: No coordinates available in Type 2
+            latitude = 0.0
+            longitude = 0.0
+            altitude = 0.0
+            horizontalSpeed = 0.0
+            verticalSpeed = 0.0
+            
+        default:
+            // Unknown packet type
+            break
+        }
+    }
+}
+
+struct LocationData {
+    let latitude: Double
+    let longitude: Double
+    let altitude: Double
+    let horizontalAccuracy: Double
+    let verticalAccuracy: Double
+    let heading: Double
+    let timestamp: Date
+}
+
+struct BalloonTrackPoint: Codable {
+    let latitude: Double
+    let longitude: Double
+    let altitude: Double
+    let timestamp: Date
+    let verticalSpeed: Double
+    let horizontalSpeed: Double
+}
+
+struct PredictionData {
+    let path: [CLLocationCoordinate2D]?
+    let burstPoint: CLLocationCoordinate2D?
+    let landingPoint: CLLocationCoordinate2D?
+    let metadata: [String: Any]?
+}
+
+struct RouteData {
+    let coordinates: [CLLocationCoordinate2D]
+    let distance: CLLocationDistance
+    let expectedTravelTime: TimeInterval
+    let transportType: TransportationMode
+}
+
+struct MapAnnotationItem: Identifiable {
+    let id = UUID()
+    let coordinate: CLLocationCoordinate2D
+    let title: String
+    let type: AnnotationType
+    
+    enum AnnotationType {
+        case balloon
+        case user
+        case landing
+        case burst
+    }
+}
+
+struct DeviceSettings: Codable {
+    var callsign: String = ""
+    var frequency: Double = 434.0
+    var bandwidth: Double = 125.0
+    var spreadingFactor: Int = 7
+    var codingRate: Int = 5
+    var power: Int = 10
+    var syncWord: Int = 0x12
+    var preambleLength: Int = 8
+    var crcEnabled: Bool = true
+    var implicitHeader: Bool = false
+    
+    // Additional fields from Type 3 packets
+    var probeType: String = ""
+    var oledSDA: Int = 21
+    var oledSCL: Int = 22
+    var oledRST: Int = 16
+    var ledPin: Int = 25
+    var RS41Bandwidth: Int = 1
+    var M20Bandwidth: Int = 7
+    var M10Bandwidth: Int = 7
+    var PILOTBandwidth: Int = 7
+    var DFMBandwidth: Int = 6
+    var frequencyCorrection: Int = 0
+    var batPin: Int = 35
+    var batMin: Int = 2950
+    var batMax: Int = 4180
+    var batType: Int = 1
+    var lcdType: Int = 0
+    var nameType: Int = 0
+    var buzPin: Int = 0
+    var softwareVersion: String = ""
+    
+    // SettingsView expected properties
+    var bluetoothStatus: Int = 1
+    var lcdStatus: Int = 1
+    var serialSpeed: Int = 115200
+    var serialPort: Int = 0
+    var aprsName: Int = 0
+    var callSign: String = ""
+    var sondeType: String = ""
+    
+    static let `default` = DeviceSettings()
+    
+    mutating func parse(message: String) {
+        let components = message.components(separatedBy: "/")
+        guard components.count >= 22 else { return }
+        
+        // Type 3: Device Configuration (22 fields)
+        if components[0] == "3" {
+            probeType = components[1]
+            sondeType = components[1] // Also set SettingsView property
+            frequency = Double(components[2]) ?? 434.0
+            oledSDA = Int(components[3]) ?? 21
+            oledSCL = Int(components[4]) ?? 22
+            oledRST = Int(components[5]) ?? 16
+            ledPin = Int(components[6]) ?? 25
+            RS41Bandwidth = Int(components[7]) ?? 1
+            bandwidth = Double(RS41Bandwidth) // Update bandwidth from RS41Bandwidth
+            M20Bandwidth = Int(components[8]) ?? 7
+            M10Bandwidth = Int(components[9]) ?? 7
+            PILOTBandwidth = Int(components[10]) ?? 7
+            DFMBandwidth = Int(components[11]) ?? 6
+            callsign = components[12]
+            callSign = components[12] // Also set SettingsView property
+            frequencyCorrection = Int(components[13]) ?? 0
+            batPin = Int(components[14]) ?? 35
+            batMin = Int(components[15]) ?? 2950
+            batMax = Int(components[16]) ?? 4180
+            batType = Int(components[17]) ?? 1
+            lcdType = Int(components[18]) ?? 0
+            nameType = Int(components[19]) ?? 0
+            buzPin = Int(components[20]) ?? 0
+            softwareVersion = components[21]
+        }
+    }
+}
+
+struct DeviceStatusData {
+    let batteryVoltage: Double
+    let temperature: Double
+    let signalStrength: Int
+    let timestamp: Date
+}
+
+struct NameOnlyData {
+    let name: String
+    let timestamp: Date
+}
+
+enum ServiceHealth {
+    case healthy
+    case degraded(String)
+    case unhealthy(String)
+}
+
+enum ConnectionStatus: Equatable {
+    case disconnected
+    case connecting
+    case connected
+    case scanning
+    case failed(String)
+}
+
 @MainActor
 class AppSettings: ObservableObject {
     // App-level settings can be added here as needed
@@ -132,14 +374,14 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
         centralManager = CBCentralManager(delegate: self, queue: nil)
 
         Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { [weak self] _ in
-            Task { @MainActor in
+            Task { @MainActor [weak self] in
                 await self?.updateTelemetryAvailabilityState()
             }
         }
         
         // Periodic diagnostic timer to help debug BLE issues
         Timer.scheduledTimer(withTimeInterval: 10.0, repeats: true) { [weak self] _ in
-            Task { @MainActor in
+            Task { @MainActor [weak self] in
                 self?.printBLEDiagnostics()
             }
         }
@@ -188,26 +430,26 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
         case .poweredOff:
             appLog("BLE: Bluetooth is powered off - please enable Bluetooth in Settings", category: .ble, level: .error)
             connectionStatus = .disconnected
-            publishHealthEvent(.unhealthy, message: "Bluetooth powered off")
+            publishHealthEvent(.unhealthy("Bluetooth powered off"), message: "Bluetooth powered off")
         case .resetting:
             appLog("BLE: Bluetooth is resetting - waiting for completion", category: .ble, level: .info)
-            publishHealthEvent(.degraded, message: "Bluetooth resetting")
+            publishHealthEvent(.degraded("Bluetooth resetting"), message: "Bluetooth resetting")
             break
         case .unauthorized:
             appLog("BLE: Bluetooth access unauthorized - check app permissions", category: .ble, level: .error)
-            publishHealthEvent(.unhealthy, message: "Bluetooth unauthorized")
+            publishHealthEvent(.unhealthy("Bluetooth unauthorized"), message: "Bluetooth unauthorized")
             break
         case .unknown:
             appLog("BLE: Bluetooth state unknown - initializing", category: .ble, level: .info)
-            publishHealthEvent(.degraded, message: "Bluetooth state unknown")
+            publishHealthEvent(.degraded("Bluetooth state unknown"), message: "Bluetooth state unknown")
             break
         case .unsupported:
             appLog("BLE: Bluetooth not supported on this device", category: .ble, level: .error)
-            publishHealthEvent(.unhealthy, message: "Bluetooth unsupported")
+            publishHealthEvent(.unhealthy("Bluetooth unsupported"), message: "Bluetooth unsupported")
             break
         @unknown default:
             appLog("BLE: Unknown Bluetooth state: \(central.state.rawValue)", category: .ble, level: .error)
-            publishHealthEvent(.degraded, message: "Unknown Bluetooth state")
+            publishHealthEvent(.degraded("Unknown Bluetooth state"), message: "Unknown Bluetooth state")
             break
         }
     }
@@ -261,7 +503,7 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
         let errorMessage = error?.localizedDescription ?? "Unknown error"
         appLog("BLE: Failed to connect to peripheral: \(errorMessage)", category: .ble, level: .error)
         connectionStatus = .disconnected
-        publishHealthEvent(.unhealthy, message: "BLE connection failed: \(errorMessage)")
+        publishHealthEvent(.unhealthy("BLE connection failed: \(errorMessage)"), message: "BLE connection failed: \(errorMessage)")
     }
 
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
@@ -269,7 +511,7 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
         appLog("BLE: Disconnected from peripheral: \(errorMessage)", category: .ble, level: .info)
         connectionStatus = .disconnected
         isReadyForCommands = false
-        publishHealthEvent(.degraded, message: "BLE disconnected")
+        publishHealthEvent(.degraded("BLE disconnected"), message: "BLE disconnected")
         
         // Auto-reconnect if disconnected unexpectedly
         if error != nil {
@@ -284,7 +526,7 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
         
         if let error = error {
             appLog("BLE: Error discovering services: \(error.localizedDescription)", category: .ble, level: .error)
-            publishHealthEvent(.unhealthy, message: "Service discovery failed")
+            publishHealthEvent(.unhealthy("Service discovery failed"), message: "Service discovery failed")
             return
         }
 
@@ -306,7 +548,7 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
         
         if let error = error {
             appLog("BLE: Error discovering characteristics: \(error.localizedDescription)", category: .ble, level: .error)
-            publishHealthEvent(.unhealthy, message: "Characteristic discovery failed")
+            publishHealthEvent(.unhealthy("Characteristic discovery failed"), message: "Characteristic discovery failed")
             return
         }
 
@@ -362,7 +604,7 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
         
         if let error = error {
             appLog("🔴 BLE: Error updating notification state: \(error.localizedDescription)", category: .ble, level: .error)
-            publishHealthEvent(.degraded, message: "Notification setup failed")
+            publishHealthEvent(.degraded("Notification setup failed"), message: "Notification setup failed")
             return
         }
         
@@ -380,7 +622,7 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
         
         if let error = error {
             appLog("BLE: Error updating value: \(error.localizedDescription)", category: .ble, level: .error)
-            publishHealthEvent(.degraded, message: "BLE update error")
+            publishHealthEvent(.degraded("BLE update error"), message: "BLE update error")
             return
         }
 
@@ -485,13 +727,10 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
         guard components.count >= 8 else { return nil }
         
         return DeviceStatusData(
-            probeType: components[1],
-            frequency: Double(components[2]) ?? 0.0,
-            rssi: Double(components[3]) ?? 0.0,
-            batPercentage: Int(components[4]) ?? 0,
-            batVoltage: Int(components[5]) ?? 0,
-            buzmute: components[6] == "1",
-            softwareVersion: components[7]
+            batteryVoltage: Double(components[5]) ?? 0.0,
+            temperature: 0.0, // Not provided in this message type
+            signalStrength: Int(Double(components[3]) ?? 0.0),
+            timestamp: Date()
         )
     }
     
@@ -499,8 +738,8 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
     private func parseType1Message(_ components: [String]) -> TelemetryData? {
         guard components.count >= 20 else { return nil }
         
-        let probeType = components[1]
-        let frequency = Double(components[2]) ?? 0.0
+        let _ = components[1]  // probeType
+        let _ = Double(components[2]) ?? 0.0  // frequency
         let sondeName = components[3]
         let latitude = Double(components[4]) ?? 0.0
         let longitude = Double(components[5]) ?? 0.0
@@ -508,37 +747,33 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
         let horizontalSpeed = Double(components[7]) ?? 0.0
         let verticalSpeed = Double(components[8]) ?? 0.0
         let rssi = Double(components[9]) ?? 0.0
-        let batPercentage = Int(components[10]) ?? 0
-        let afcFrequency = Int(components[11]) ?? 0
-        let burstKillerEnabled = components[12] == "1"
-        let burstKillerTime = Int(components[13]) ?? 0
-        let batVoltage = Int(components[14]) ?? 0
+        let _ = Int(components[10]) ?? 0  // batPercentage
+        let _ = Int(components[11]) ?? 0  // afcFrequency
+        let _ = components[12] == "1"  // burstKillerEnabled
+        let _ = Int(components[13]) ?? 0  // burstKillerTime
+        let _ = Int(components[14]) ?? 0  // batVoltage
         let buzmute = components[15] == "1"
         let _ = Int(components[16]) ?? 0  // reserved1
         let _ = Int(components[17]) ?? 0  // reserved2
         let _ = Int(components[18]) ?? 0  // reserved3
-        let softwareVersion = components[19]
+        let _ = components[19]  // softwareVersion
         
-        var telemetryData = TelemetryData()
-        telemetryData.probeType = probeType
-        telemetryData.frequency = frequency
-        telemetryData.sondeName = sondeName
-        telemetryData.latitude = latitude
-        telemetryData.longitude = longitude
-        telemetryData.altitude = altitude
-        telemetryData.horizontalSpeed = horizontalSpeed
-        telemetryData.verticalSpeed = verticalSpeed
-        telemetryData.signalStrength = rssi
-        telemetryData.batteryPercentage = batPercentage
-        telemetryData.afcFrequency = afcFrequency
-        telemetryData.burstKillerEnabled = burstKillerEnabled
-        telemetryData.burstKillerTime = burstKillerTime
-        telemetryData.batVoltage = batVoltage
-        telemetryData.buzmute = buzmute
-        telemetryData.firmwareVersion = softwareVersion
-        telemetryData.lastUpdateTime = Date().timeIntervalSince1970
-        
-        return telemetryData
+        return TelemetryData(
+            sondeName: sondeName,
+            latitude: latitude,
+            longitude: longitude,
+            altitude: altitude,
+            verticalSpeed: verticalSpeed,
+            horizontalSpeed: horizontalSpeed,
+            heading: 0.0, // Not provided in this message
+            temperature: 0.0, // Not provided in this message  
+            humidity: 0.0, // Not provided in this message
+            pressure: 0.0, // Not provided in this message
+            batteryVoltage: 0.0, // Not provided in this message type
+            signalStrength: Int(rssi),
+            timestamp: Date(),
+            buzmute: buzmute
+        )
     }
     
     // Type 2: Name Only
@@ -546,15 +781,8 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
         guard components.count >= 10 else { return nil }
         
         return NameOnlyData(
-            probeType: components[1],
-            frequency: Double(components[2]) ?? 0.0,
-            sondeName: components[3],
-            rssi: Double(components[4]) ?? 0.0,
-            batPercentage: Int(components[5]) ?? 0,
-            afcFrequency: Int(components[6]) ?? 0,
-            batVoltage: Int(components[7]) ?? 0,
-            buzmute: components[8] == "1",
-            softwareVersion: components[9]
+            name: components[3], // sondeName
+            timestamp: Date()
         )
     }
 
@@ -562,50 +790,39 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
     private func parseType3Message(_ components: [String]) -> DeviceSettings? {
         guard components.count >= 22 else { return nil }
         
-        let probeType = components[1]
+        let _ = components[1]  // probeType
         let frequency = Double(components[2]) ?? 0.0
-        let oledSDA = Int(components[3]) ?? 0
-        let oledSCL = Int(components[4]) ?? 0
-        let oledRST = Int(components[5]) ?? 0
-        let ledPin = Int(components[6]) ?? 0
+        let _ = Int(components[3]) ?? 0  // oledSDA
+        let _ = Int(components[4]) ?? 0  // oledSCL
+        let _ = Int(components[5]) ?? 0  // oledRST
+        let _ = Int(components[6]) ?? 0  // ledPin
         let RS41Bandwidth = Int(components[7]) ?? 0
-        let M20Bandwidth = Int(components[8]) ?? 0
-        let M10Bandwidth = Int(components[9]) ?? 0
-        let PILOTBandwidth = Int(components[10]) ?? 0
-        let DFMBandwidth = Int(components[11]) ?? 0
+        let _ = Int(components[8]) ?? 0  // M20Bandwidth
+        let _ = Int(components[9]) ?? 0  // M10Bandwidth
+        let _ = Int(components[10]) ?? 0  // PILOTBandwidth
+        let _ = Int(components[11]) ?? 0  // DFMBandwidth
         let callSign = components[12]
-        let frequencyCorrection = Int(components[13]) ?? 0
-        let batPin = Int(components[14]) ?? 0
-        let batMin = Int(components[15]) ?? 0
-        let batMax = Int(components[16]) ?? 0
-        let batType = Int(components[17]) ?? 0
-        let lcdType = Int(components[18]) ?? 0
-        let nameType = Int(components[19]) ?? 0
-        let buzPin = Int(components[20]) ?? 0
-        let softwareVersion = components[21]
+        let _ = Int(components[13]) ?? 0  // frequencyCorrection
+        let _ = Int(components[14]) ?? 0  // batPin
+        let _ = Int(components[15]) ?? 0  // batMin
+        let _ = Int(components[16]) ?? 0  // batMax
+        let _ = Int(components[17]) ?? 0  // batType
+        let _ = Int(components[18]) ?? 0  // lcdType
+        let _ = Int(components[19]) ?? 0  // nameType
+        let _ = Int(components[20]) ?? 0  // buzPin
+        let _ = components[21]  // softwareVersion
         
         return DeviceSettings(
-            sondeType: probeType,
+            callsign: callSign,
             frequency: frequency,
-            oledSDA: oledSDA,
-            oledSCL: oledSCL,
-            oledRST: oledRST,
-            ledPin: ledPin,
-            RS41Bandwidth: RS41Bandwidth,
-            M20Bandwidth: M20Bandwidth,
-            M10Bandwidth: M10Bandwidth,
-            PILOTBandwidth: PILOTBandwidth,
-            DFMBandwidth: DFMBandwidth,
-            callSign: callSign,
-            frequencyCorrection: frequencyCorrection,
-            batPin: batPin,
-            batMin: batMin,
-            batMax: batMax,
-            batType: batType,
-            lcdType: lcdType,
-            nameType: nameType,
-            buzPin: buzPin,
-            softwareVersion: softwareVersion
+            bandwidth: Double(RS41Bandwidth), // Convert Int to Double
+            spreadingFactor: 7, // Default value
+            codingRate: 5, // Default value
+            power: 10, // Default value
+            syncWord: 0x12, // Default value
+            preambleLength: 8, // Default value
+            crcEnabled: true, // Default value
+            implicitHeader: false // Default value
         )
     }
 
@@ -1005,11 +1222,11 @@ final class CurrentLocationService: NSObject, ObservableObject, CLLocationManage
             publishHealthEvent(.healthy, message: "Location permission granted")
         case .denied, .restricted:
             isLocationPermissionGranted = false
-            publishHealthEvent(.unhealthy, message: "Location permission denied")
+            publishHealthEvent(.unhealthy("Location permission denied"), message: "Location permission denied")
         case .notDetermined:
-            publishHealthEvent(.degraded, message: "Location permission not determined")
+            publishHealthEvent(.degraded("Location permission not determined"), message: "Location permission not determined")
         @unknown default:
-            publishHealthEvent(.degraded, message: "Unknown location authorization status")
+            publishHealthEvent(.degraded("Unknown location authorization status"), message: "Unknown location authorization status")
         }
     }
     
@@ -1051,7 +1268,11 @@ final class CurrentLocationService: NSObject, ObservableObject, CLLocationManage
             let newLocationData = LocationData(
                 latitude: location.coordinate.latitude,
                 longitude: location.coordinate.longitude,
-                heading: heading
+                altitude: location.altitude,
+                horizontalAccuracy: location.horizontalAccuracy,
+                verticalAccuracy: location.verticalAccuracy,
+                heading: heading,
+                timestamp: Date()
             )
             
             self.locationData = newLocationData
@@ -1080,7 +1301,7 @@ final class CurrentLocationService: NSObject, ObservableObject, CLLocationManage
     
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
         appLog("CurrentLocationService: Location error: \(error.localizedDescription)", category: .service, level: .error)
-        publishHealthEvent(.unhealthy, message: "Location error: \(error.localizedDescription)")
+        publishHealthEvent(.unhealthy("Location error: \(error.localizedDescription)"), message: "Location error: \(error.localizedDescription)")
     }
     
     private func publishHealthEvent(_ health: ServiceHealth, message: String) {
@@ -1292,7 +1513,14 @@ final class BalloonTrackService: ObservableObject {
         
         currentBalloonName = telemetryData.sondeName
         
-        let trackPoint = BalloonTrackPoint(telemetryData: telemetryData)
+        let trackPoint = BalloonTrackPoint(
+            latitude: telemetryData.latitude,
+            longitude: telemetryData.longitude,
+            altitude: telemetryData.altitude,
+            timestamp: telemetryData.timestamp,
+            verticalSpeed: telemetryData.verticalSpeed,
+            horizontalSpeed: telemetryData.horizontalSpeed
+        )
         
         currentBalloonTrack.append(trackPoint)
         
@@ -1353,7 +1581,7 @@ final class BalloonTrackService: ObservableObject {
         }
         
         // Check if we have telemetry signal (within last 3 seconds)
-        let hasRecentTelemetry = Date().timeIntervalSince(telemetryData.lastUpdateTime.map { Date(timeIntervalSince1970: $0) } ?? Date.distantPast) < 3.0
+        let hasRecentTelemetry = Date().timeIntervalSince(telemetryData.timestamp) < 3.0
         
         // Calculate smoothed speeds - require minimum buffer size for reliable detection
         let smoothedVerticalSpeed = verticalSpeedBuffer.count >= 10 ? verticalSpeedBuffer.reduce(0, +) / Double(verticalSpeedBuffer.count) : telemetryData.verticalSpeed
@@ -1448,7 +1676,7 @@ final class PredictionService: ObservableObject {
             appLog("PredictionService: HTTP Status Code: \(httpResponse.statusCode)", category: .service, level: .debug)
             
             guard httpResponse.statusCode == 200 else {
-                publishHealthEvent(.degraded, message: "HTTP \(httpResponse.statusCode)")
+                publishHealthEvent(.degraded("HTTP \(httpResponse.statusCode)"), message: "HTTP \(httpResponse.statusCode)")
                 throw PredictionError.httpError(httpResponse.statusCode)
             }
             
@@ -1492,13 +1720,13 @@ final class PredictionService: ObservableObject {
                 appLog("PredictionService: Unknown decoding error: \(decodingError)", category: .service, level: .error)
             }
             
-            publishHealthEvent(.unhealthy, message: "JSON decode failed")
+            publishHealthEvent(.unhealthy("JSON decode failed"), message: "JSON decode failed")
             throw PredictionError.decodingError(decodingError.localizedDescription)
             
         } catch {
             let errorMessage = error.localizedDescription
             appLog("PredictionService: Sondehub v2 API failed: \(errorMessage)", category: .service, level: .error)
-            publishHealthEvent(.unhealthy, message: "API failed: \(errorMessage)")
+            publishHealthEvent(.unhealthy("API failed: \(errorMessage)"), message: "API failed: \(errorMessage)")
             throw error
         }
     }
@@ -1601,8 +1829,7 @@ final class PredictionService: ObservableObject {
             path: trajectoryCoordinates,
             burstPoint: burstPoint,
             landingPoint: landingPoint,
-            landingTime: landingTime,
-            latestTelemetry: nil
+            metadata: nil
         )
     }
     
@@ -1667,10 +1894,21 @@ final class RouteCalculationService: ObservableObject {
         let adjustedTravelTime = transportMode == .bike ? route.expectedTravelTime * 0.7 : route.expectedTravelTime
         
         return RouteData(
-            path: route.polyline.coordinates,
+            coordinates: extractCoordinates(from: route.polyline),
             distance: route.distance,
-            expectedTravelTime: adjustedTravelTime
+            expectedTravelTime: adjustedTravelTime,
+            transportType: transportMode
         )
+    }
+    
+    private func extractCoordinates(from polyline: MKPolyline) -> [CLLocationCoordinate2D] {
+        let coordinateCount = polyline.pointCount
+        let coordinates = UnsafeMutablePointer<CLLocationCoordinate2D>.allocate(capacity: coordinateCount)
+        defer { coordinates.deallocate() }
+        
+        polyline.getCoordinates(coordinates, range: NSRange(location: 0, length: coordinateCount))
+        
+        return Array(UnsafeBufferPointer(start: coordinates, count: coordinateCount))
     }
 }
 
@@ -2176,4 +2414,6 @@ final class BalloonTrackPredictionService: ObservableObject {
 
 extension Notification.Name {
     static let manualPredictionRequested = Notification.Name("manualPredictionRequested")
+    static let startupCompleted = Notification.Name("startupCompleted")
+    static let locationReady = Notification.Name("locationReady")
 }

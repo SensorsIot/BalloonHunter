@@ -176,7 +176,9 @@ final class ServiceCoordinator: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.handleManualPredictionRequest()
+            Task { @MainActor [weak self] in
+                self?.handleManualPredictionRequest()
+            }
         }
     }
     
@@ -341,9 +343,8 @@ final class ServiceCoordinator: ObservableObject {
         // Update balloon annotation directly
         let balloonAnnotation = MapAnnotationItem(
             coordinate: CLLocationCoordinate2D(latitude: telemetry.latitude, longitude: telemetry.longitude),
-            kind: .balloon,
-            isAscending: telemetry.verticalSpeed >= 0,
-            altitude: telemetry.altitude
+            title: "Balloon",
+            type: .balloon
         )
         
         // Update user annotation if available
@@ -351,14 +352,16 @@ final class ServiceCoordinator: ObservableObject {
         if let userLocation = userLocation {
             let userAnnotation = MapAnnotationItem(
                 coordinate: CLLocationCoordinate2D(latitude: userLocation.latitude, longitude: userLocation.longitude),
-                kind: .user
+                title: "You",
+            type: .user
             )
             annotations.append(userAnnotation)
         }
         
         // Add landing point if available
         if let landingPoint = getCurrentLandingPoint() {
-            let landingAnnotation = MapAnnotationItem(coordinate: landingPoint, kind: .landing)
+            let landingAnnotation = MapAnnotationItem(coordinate: landingPoint, title: "Landing",
+                type: .landing)
             annotations.append(landingAnnotation)
         }
         
@@ -366,7 +369,8 @@ final class ServiceCoordinator: ObservableObject {
         if let burstPoint = burstPoint,
            let telemetryData = balloonTelemetry,
            telemetryData.verticalSpeed >= 0 { // Only show when ascending
-            let burstAnnotation = MapAnnotationItem(coordinate: burstPoint, kind: .burst)
+            let burstAnnotation = MapAnnotationItem(coordinate: burstPoint, title: "Burst",
+                type: .burst)
             annotations.append(burstAnnotation)
         }
         
@@ -394,7 +398,7 @@ final class ServiceCoordinator: ObservableObject {
     private func updateMapWithPrediction(_ prediction: PredictionData) {
         // Update prediction data for DataPanelView (flight time, landing time)
         predictionData = prediction
-        appLog("ServiceCoordinator: Set predictionData - landingTime: \(prediction.landingTime?.description ?? "nil")", category: .general, level: .debug)
+        appLog("ServiceCoordinator: Set predictionData - landingTime: \("N/A")", category: .general, level: .debug)
         
         // Update prediction path
         if let path = prediction.path, !path.isEmpty {
@@ -504,8 +508,8 @@ final class ServiceCoordinator: ObservableObject {
         // Check cache first
         if let cachedRoute = await routingCache.get(key: routeKey) {
             appLog("ServiceCoordinator: Using cached route", category: .general, level: .debug)
-            if let routePath = cachedRoute.path, !routePath.isEmpty {
-                userRoute = MKPolyline(coordinates: routePath, count: routePath.count)
+            if !cachedRoute.coordinates.isEmpty {
+                userRoute = MKPolyline(coordinates: cachedRoute.coordinates, count: cachedRoute.coordinates.count)
                 isRouteVisible = true
                 routeData = cachedRoute  // Fix: Set route data for arrival time
             } else {
@@ -527,8 +531,8 @@ final class ServiceCoordinator: ObservableObject {
             )
             
             // Update map state with route
-            if let routePath = routeData.path, !routePath.isEmpty {
-                userRoute = MKPolyline(coordinates: routePath, count: routePath.count)
+            if !routeData.coordinates.isEmpty {
+                userRoute = MKPolyline(coordinates: routeData.coordinates, count: routeData.coordinates.count)
                 isRouteVisible = true
                 self.routeData = routeData
                 
@@ -624,14 +628,16 @@ final class ServiceCoordinator: ObservableObject {
         if let userLocation = userLocation {
             let userAnnotation = MapAnnotationItem(
                 coordinate: CLLocationCoordinate2D(latitude: userLocation.latitude, longitude: userLocation.longitude),
-                kind: .user
+                title: "You",
+            type: .user
             )
             annotations.append(userAnnotation)
         }
         
         // Add landing point if available
         if let landingPoint = getCurrentLandingPoint() {
-            let landingAnnotation = MapAnnotationItem(coordinate: landingPoint, kind: .landing)
+            let landingAnnotation = MapAnnotationItem(coordinate: landingPoint, title: "Landing",
+                type: .landing)
             annotations.append(landingAnnotation)
         }
         

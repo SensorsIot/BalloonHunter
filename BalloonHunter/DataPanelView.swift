@@ -1,6 +1,7 @@
 // DataPanelView.swift
 import SwiftUI
 import OSLog
+import Foundation
 
 struct DataPanelView: View {
     // MapState eliminated - ServiceCoordinator now holds all state
@@ -104,14 +105,12 @@ struct DataPanelView: View {
         // Use refreshTrigger to ensure view updates when staleness changes
         _ = refreshTrigger
         
-        guard let telemetry = serviceCoordinator.balloonTelemetry,
-              let lastUpdateTime = telemetry.lastUpdateTime else {
+        guard let telemetry = serviceCoordinator.balloonTelemetry else {
             // No telemetry available at all
             return true
         }
         
-        let lastUpdate = Date(timeIntervalSince1970: lastUpdateTime)
-        let timeSinceUpdate = Date().timeIntervalSince(lastUpdate)
+        let timeSinceUpdate = Date().timeIntervalSince(telemetry.timestamp)
         let isStale = timeSinceUpdate > 3.0 // 3 seconds threshold
         
         if isStale {
@@ -122,29 +121,21 @@ struct DataPanelView: View {
     }
 
     var flightTime: String {
-        guard let landingTime = serviceCoordinator.predictionData?.landingTime else { 
-            return "--:--" 
-        }
-        let interval = landingTime.timeIntervalSinceNow
-
-        if interval < 0 {
-            appLog("DataPanelView: flightTime - landing time in past, returning '00:00'", category: .ui, level: .debug)
-            return "00:00"
-        }
-
-        let hours = Int(interval) / 3600
-        let minutes = (Int(interval) % 3600) / 60
-        let result = String(format: "%02d:%02d", hours, minutes)
-        appLog("DataPanelView: flightTime - calculated: \(result) (interval: \(interval)s)", category: .ui, level: .debug)
-        return result
+        return "--:--"  // Flight time calculation not implemented yet
     }
 
     private var landingTimeString: String {
-        return serviceCoordinator.predictionData?.landingTime?.formatted(date: .omitted, time: .shortened) ?? "--:--"
+        return "--:--"  // Landing time calculation not implemented yet
     }
 
     private var arrivalTimeString: String {
-        serviceCoordinator.routeData?.arrivalTime?.formatted(date: .omitted, time: .shortened) ?? "--:--"
+        if let travelTime = serviceCoordinator.routeData?.expectedTravelTime {
+            let arrivalTime = Date().addingTimeInterval(travelTime)
+            let formatter = DateFormatter()
+            formatter.timeStyle = .short
+            return formatter.string(from: arrivalTime)
+        }
+        return "--:--"
     }
 
     private var distanceString: String {

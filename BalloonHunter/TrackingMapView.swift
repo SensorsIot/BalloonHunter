@@ -109,20 +109,20 @@ struct TrackingMapView: View {
                     
                     // 1. Balloon Track: Historic track as thin red line
                     if let balloonTrackPath = serviceCoordinator.balloonTrackPath {
-                        MapPolyline(coordinates: balloonTrackPath.coordinates)
+                        MapPolyline(balloonTrackPath)
                             .stroke(.red, lineWidth: 2)
                     }
                     
                     // 2. Balloon Predicted Path: Thick blue line (controlled by visibility toggle)
                     if serviceCoordinator.isPredictionPathVisible,
                        let predictionPath = serviceCoordinator.predictionPath {
-                        MapPolyline(coordinates: predictionPath.coordinates)
+                        MapPolyline(predictionPath)
                             .stroke(.blue, lineWidth: 4)
                     }
                     
                     // 3. Planned Route: Green path from user to landing point
                     if let userRoute = serviceCoordinator.userRoute {
-                        MapPolyline(coordinates: userRoute.coordinates)
+                        MapPolyline(userRoute)
                             .stroke(.green, lineWidth: 3)
                     }
                     
@@ -160,11 +160,11 @@ struct TrackingMapView: View {
                                     .background(Capsule().fill(.black.opacity(0.7)))
                                     .padding(.horizontal, 4)
                             }
-                        }
-                        .onTapGesture {
-                            // Manual prediction trigger
-                            Task {
-                                await serviceCoordinator.balloonTrackPredictionService.triggerManualPrediction()
+                            .onTapGesture {
+                                // Manual prediction trigger
+                                Task {
+                                    await serviceCoordinator.balloonTrackPredictionService.triggerManualPrediction()
+                                }
                             }
                         }
                     }
