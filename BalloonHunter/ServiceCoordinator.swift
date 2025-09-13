@@ -347,10 +347,16 @@ final class ServiceCoordinator: ObservableObject {
         // - The user position
         // - The landing position  
         // - If a balloon is flying, the route and predicted path
-        triggerShowAllAnnotations()
         
-        try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds for map to update
-        appLog("ServiceCoordinator: Initial map display complete with all annotations", category: .general, level: .info)
+        // Only trigger show all annotations if we have a landing point to display
+        if landingPoint != nil {
+            appLog("🔍 ZOOM: ServiceCoordinator triggering show all annotations (landing point available)", category: .general, level: .info)
+            triggerShowAllAnnotations()
+            try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds for map to update
+            appLog("ServiceCoordinator: Initial map display complete with all annotations", category: .general, level: .info)
+        } else {
+            appLog("🔍 ZOOM: ServiceCoordinator NOT triggering show all annotations (no landing point)", category: .general, level: .info)
+        }
     }
     
     // MARK: - Direct Event Handling
@@ -434,7 +440,7 @@ final class ServiceCoordinator: ObservableObject {
     
     func triggerShowAllAnnotations() {
         showAllAnnotations = true
-        appLog("ServiceCoordinator: Triggered show all annotations", category: .general, level: .debug)
+        appLog("🔍 ZOOM: ServiceCoordinator triggerShowAllAnnotations called", category: .general, level: .info)
     }
     
     func triggerPrediction() {
@@ -833,6 +839,12 @@ final class ServiceCoordinator: ObservableObject {
     }
     
     private func updateCameraToShowAllAnnotations() {
+        // Don't override zoom when in heading mode - let TrackingMapView handle it
+        if isHeadingMode {
+            appLog("ServiceCoordinator: Skipping camera update - heading mode active", category: .general, level: .debug)
+            return
+        }
+        
         // Camera update to show all annotations with appropriate zoom level
         let allCoordinates = annotations.map { $0.coordinate }
         guard !allCoordinates.isEmpty else { 
@@ -858,14 +870,16 @@ final class ServiceCoordinator: ObservableObject {
         )
         
         // Calculate span with padding and minimum zoom constraints
-        let latSpan = max((maxLat - minLat) * 1.4, 0.01) // Add 40% padding, minimum 0.01 degrees
-        let lonSpan = max((maxLon - minLon) * 1.4, 0.01) // Add 40% padding, minimum 0.01 degrees
+        // Use consistent minimum zoom level with heading mode
+        let latSpan = max((maxLat - minLat) * 1.4, 0.1) // Add 40% padding, minimum 0.1 degrees (~10km)
+        let lonSpan = max((maxLon - minLon) * 1.4, 0.1) // Add 40% padding, minimum 0.1 degrees (~10km)
         
         let span = MKCoordinateSpan(latitudeDelta: latSpan, longitudeDelta: lonSpan)
+        let zoomKm = Int(span.latitudeDelta * 111) // Approximate km conversion
         
         region = MKCoordinateRegion(center: center, span: span)
         
-        appLog("ServiceCoordinator: Updated camera to show \(coordinates.count) points - center: \(center), span: \(span)", category: .general, level: .info)
+        appLog("🔍 ZOOM: ServiceCoordinator updateCameraToShowAllAnnotations - \(zoomKm)km (\(String(format: "%.3f", span.latitudeDelta))°) for \(coordinates.count) points at [\(String(format: "%.4f", center.latitude)), \(String(format: "%.4f", center.longitude))]", category: .general, level: .info)
     }
     
     // MARK: - Persistence Data Loading (Per FSD)

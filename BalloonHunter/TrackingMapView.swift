@@ -11,6 +11,17 @@ struct TrackingMapView: View {
     @State private var showSettings = false
     @State private var position: MapCameraPosition = .automatic
     @State private var hasInitializedFromLocation = false
+    @State private var savedZoomLevel: MKCoordinateSpan = MKCoordinateSpan(latitudeDelta: 0.225, longitudeDelta: 0.225) // Default ~25km zoom for startup
+    @State private var isInHeadingMode: Bool = false
+    
+    private func logZoomChange(_ description: String, span: MKCoordinateSpan, center: CLLocationCoordinate2D? = nil) {
+        let zoomKm = Int(span.latitudeDelta * 111) // Approximate km conversion
+        if let center = center {
+            appLog("🔍 ZOOM: \(description) - \(zoomKm)km (\(String(format: "%.3f", span.latitudeDelta))°) at [\(String(format: "%.4f", center.latitude)), \(String(format: "%.4f", center.longitude))]", category: .general, level: .info)
+        } else {
+            appLog("🔍 ZOOM: \(description) - \(zoomKm)km (\(String(format: "%.3f", span.latitudeDelta))°)", category: .general, level: .info)
+        }
+    }
 
     var body: some View {
         GeometryReader { geometry in
@@ -187,8 +198,14 @@ struct TrackingMapView: View {
                 .mapStyle(.standard(pointsOfInterest: .excludingAll, showsTraffic: false))
                 .mapControlVisibility(serviceCoordinator.isHeadingMode ? .hidden : .automatic)
                 .frame(height: geometry.size.height * 0.7)
+                .onMapCameraChange { context in
+                    // Update saved zoom level when user changes map view
+                    savedZoomLevel = context.region.span
+                    logZoomChange("Map camera changed by user", span: context.region.span, center: context.region.center)
+                }
                 .onReceive(serviceCoordinator.$region) { region in
                     if let region = region, !serviceCoordinator.isHeadingMode {
+                        logZoomChange("ServiceCoordinator region update (free mode)", span: region.span, center: region.center)
                         position = .region(region)
                     }
                 }
@@ -202,7 +219,22 @@ struct TrackingMapView: View {
                 }
                 .onReceive(serviceCoordinator.$showAllAnnotations) { shouldShowAll in
                     if shouldShowAll {
-                        position = .automatic
+                        // Use saved zoom level instead of .automatic to preserve 25km startup zoom
+                        if let userLocation = serviceCoordinator.userLocation {
+                            let userCoordinate = CLLocationCoordinate2D(
+                                latitude: userLocation.latitude,
+                                longitude: userLocation.longitude
+                            )
+                            let region = MKCoordinateRegion(
+                                center: userCoordinate,
+                                span: savedZoomLevel
+                            )
+                            logZoomChange("Show all annotations with saved zoom", span: savedZoomLevel, center: userCoordinate)
+                            position = .region(region)
+                        } else {
+                            appLog("🔍 ZOOM: Show all annotations - using .automatic (no user location)", category: .general, level: .info)
+                            position = .automatic
+                        }
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                             serviceCoordinator.showAllAnnotations = false // Reset the trigger
                         }
@@ -238,27 +270,43 @@ struct TrackingMapView: View {
     }
     
     private func updateMapPositionForHeadingMode(_ isHeadingMode: Bool) {
+        self.isInHeadingMode = isHeadingMode
+        
         if isHeadingMode {
+            // Switching TO heading mode - set initial position with saved zoom, then enable heading
             guard let userLocation = serviceCoordinator.userLocation else {
+                appLog("🔍 ZOOM: Cannot switch to heading mode - no user location", category: .general, level: .error)
                 return
             }
-            let userCoordinate = CLLocationCoordinate2D(
-                latitude: userLocation.latitude,
-                longitude: userLocation.longitude
-            )
-            // Use consistent zoom level with heading mode
-            let region = MKCoordinateRegion(
-                center: userCoordinate,
-                span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01) // ~1km zoom
-            )
+            
+            let userCoordinate = CLLocationCoordinate2D(latitude: userLocation.latitude, longitude: userLocation.longitude)
+            let region = MKCoordinateRegion(center: userCoordinate, span: savedZoomLevel)
+            
+            logZoomChange("Switch TO heading mode - initial position", span: savedZoomLevel, center: userCoordinate)
+            
+            // First set the position with saved zoom
             position = .region(region)
             
-            // Enable heading tracking after setting position
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                position = .userLocation(followsHeading: true, fallback: .region(region))
+            // Then enable heading tracking after a brief delay, letting map preserve current zoom
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                appLog("🔍 ZOOM: Enabling heading tracking (preserving current zoom)", category: .general, level: .info)
+                // Don't provide fallback - let map preserve current view
+                position = .userLocation(followsHeading: true, fallback: .automatic)
             }
+            
         } else {
-            position = .automatic
+            // Switching TO free mode - set initial position with saved zoom
+            guard let userLocation = serviceCoordinator.userLocation else {
+                appLog("🔍 ZOOM: Switch to free mode - using .automatic (no user location)", category: .general, level: .info)
+                position = .automatic
+                return
+            }
+            
+            let userCoordinate = CLLocationCoordinate2D(latitude: userLocation.latitude, longitude: userLocation.longitude)
+            let region = MKCoordinateRegion(center: userCoordinate, span: savedZoomLevel)
+            
+            logZoomChange("Switch TO free mode - initial position", span: savedZoomLevel, center: userCoordinate)
+            position = .region(region)
         }
     }
 }

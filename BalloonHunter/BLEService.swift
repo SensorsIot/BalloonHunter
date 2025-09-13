@@ -443,11 +443,11 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
 
         // Check if we have both characteristics configured
         if writeCharacteristic != nil {
-            isReadyForCommands = true
-            appLog("🟢 BLE: Ready for commands - TX characteristic configured", category: .ble, level: .info)
-            publishHealthEvent(.healthy, message: "BLE ready for commands")
+            // Note: isReadyForCommands will be set when first valid BLE packet is received
+            appLog("🟢 BLE: TX characteristic configured - waiting for first BLE packet", category: .ble, level: .info)
+            publishHealthEvent(.healthy, message: "BLE characteristics configured")
             
-            // Don't automatically request settings - wait for first telemetry packet
+            // Don't automatically request settings - wait for first BLE packet
             // Settings will be requested only when user opens settings panel
         } else {
             appLog("🔴 BLE: Not ready for commands - TX characteristic not found", category: .ble, level: .error)
@@ -499,10 +499,6 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
     private func parseMessage(_ message: String) {
         // Processing message
         
-        if !isReadyForCommands {
-            isReadyForCommands = true
-        }
-        
         let components = message.components(separatedBy: "/")
         // Split into \(components.count) components
         
@@ -517,6 +513,13 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
         // Store the last message type for startup sequence logic
         DispatchQueue.main.async {
             self.lastMessageType = messageType
+        }
+        
+        // Set isReadyForCommands when first valid BLE packet is received
+        if !isReadyForCommands {
+            isReadyForCommands = true
+            appLog("🟢 BLE: Ready for commands - first valid BLE packet received (Type \(messageType))", category: .ble, level: .info)
+            publishHealthEvent(.healthy, message: "BLE ready for commands")
         }
         
         // Check if this is the first packet and publish telemetry availability event
@@ -542,7 +545,17 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
         case "0":
             // Device Basic Info and Status
             if let status = parseType0Message(components) {
-                appLog("📊 BLE PARSED (Type 0): Device status - signal=\(status.signalStrength)dBm", category: .ble, level: .info)
+                // Show all available packet data for Type 0 messages
+                let packetInfo = components.enumerated().map { (index, value) in
+                    return "[\(index)]=\(value)"
+                }.joined(separator: " ")
+                appLog("📊 BLE PARSED (Type 0): Device status - battery=\(String(format: "%.2f", status.batteryVoltage))V signal=\(status.signalStrength)dBm | Raw: \(packetInfo)", category: .ble, level: .info)
+            } else {
+                // Show raw packet even if parsing failed
+                let packetInfo = components.enumerated().map { (index, value) in
+                    return "[\(index)]=\(value)"
+                }.joined(separator: " ")
+                appLog("🔴 BLE PARSED (Type 0): Failed to parse - Raw: \(packetInfo)", category: .ble, level: .error)
             }
             
         case "1":

@@ -89,15 +89,18 @@ extension ServiceCoordinator {
         try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
         
         if let userLoc = userLocation {
-            // Set 25km zoom around user position
+            // Set 25km zoom around user position for startup
             let region = MKCoordinateRegion(
                 center: CLLocationCoordinate2D(latitude: userLoc.latitude, longitude: userLoc.longitude),
-                latitudinalMeters: 25000,
-                longitudinalMeters: 25000
+                span: MKCoordinateSpan(latitudeDelta: 0.225, longitudeDelta: 0.225) // ~25km zoom for startup
             )
+            let zoomKm = Int(region.span.latitudeDelta * 111) // Approximate km conversion
+            appLog("🔍 ZOOM: CoordinatorServices startup - \(zoomKm)km (\(String(format: "%.3f", region.span.latitudeDelta))°) at [\(String(format: "%.4f", region.center.latitude)), \(String(format: "%.4f", region.center.longitude))]", category: .general, level: .info)
             await MainActor.run {
                 self.region = region
             }
+        } else {
+            appLog("🔍 ZOOM: CoordinatorServices startup - no user location available", category: .general, level: .error)
         }
     }
     
@@ -289,9 +292,16 @@ extension ServiceCoordinator {
         // - The user position
         // - The landing position  
         // - If a balloon is flying, the route and predicted path
-        triggerShowAllAnnotations()
         
-        try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds for map to update
+        // Only trigger show all annotations if we have a landing point to display
+        if landingPoint != nil {
+            appLog("🔍 ZOOM: CoordinatorServices triggering show all annotations (landing point available)", category: .general, level: .info)
+            triggerShowAllAnnotations()
+            try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds for map to update
+        } else {
+            appLog("🔍 ZOOM: CoordinatorServices NOT triggering show all annotations (no landing point)", category: .general, level: .info)
+        }
+        
         // Initial map display complete
     }
 }
