@@ -147,6 +147,20 @@ Landing points are determined using this priority order:
 - Icons: `balloon.fill` for balloon, `figure.run` for user, specific pins for markers
 - Route hidden when balloon within 100m of user position
 
+### Zoom Level Management
+The app implements a zoom preservation system between heading and free modes:
+- **Startup Zoom**: 25km (0.225° span) for initial overview
+- **Mode Switching**: Preserves user's zoom level when toggling between heading/free modes
+- **User Control**: Users can zoom in/out in both modes (zoom is not locked)
+- **Debugging**: Comprehensive 🔍 ZOOM logs track all zoom operations
+- **State Management**: `savedZoomLevel` variable maintains zoom across mode switches
+- **Conditional Display**: `triggerShowAllAnnotations` only called when landing point is available
+
+#### Known Zoom Issues (To Be Addressed)
+- **Heading Mode Zoom**: Currently has limitations due to `.userLocation(followsHeading: true)` forcing zoom behavior
+- **Inconsistent Behavior**: Zoom may reset unexpectedly when switching to heading mode
+- **Planned Improvement**: Migrate to professional compass architecture using MKMapCamera and CLLocationDistance
+
 ### Testing Considerations
 - Requires iOS device for full BLE functionality
 - Location services need actual GPS or simulator location
@@ -164,6 +178,9 @@ The project has undergone significant architectural simplification, removing com
 - **StartupView refactored**: Moved all business logic to ServiceCoordinator, now handles only presentation
 - **DataPanelView refactored**: Removed all calculations and business logic, now only displays pre-formatted strings
 - **Descent rate logic**: Always calculated and displayed regardless of altitude; API usage decision moved to PredictionService
+- **BLE Communication**: Fixed isReadyForCommands to trigger on first valid BLE packet (any type)
+- **Zoom Level System**: Implemented zoom preservation between heading/free modes with comprehensive debugging
+- **Map Display Logic**: Added conditional triggerShowAllAnnotations based on landing point availability
 
 ### Known Architecture Improvements Needed
 The codebase currently has some separation of concerns violations that require refactoring:
@@ -171,17 +188,42 @@ The codebase currently has some separation of concerns violations that require r
 #### High Priority Refactoring Required
 - **SettingsView**: Contains BLE command generation, device configuration, and data format conversion
 - **TrackingMapView**: Makes direct service calls instead of using ServiceCoordinator methods
+- **Map Zoom System**: Current approach fights against MapKit; needs professional compass architecture
 
 #### Services to Extract
 Based on analysis, these new services should be created:
 - **DeviceConfigurationService**: Manage BLE commands and device settings
-- **MapStateService**: Handle map positioning and region management
+- **MapStateService**: Handle map positioning and region management with proper MKMapCamera control
+- **CompassService**: Professional compass integration with Core Location heading updates
 - **SettingsService**: Unified settings persistence and management
 
 #### Architectural Patterns to Implement
 - **Command Pattern**: For user actions (mute, prediction, settings changes)
 - **Strategy Pattern**: For different calculation algorithms
 - **Enhanced Observer Pattern**: For improved view-service communication
+- **Professional Compass Architecture**: MKMapCamera-based system with CLLocationDistance zoom preservation
+
+### Planned Compass Architecture Improvements
+The current zoom system will be replaced with a professional compass architecture:
+
+#### State Management
+- `mode: .free | .heading` - Explicit mode tracking
+- `currentDistance: CLLocationDistance` - Proper zoom preservation using MapKit's distance units
+- `userCoord: CLLocationCoordinate2D` - User position tracking
+- `displayHeading: CLLocationDirection` - Processed compass heading
+- `headingQualityOK: Bool` - Compass accuracy validation
+
+#### Compass Integration
+- Core Location `startUpdatingHeading()` with proper filtering
+- Quality controls: `headingAccuracy` validation, ignore poor readings
+- Smoothing: Circular low-pass filter with throttling to 10-20Hz
+- Fallback: Use `CLLocation.course` when speed ≥ 2-3 m/s for poor compass
+
+#### MapKit Implementation
+- **Free Mode**: `isScrollEnabled = true`, `isZoomEnabled = true`, heading = 0° (north-up)
+- **Heading Mode**: `isScrollEnabled = false`, `isZoomEnabled = true`, compass-aligned
+- **Camera Control**: `MKMapCamera` with preserved `currentDistance` for seamless zoom
+- **Zoom Tracking**: `regionDidChangeAnimated` to update `currentDistance` on pinch gestures
 
 ### Critical Implementation Details
 - All services must be initialized through AppServices factory
