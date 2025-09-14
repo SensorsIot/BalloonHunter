@@ -1,6 +1,52 @@
-// BLEService.swift
-// Bluetooth Low Energy communication service for MySondyGo devices
-// Extracted from Services.swift for better code organization
+/* [markdown]
+# 1. BLE Communication Service
+
+### Purpose
+Manages Bluetooth communication with **MySondyGo** devices.
+
+---
+
+### Input Triggers
+- Bluetooth state changes (powered on/off)  
+- Device discovery events  
+- Incoming BLE data packets  
+- User commands (e.g., get parameters, set frequency)
+
+---
+
+### Data Consumed
+- Raw BLE message strings (Types 0, 1, 2, 3 packets)  
+- User command requests  
+- Bluetooth peripheral data
+
+---
+
+### Data Published
+- `@Published var telemetryAvailabilityState: Bool` — Whether telemetry is available  
+- `@Published var latestTelemetry: TelemetryData?` — Latest parsed telemetry  
+- `@Published var deviceSettings: DeviceSettings` — MySondyGo device configuration  
+- `@Published var connectionStatus: ConnectionStatus` — `.connected`, `.disconnected`, `.connecting`  
+- `@Published var lastMessageType: String?` — `"0"`, `"1"`, `"2"`, `"3"`  
+- `PassthroughSubject<TelemetryData, Never>()` — Real-time telemetry stream  
+- `@Published var lastTelemetryUpdateTime: Date?` — Last update timestamp  
+- `@Published var isReadyForCommands: Bool` — Whether the device can receive commands
+
+---
+
+### Example Data
+```swift
+TelemetryData(
+    sondeName: "V4210129",
+    probeType: "RS41",
+    frequency: 404.500,
+    latitude: 46.9043,
+    longitude: 7.3100,
+    altitude: 1151.0,       // meters
+    verticalSpeed: 153.0,   // m/s
+    horizontalSpeed: 25.3,  // km/h
+    signalStrength: -90     // dBm
+)
+*/
 
 import Foundation
 import Combine
@@ -67,11 +113,15 @@ struct DeviceSettings: Codable {
                 probeType = convertProbeTypeIntToString(probeTypeInt)
                 appLog("DeviceSettings: Converted integer \(probeTypeInt) to: '\(probeType)'", category: .ble, level: .debug)
             } else {
-                // Device sent string directly - validate and use it
+                // Device sent string directly - validate and use it (handle both full and short forms)
                 let upperCaseType = probeTypeComponent.uppercased()
                 if ["RS41", "M20", "M10", "PILOT", "DFM"].contains(upperCaseType) {
                     probeType = upperCaseType
                     appLog("DeviceSettings: Using string probeType: '\(probeType)'", category: .ble, level: .debug)
+                } else if upperCaseType == "PIL" {
+                    // Handle shortened PILOT form
+                    probeType = "PILOT"
+                    appLog("DeviceSettings: Converted shortened 'PIL' to 'PILOT'", category: .ble, level: .debug)
                 } else {
                     probeType = ""
                     appLog("DeviceSettings: Invalid probeType string '\(probeTypeComponent)' - setting to empty", category: .ble, level: .debug)
@@ -192,6 +242,8 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
     @Published var lastTelemetryUpdateTime: Date? = nil
     @Published var isReadyForCommands = false
     let centralManagerPoweredOn = PassthroughSubject<Void, Never>()
+
+    
 
     init(persistenceService: PersistenceService) {
         self.persistenceService = persistenceService
@@ -560,6 +612,43 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
             
         case "1":
             // Probe Telemetry
+            if components.count >= 20 {
+                let named = [
+                    "probeType=\(components[1])",
+                    "frequency=\(components[2])MHz",
+                    "sondeName=\(components[3])",
+                    "latitude=\(components[4])",
+                    "longitude=\(components[5])",
+                    "altitude=\(components[6])m",
+                    "horizontalSpeed=\(components[7])m/s",
+                    "verticalSpeed=\(components[8])m/s",
+                    "RSSI=\(components[9])dBm",
+                    "batPercentage=\(components[10])%",
+                    "afcFrequency=\(components[11])",
+                    "burstKillerEnabled=\(components[12])",
+                    "burstKillerTime=\(components[13])s",
+                    "batVoltage=\(components[14])mV",
+                    "buzmute=\(components[15])",
+                    "reserved1=\(components[16])",
+                    "reserved2=\(components[17])",
+                    "reserved3=\(components[18])",
+                    "softwareVersion=\(components[19])"
+                ].joined(separator: " ")
+                appLog("📡 BLE MSG (Type 1): \(named)", category: .ble, level: .info)
+                // Plausibility checks
+                var warns: [String] = []
+                if let lat = Double(components[4]), !(lat >= -90 && lat <= 90) { warns.append("latitude out of range") }
+                if let lon = Double(components[5]), !(lon >= -180 && lon <= 180) { warns.append("longitude out of range") }
+                if let alt = Double(components[6]), !(alt >= -500 && alt <= 60000) { warns.append("altitude implausible") }
+                if let hs = Double(components[7]), !(hs >= 0 && hs <= 150) { warns.append("horizontalSpeed implausible (m/s)") }
+                if let vs = Double(components[8]), !(abs(vs) <= 100) { warns.append("verticalSpeed implausible (m/s)") }
+                // RSSI normalization handled in parser; no positivity warning needed
+                if let batp = Int(components[10]), !(0...100).contains(batp) { warns.append("batPercentage out of range") }
+                if let batmv = Int(components[14]), !(2500...5000).contains(batmv) { warns.append("batVoltage mV implausible") }
+                if !warns.isEmpty { appLog("⚠️ BLE MSG (Type 1) plausibility: " + warns.joined(separator: ", "), category: .ble, level: .info) }
+            } else {
+                appLog("🔴 BLE MSG (Type 1): Invalid field count=\(components.count)", category: .ble, level: .error)
+            }
             if let telemetry = parseType1Message(components) {
                 if telemetry.latitude == 0.0 && telemetry.longitude == 0.0 {
                     return // Skip invalid coordinates
@@ -570,10 +659,7 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
                     self.latestTelemetry = telemetry
                     self.lastTelemetryUpdateTime = Date()
                     self.telemetryData.send(telemetry)
-                    
-                    // Log parsed telemetry on one line
-                    appLog("📡 BLE PARSED: \(telemetry.sondeName) (\(telemetry.probeType)) lat=\(String(format: "%.4f", telemetry.latitude)) lon=\(String(format: "%.4f", telemetry.longitude)) alt=\(Int(telemetry.altitude))m vspd=\(String(format: "%.1f", telemetry.verticalSpeed))m/s rssi=\(telemetry.signalStrength)dBm", category: .ble, level: .info)
-                    
+                    // Suppress verbose per-packet parsed telemetry log
                     // Telemetry is now available through @Published latestTelemetry property
                     // Services observe this directly instead of using EventBus
                     
@@ -584,12 +670,73 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
             
         case "2":
             // Name Only
+            if components.count >= 10 {
+                let named = [
+                    "probeType=\(components[1])",
+                    "frequency=\(components[2])MHz",
+                    "sondeName=\(components[3])",
+                    "RSSI=\(components[4])dBm",
+                    "batPercentage=\(components[5])%",
+                    "afcFrequency=\(components[6])",
+                    "batVoltage=\(components[7])mV",
+                    "buzmute=\(components[8])",
+                    "softwareVersion=\(components[9])"
+                ].joined(separator: " ")
+                appLog("🏷️ BLE MSG (Type 2): \(named)", category: .ble, level: .info)
+                // Plausibility checks (limited fields)
+                var warns: [String] = []
+                if let rssi = Double(components[4]), rssi > 0 { warns.append("RSSI positive (expected negative dBm)") }
+                if let batp = Int(components[5]), !(0...100).contains(batp) { warns.append("batPercentage out of range") }
+                if let batmv = Int(components[7]), !(2500...5000).contains(batmv) { warns.append("batVoltage mV implausible") }
+                if !warns.isEmpty { appLog("⚠️ BLE MSG (Type 2) plausibility: " + warns.joined(separator: ", "), category: .ble, level: .info) }
+            } else {
+                appLog("🔴 BLE MSG (Type 2): Invalid field count=\(components.count)", category: .ble, level: .error)
+            }
             if let nameData = parseType2Message(components) {
                 appLog("🏷️ BLE PARSED (Type 2): Sonde name - \(nameData.name)", category: .ble, level: .info)
             }
             
         case "3":
             // Device Configuration
+            if components.count >= 22 {
+                let named = [
+                    "probeType=\(components[1])",
+                    "frequency=\(components[2])MHz",
+                    "oledSDA=\(components[3])",
+                    "oledSCL=\(components[4])",
+                    "oledRST=\(components[5])",
+                    "ledPin=\(components[6])",
+                    "RS41Bandwidth=\(components[7])",
+                    "M20Bandwidth=\(components[8])",
+                    "M10Bandwidth=\(components[9])",
+                    "PILOTBandwidth=\(components[10])",
+                    "DFMBandwidth=\(components[11])",
+                    "callSign=\(components[12])",
+                    "frequencyCorrection=\(components[13])",
+                    "batPin=\(components[14])",
+                    "batMin=\(components[15])",
+                    "batMax=\(components[16])",
+                    "batType=\(components[17])",
+                    "lcdType=\(components[18])",
+                    "nameType=\(components[19])",
+                    "buzPin=\(components[20])",
+                    "softwareVersion=\(components[21])"
+                ].joined(separator: " ")
+                appLog("⚙️ BLE MSG (Type 3): \(named)", category: .ble, level: .info)
+                // Plausibility checks for pins and fields
+                var warns: [String] = []
+                let intIn = { (i: Int) -> Int? in Int(components[i]) }
+                if let sda = intIn(3), sda < 0 || sda > 39 { warns.append("oledSDA out of ESP32 range") }
+                if let scl = intIn(4), scl < 0 || scl > 39 { warns.append("oledSCL out of ESP32 range") }
+                if let rst = intIn(5), rst < 0 || rst > 39 { warns.append("oledRST out of ESP32 range") }
+                if let led = intIn(6), led < 0 || led > 39 { warns.append("ledPin out of ESP32 range") }
+                if let batPin = intIn(14), batPin < 0 || batPin > 39 { warns.append("batPin out of ESP32 range") }
+                if let batMin = intIn(15), !(2000...4500).contains(batMin) { warns.append("batMin implausible") }
+                if let batMax = intIn(16), !(3000...5000).contains(batMax) { warns.append("batMax implausible") }
+                if !warns.isEmpty { appLog("⚠️ BLE MSG (Type 3) plausibility: " + warns.joined(separator: ", "), category: .ble, level: .info) }
+            } else {
+                appLog("🔴 BLE MSG (Type 3): Invalid field count=\(components.count)", category: .ble, level: .error)
+            }
             if let settings = parseType3Message(components) {
                 appLog("⚙️ BLE PARSED (Type 3): Device config - callSign=\(settings.callSign) freq=\(String(format: "%.1f", settings.frequency))MHz probeType=\(settings.probeType)", category: .ble, level: .info)
                 DispatchQueue.main.async {
@@ -627,6 +774,8 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
     private func parseType1Message(_ components: [String]) -> TelemetryData? {
         guard components.count >= 20 else { return nil }
         
+        let probeType = components[1]
+        let frequency = Double(components[2]) ?? 0.0
         let sondeName = components[3]
         let latitude = Double(components[4]) ?? 0.0
         let longitude = Double(components[5]) ?? 0.0
@@ -638,6 +787,8 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
         
         return TelemetryData(
             sondeName: sondeName,
+            probeType: probeType,
+            frequency: frequency,
             latitude: latitude,
             longitude: longitude,
             altitude: altitude,
@@ -972,83 +1123,46 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
     
     // MARK: - Device Settings Management (moved from SettingsView for proper separation of concerns)
     
-    /// Sends device settings to MySondyGo device, comparing with initial settings to only send changed values
-    func sendDeviceSettings(current: DeviceSettings, initial: DeviceSettings) {
-        appLog("BLE: Starting device settings update - comparing current vs initial", category: .ble, level: .info)
-        
+    /// Compute the list of commands needed to apply settings differences (testable, no BLE I/O)
+    func computeDeviceSettingsCommands(current: DeviceSettings, initial: DeviceSettings) -> [String] {
+        var commands: [String] = []
         // Pin configurations
-        if current.oledSDA != initial.oledSDA {
-            let command = "o{oled_sda=\(current.oledSDA)}o"
-            sendCommand(command: command)
-        }
-        if current.oledSCL != initial.oledSCL {
-            let command = "o{oled_scl=\(current.oledSCL)}o"
-            sendCommand(command: command)
-        }
-        if current.oledRST != initial.oledRST {
-            let command = "o{oled_rst=\(current.oledRST)}o"
-            sendCommand(command: command)
-        }
-        if current.ledPin != initial.ledPin {
-            let command = "o{led_pout=\(current.ledPin)}o"
-            sendCommand(command: command)
-        }
-        if current.buzPin != initial.buzPin {
-            let command = "o{buz_pin=\(current.buzPin)}o"
-            sendCommand(command: command)
-        }
-        
+        if current.oledSDA != initial.oledSDA { commands.append("o{oled_sda=\(current.oledSDA)}o") }
+        if current.oledSCL != initial.oledSCL { commands.append("o{oled_scl=\(current.oledSCL)}o") }
+        if current.oledRST != initial.oledRST { commands.append("o{oled_rst=\(current.oledRST)}o") }
+        if current.ledPin != initial.ledPin { commands.append("o{led_pout=\(current.ledPin)}o") }
+        if current.buzPin != initial.buzPin { commands.append("o{buz_pin=\(current.buzPin)}o") }
+
         // Battery settings
-        if current.batPin != initial.batPin {
-            let command = "o{battery=\(current.batPin)}o"
-            sendCommand(command: command)
-        }
-        if current.batMin != initial.batMin {
-            let command = "o{vBatMin=\(current.batMin)}o"
-            sendCommand(command: command)
-        }
-        if current.batMax != initial.batMax {
-            let command = "o{vBatMax=\(current.batMax)}o"
-            sendCommand(command: command)
-        }
-        if current.batType != initial.batType {
-            let command = "o{vBatType=\(current.batType)}o"
-            sendCommand(command: command)
-        }
-        
+        if current.batPin != initial.batPin { commands.append("o{battery=\(current.batPin)}o") }
+        if current.batMin != initial.batMin { commands.append("o{vBatMin=\(current.batMin)}o") }
+        if current.batMax != initial.batMax { commands.append("o{vBatMax=\(current.batMax)}o") }
+        if current.batType != initial.batType { commands.append("o{vBatType=\(current.batType)}o") }
+
         // Display settings
-        if current.lcdType != initial.lcdType {
-            let command = "o{oled=\(current.lcdType)}o"
-            sendCommand(command: command)
-        }
-        if current.nameType != initial.nameType {
-            let command = "o{name=\(current.nameType)}o"
-            sendCommand(command: command)
-        }
-        
-        // Serial settings (with baud rate conversion)
-        if current.bluetoothStatus != initial.bluetoothStatus {
-            let command = "o{bt=\(current.bluetoothStatus)}o"
-            sendCommand(command: command)
-        }
-        if current.lcdStatus != initial.lcdStatus {
-            let command = "o{lcd=\(current.lcdStatus)}o"
-            sendCommand(command: command)
-        }
+        if current.lcdType != initial.lcdType { commands.append("o{oled=\(current.lcdType)}o") }
+        if current.nameType != initial.nameType { commands.append("o{name=\(current.nameType)}o") }
+
+        // Serial and misc settings
+        if current.bluetoothStatus != initial.bluetoothStatus { commands.append("o{bt=\(current.bluetoothStatus)}o") }
+        if current.lcdStatus != initial.lcdStatus { commands.append("o{lcd=\(current.lcdStatus)}o") }
         if current.serialSpeed != initial.serialSpeed {
             let baudIndex = convertBaudRateToIndex(current.serialSpeed)
-            let command = "o{serBaud=\(baudIndex)}o"
-            sendCommand(command: command)
+            commands.append("o{serBaud=\(baudIndex)}o")
         }
-        if current.serialPort != initial.serialPort {
-            let command = "o{ser=\(current.serialPort)}o"
-            sendCommand(command: command)
-        }
-        if current.aprsName != initial.aprsName {
-            let command = "o{call=\(current.aprsName)}o"
-            sendCommand(command: command)
-        }
-        
+        if current.serialPort != initial.serialPort { commands.append("o{ser=\(current.serialPort)}o") }
+        if current.aprsName != initial.aprsName { commands.append("o{call=\(current.aprsName)}o") }
+
+        return commands
+    }
+
+    
+
+    /// Sends device settings to the device by computing differences and emitting commands
+    func sendDeviceSettings(current: DeviceSettings, initial: DeviceSettings) {
+        appLog("BLE: Starting device settings update - comparing current vs initial", category: .ble, level: .info)
+        let commands = computeDeviceSettingsCommands(current: current, initial: initial)
+        for cmd in commands { sendCommand(command: cmd) }
         appLog("BLE: Device settings update completed", category: .ble, level: .info)
     }
     

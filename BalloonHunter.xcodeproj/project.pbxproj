@@ -8,11 +8,38 @@
 
 /* Begin PBXBuildFile section */
 		473FAF832E4B0F5E00D53910 /* BalloonHunter.xcdatamodeld in Sources */ = {isa = PBXBuildFile; fileRef = 473FAF812E4B0F5E00D53910 /* BalloonHunter.xcdatamodeld */; };
+		A7F0E0012E5C000000000001 /* BalloonHunterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7F0DFF32E5BFFFF00000001 /* BalloonHunterTests.swift */; };
+		A7F0E0022E5C000000000001 /* PredictionCacheTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7F0DFF42E5BFFFF00000001 /* PredictionCacheTests.swift */; };
+		A7F0E0032E5C000000000001 /* BLEDeviceSettingsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7F0DFF52E5BFFFF00000001 /* BLEDeviceSettingsTests.swift */; };
+		A7F0E00A2E5C000500000001 /* LaunchUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7F0E0092E5C000500000001 /* LaunchUITests.swift */; };
 /* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		A7F0E0042E5C000000000001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 477118052E3B511A00C79172 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 4771180C2E3B511A00C79172;
+			remoteInfo = BalloonHunter;
+		};
+		A7F0E0112E5C000500000001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 477118052E3B511A00C79172 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 4771180C2E3B511A00C79172;
+			remoteInfo = BalloonHunter;
+		};
+/* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
 		473FAF822E4B0F5E00D53910 /* BalloonHunter.xcdatamodel */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcdatamodel; path = BalloonHunter.xcdatamodel; sourceTree = "<group>"; };
 		4771180D2E3B511A00C79172 /* BalloonHunter.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = BalloonHunter.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A7F0DFF22E5BFFFF00000001 /* BalloonHunterTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = BalloonHunterTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		A7F0DFF32E5BFFFF00000001 /* BalloonHunterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BalloonHunterTests.swift; sourceTree = "<group>"; };
+		A7F0DFF42E5BFFFF00000001 /* PredictionCacheTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PredictionCacheTests.swift; sourceTree = "<group>"; };
+		A7F0DFF52E5BFFFF00000001 /* BLEDeviceSettingsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BLEDeviceSettingsTests.swift; sourceTree = "<group>"; };
+		A7F0E0082E5C000500000001 /* BalloonHunterUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = BalloonHunterUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		A7F0E0092E5C000500000001 /* LaunchUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaunchUITests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -44,6 +71,20 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		A7F0DFFB2E5C000000000001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A7F0E00E2E5C000500000001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -52,6 +93,8 @@
 			children = (
 				473FAF812E4B0F5E00D53910 /* BalloonHunter.xcdatamodeld */,
 				4771180F2E3B511A00C79172 /* BalloonHunter */,
+				A7F0DFF62E5BFFFF00000001 /* BalloonHunterTests */,
+				A7F0E01A2E5C000500000001 /* BalloonHunterUITests */,
 				4771180E2E3B511A00C79172 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -60,8 +103,28 @@
 			isa = PBXGroup;
 			children = (
 				4771180D2E3B511A00C79172 /* BalloonHunter.app */,
+				A7F0DFF22E5BFFFF00000001 /* BalloonHunterTests.xctest */,
+				A7F0E0082E5C000500000001 /* BalloonHunterUITests.xctest */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		A7F0DFF62E5BFFFF00000001 /* BalloonHunterTests */ = {
+			isa = PBXGroup;
+			children = (
+				A7F0DFF32E5BFFFF00000001 /* BalloonHunterTests.swift */,
+				A7F0DFF42E5BFFFF00000001 /* PredictionCacheTests.swift */,
+				A7F0DFF52E5BFFFF00000001 /* BLEDeviceSettingsTests.swift */,
+			);
+			path = BalloonHunterTests;
+			sourceTree = "<group>";
+		};
+		A7F0E01A2E5C000500000001 /* BalloonHunterUITests */ = {
+			isa = PBXGroup;
+			children = (
+				A7F0E0092E5C000500000001 /* LaunchUITests.swift */,
+			);
+			path = BalloonHunterUITests;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -88,6 +151,42 @@
 			productName = BalloonHunter;
 			productReference = 4771180D2E3B511A00C79172 /* BalloonHunter.app */;
 			productType = "com.apple.product-type.application";
+		};
+		A7F0DFFA2E5C000000000001 /* BalloonHunterTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A7F0E0062E5C000000000001 /* Build configuration list for PBXNativeTarget "BalloonHunterTests" */;
+			buildPhases = (
+				A7F0DFF82E5C000000000001 /* Sources */,
+				A7F0DFFB2E5C000000000001 /* Frameworks */,
+				A7F0DFFC2E5C000000000001 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				A7F0E0052E5C000000000001 /* PBXTargetDependency */,
+			);
+			name = BalloonHunterTests;
+			productName = BalloonHunterTests;
+			productReference = A7F0DFF22E5BFFFF00000001 /* BalloonHunterTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		A7F0E00D2E5C000500000001 /* BalloonHunterUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A7F0E0132E5C000500000001 /* Build configuration list for PBXNativeTarget "BalloonHunterUITests" */;
+			buildPhases = (
+				A7F0E00B2E5C000500000001 /* Sources */,
+				A7F0E00E2E5C000500000001 /* Frameworks */,
+				A7F0E00F2E5C000500000001 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				A7F0E0122E5C000500000001 /* PBXTargetDependency */,
+			);
+			name = BalloonHunterUITests;
+			productName = BalloonHunterUITests;
+			productReference = A7F0E0082E5C000500000001 /* BalloonHunterUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
 		};
 /* End PBXNativeTarget section */
 
@@ -119,12 +218,28 @@
 			projectRoot = "";
 			targets = (
 				4771180C2E3B511A00C79172 /* BalloonHunter */,
+				A7F0DFFA2E5C000000000001 /* BalloonHunterTests */,
+				A7F0E00D2E5C000500000001 /* BalloonHunterUITests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		4771180B2E3B511A00C79172 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A7F0DFFC2E5C000000000001 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A7F0E00F2E5C000500000001 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -142,7 +257,38 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		A7F0DFF82E5C000000000001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A7F0E0012E5C000000000001 /* BalloonHunterTests.swift in Sources */,
+				A7F0E0022E5C000000000001 /* PredictionCacheTests.swift in Sources */,
+				A7F0E0032E5C000000000001 /* BLEDeviceSettingsTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A7F0E00B2E5C000500000001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A7F0E00A2E5C000500000001 /* LaunchUITests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		A7F0E0052E5C000000000001 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 4771180C2E3B511A00C79172 /* BalloonHunter */;
+			targetProxy = A7F0E0042E5C000000000001 /* PBXContainerItemProxy */;
+		};
+		A7F0E0122E5C000500000001 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 4771180C2E3B511A00C79172 /* BalloonHunter */;
+			targetProxy = A7F0E0112E5C000500000001 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		477118162E3B511B00C79172 /* Debug */ = {
@@ -268,6 +414,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEFINES_MODULE = YES;
 				DEVELOPMENT_TEAM = 2REN69VTQ3;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -317,6 +464,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEFINES_MODULE = YES;
 				DEVELOPMENT_TEAM = 2REN69VTQ3;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -359,6 +507,90 @@
 			};
 			name = Release;
 		};
+		A7F0E0072E5C000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = 2REN69VTQ3;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.6;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = HB9BLA.BalloonHunterTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = auto;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = BalloonHunter;
+			};
+			name = Debug;
+		};
+		A7F0E0082E5C000000000001 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = 2REN69VTQ3;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.6;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = HB9BLA.BalloonHunterTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = auto;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = BalloonHunter;
+			};
+			name = Release;
+		};
+		A7F0E0142E5C000500000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = 2REN69VTQ3;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.6;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = HB9BLA.BalloonHunterUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = auto;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = BalloonHunter;
+			};
+			name = Debug;
+		};
+		A7F0E0152E5C000500000001 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = 2REN69VTQ3;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.6;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = HB9BLA.BalloonHunterUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = auto;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = BalloonHunter;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -376,6 +608,24 @@
 			buildConfigurations = (
 				477118192E3B511B00C79172 /* Debug */,
 				4771181A2E3B511B00C79172 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A7F0E0062E5C000000000001 /* Build configuration list for PBXNativeTarget "BalloonHunterTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A7F0E0072E5C000000000001 /* Debug */,
+				A7F0E0082E5C000000000001 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A7F0E0132E5C000500000001 /* Build configuration list for PBXNativeTarget "BalloonHunterUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A7F0E0142E5C000500000001 /* Debug */,
+				A7F0E0152E5C000500000001 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

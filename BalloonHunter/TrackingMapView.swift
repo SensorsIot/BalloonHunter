@@ -66,17 +66,8 @@ struct TrackingMapView: View {
                         // Show All or Point button
                         if serviceCoordinator.landingPoint != nil {
                             Button("All") {
-                                if serviceCoordinator.isHeadingMode {
-                                    serviceCoordinator.isHeadingMode = false
-                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                                        serviceCoordinator.triggerShowAllAnnotations()
-                                    }
-                                } else {
-                                    serviceCoordinator.triggerShowAllAnnotations()
-                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                                        updateMapToShowAllAnnotations()
-                                    }
-                                }
+                                if serviceCoordinator.isHeadingMode { serviceCoordinator.isHeadingMode = false }
+                                serviceCoordinator.triggerShowAllAnnotations()
                             }
                             .buttonStyle(.bordered)
                         } else {
@@ -115,7 +106,7 @@ struct TrackingMapView: View {
                 }
 
                 // Direct ServiceCoordinator Map Rendering
-                Map(position: $position, interactionModes: serviceCoordinator.isHeadingMode ? [] : .all) {
+                Map(position: $position, interactionModes: serviceCoordinator.isHeadingMode ? .zoom : .all) {
                     
                     // 1. Balloon Track: Historic track as thin red line
                     if let balloonTrackPath = serviceCoordinator.balloonTrackPath {
@@ -199,47 +190,29 @@ struct TrackingMapView: View {
                 .mapControlVisibility(serviceCoordinator.isHeadingMode ? .hidden : .automatic)
                 .frame(height: geometry.size.height * 0.7)
                 .onMapCameraChange { context in
+                    guard !showSettings else { return }
                     // Update saved zoom level when user changes map view
                     savedZoomLevel = context.region.span
                     logZoomChange("Map camera changed by user", span: context.region.span, center: context.region.center)
                 }
                 .onReceive(serviceCoordinator.$region) { region in
+                    guard !showSettings else { return }
                     if let region = region, !serviceCoordinator.isHeadingMode {
-                        logZoomChange("ServiceCoordinator region update (free mode)", span: region.span, center: region.center)
+                        // Reduced logging: keep map updates quiet unless debugging
                         position = .region(region)
                     }
                 }
                 .onReceive(serviceCoordinator.$isHeadingMode) { isHeadingMode in
+                    guard !showSettings else { return }
                     updateMapPositionForHeadingMode(isHeadingMode)
                 }
                 .onReceive(serviceCoordinator.$userLocation) { userLocation in
+                    guard !showSettings else { return }
                     if serviceCoordinator.isHeadingMode {
                         updateMapPositionForHeadingMode(true)
                     }
                 }
-                .onReceive(serviceCoordinator.$showAllAnnotations) { shouldShowAll in
-                    if shouldShowAll {
-                        // Use saved zoom level instead of .automatic to preserve 25km startup zoom
-                        if let userLocation = serviceCoordinator.userLocation {
-                            let userCoordinate = CLLocationCoordinate2D(
-                                latitude: userLocation.latitude,
-                                longitude: userLocation.longitude
-                            )
-                            let region = MKCoordinateRegion(
-                                center: userCoordinate,
-                                span: savedZoomLevel
-                            )
-                            logZoomChange("Show all annotations with saved zoom", span: savedZoomLevel, center: userCoordinate)
-                            position = .region(region)
-                        } else {
-                            appLog("🔍 ZOOM: Show all annotations - using .automatic (no user location)", category: .general, level: .info)
-                            position = .automatic
-                        }
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                            serviceCoordinator.showAllAnnotations = false // Reset the trigger
-                        }
-                    }
-                }
+                .onReceive(serviceCoordinator.$showAllAnnotations) { _ in /* deprecated path; coordinator computes region now */ }
                 .onReceive(serviceCoordinator.$transportMode) { _ in
                     // Transport mode changed - trigger route recalculation
                     Task {
@@ -259,6 +232,9 @@ struct TrackingMapView: View {
                 .environmentObject(serviceCoordinator.bleCommunicationService)
                 .environmentObject(serviceCoordinator.persistenceService)
                 .environmentObject(userSettings)
+        }
+        .onChange(of: showSettings) { _, isOpen in
+            serviceCoordinator.suspendCameraUpdates = isOpen
         }
     }
     

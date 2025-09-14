@@ -71,6 +71,10 @@ struct BalloonHunterApp: App {
                         .environmentObject(appSettings)
                         .environmentObject(appServices.userSettings)
                         .environmentObject(serviceCoordinator)
+                        .environmentObject(appServices.bleCommunicationService)
+                        .environmentObject(appServices.balloonTrackService)
+                        .environmentObject(appServices.balloonPositionService)
+                        .environmentObject(serviceCoordinator.predictionService)
                 } else {
                     // Logo and startup sequence
                     VStack {

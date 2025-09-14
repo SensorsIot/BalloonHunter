@@ -7,8 +7,10 @@ import MapKit
 import OSLog
 import UIKit
 
-// MARK: - Service Coordinator
+// MARK: - Coordinator
 // Transitional class for service coordination and dependency injection
+
+ 
 
 @MainActor
 final class ServiceCoordinator: ObservableObject {
@@ -30,6 +32,7 @@ final class ServiceCoordinator: ObservableObject {
     @Published var balloonTelemetry: TelemetryData? = nil
     @Published var userLocation: LocationData? = nil
     @Published var landingPoint: CLLocationCoordinate2D? = nil
+    @Published var isBalloonLanded: Bool = false
     @Published var burstPoint: CLLocationCoordinate2D? = nil
     
     // Additional data for DataPanelView
@@ -41,8 +44,7 @@ final class ServiceCoordinator: ObservableObject {
     @Published var smoothedVerticalSpeed: Double = 0.0
     @Published var smoothedHorizontalSpeed: Double = 0.0
     @Published var isTelemetryStale: Bool = false
-    @Published var remainingFlightTimeString: String = "--:--"
-    @Published var predictedLandingTimeString: String = "--:--"
+    // Flight/landing time strings provided directly by PredictionService; UI binds there
     @Published var frequencyString: String = "0.000"
     @Published var deviceSettings: DeviceSettings?
     @Published var displayDescentRateString: String = "--"
@@ -64,6 +66,7 @@ final class ServiceCoordinator: ObservableObject {
     @Published var isRouteVisible: Bool = true
     @Published var isBuzzerMuted: Bool = false
     @Published var showAllAnnotations: Bool = false
+    @Published var suspendCameraUpdates: Bool = false
     
     // Core services (initialized in init for MapState dependencies)  
     let currentLocationService: CurrentLocationService
@@ -90,6 +93,10 @@ final class ServiceCoordinator: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
     private var lastRouteCalculationTime = Date.distantPast
     private var lastPredictionTime = Date.distantPast
+    private var lastPredictionAttemptTime = Date.distantPast
+    private var isPredictionInFlight: Bool = false
+    private var predictionTimer: Timer? = nil
+    private var hasTriggeredStartupPrediction: Bool = false
     private var lastUserLocation: CLLocationCoordinate2D?
     private var lastLandingPoint: CLLocationCoordinate2D?
     private var lastUserLocationUpdateTime = Date.distantPast
@@ -102,8 +109,7 @@ final class ServiceCoordinator: ObservableObject {
     // User settings reference (for external access)
     var userSettings = UserSettings()
     
-    // Automatic descent rate calculation
-    private var descentRateHistory: [Double] = [] // Store up to 20 values for smoothing
+    // Adjusted descent rate now computed by BalloonTrackService
     
     // Phase 2: Telemetry counter for comparison logging
     private var telemetryCounter = 0
@@ -144,9 +150,9 @@ final class ServiceCoordinator: ObservableObject {
         _ = balloonTrackService  
         _ = routeCalculationService
         
-        // Phase 3: Start independent prediction service
-        appLog("STARTUP: Starting automatic prediction service with 60-second intervals", category: .general, level: .info)
-        predictionService.startAutomaticPredictions()
+        // Phase 3: Start 60-second coordinator timer for predictions
+        appLog("STARTUP: Coordinator owns 60-second prediction timer", category: .general, level: .info)
+        startCoordinatorPredictionTimer()
         
         
         // Services initialized - startup sequence will be triggered by BalloonHunterApp
@@ -218,25 +224,7 @@ final class ServiceCoordinator: ObservableObject {
         }
     }
     
-    private func waitForSettingsResponse() async {
-        appLog("ServiceCoordinator: Waiting for settings response from MySondyGo", category: .general, level: .info)
-        
-        let initialDeviceSettings = bleCommunicationService.deviceSettings
-        let timeout = Date().addingTimeInterval(3) // 3 seconds for settings response
-        
-        while Date() < timeout {
-            // Check if device settings have been updated (different from initial)
-            if bleCommunicationService.deviceSettings.frequency != initialDeviceSettings.frequency ||
-               !bleCommunicationService.deviceSettings.probeType.isEmpty {
-                appLog("ServiceCoordinator: Settings response received and stored locally", category: .general, level: .info)
-                return
-            }
-            
-            try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 second checks
-        }
-        
-        appLog("ServiceCoordinator: Settings response timeout - proceeding with defaults", category: .general, level: .info)
-    }
+    // Settings response handling removed from startup; BLE will fetch opportunistically
     
     // loadAllPersistenceData moved to CoordinatorServices.swift
     
@@ -291,11 +279,18 @@ final class ServiceCoordinator: ObservableObject {
         appLog("ServiceCoordinator: Determining landing point per FSD priority order", category: .general, level: .info)
         
         // Priority 1: If telemetry received and balloon has landed, current position is landing point
-        if let telemetry = balloonTelemetry, telemetry.verticalSpeed >= -0.5 && telemetry.altitude < 500 {
-            let currentPosition = CLLocationCoordinate2D(latitude: telemetry.latitude, longitude: telemetry.longitude)
-            landingPoint = currentPosition
-            appLog("ServiceCoordinator: Landing point set from current balloon position (landed)", category: .general, level: .info)
-            return
+        // Use simple criteria: low altitude OR low vertical speed (more permissive than original)
+        if let telemetry = balloonTelemetry {
+            let altitudeCheck = telemetry.altitude < 1000 && abs(telemetry.verticalSpeed) < 2.0
+            let lowAltitudeCheck = telemetry.altitude < 500
+            appLog("ServiceCoordinator: Landing check - altitude: \(Int(telemetry.altitude))m, vSpeed: \(String(format: "%.1f", telemetry.verticalSpeed))m/s, lowAlt: \(lowAltitudeCheck), combined: \(altitudeCheck)", category: .general, level: .info)
+            
+            if altitudeCheck || lowAltitudeCheck {
+                let currentPosition = CLLocationCoordinate2D(latitude: telemetry.latitude, longitude: telemetry.longitude)
+                landingPoint = currentPosition
+                appLog("ServiceCoordinator: Landing point set from current balloon position (landed)", category: .general, level: .info)
+                return
+            }
         }
         
         // Priority 2: If balloon in flight, wait for and use predicted landing position
@@ -350,9 +345,8 @@ final class ServiceCoordinator: ObservableObject {
         
         // Only trigger show all annotations if we have a landing point to display
         if landingPoint != nil {
-            appLog("🔍 ZOOM: ServiceCoordinator triggering show all annotations (landing point available)", category: .general, level: .info)
-            triggerShowAllAnnotations()
-            try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds for map to update
+            appLog("🔍 ZOOM: ServiceCoordinator computing camera for all annotations (landing point available)", category: .general, level: .info)
+            updateCameraToShowAllAnnotations()
             appLog("ServiceCoordinator: Initial map display complete with all annotations", category: .general, level: .info)
         } else {
             appLog("🔍 ZOOM: ServiceCoordinator NOT triggering show all annotations (no landing point)", category: .general, level: .info)
@@ -409,20 +403,35 @@ final class ServiceCoordinator: ObservableObject {
             }
             .store(in: &cancellables)
             
-        // Subscribe to prediction service for time strings
-        predictionService.$remainingFlightTimeString
+        // Subscribe to advanced landing detection from BalloonTrackService
+        balloonTrackService.$isBalloonLanded
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] time in
-                self?.remainingFlightTimeString = time
+            .sink { [weak self] hasLanded in
+                self?.isBalloonLanded = hasLanded
+                if hasLanded, let position = self?.balloonTrackService.landingPosition {
+                    // Advanced landing detection triggered - update landing point
+                    self?.landingPoint = position
+                    appLog("ServiceCoordinator: Advanced landing detection - landing point set to [\(String(format: "%.4f", position.latitude)), \(String(format: "%.4f", position.longitude))]", category: .general, level: .info)
+                }
+            }
+            .store(in: &cancellables)
+
+        // Subscribe to adjusted descent rate from BalloonTrackService
+        balloonTrackService.$adjustedDescentRate
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] rate in
+                guard let self = self else { return }
+                if let r = rate {
+                    self.smoothedDescentRate = r
+                    self.displayDescentRateString = String(format: "%.1f", abs(r))
+                } else {
+                    self.smoothedDescentRate = nil
+                    self.displayDescentRateString = String(format: "%.1f", self.userSettings.descentRate)
+                }
             }
             .store(in: &cancellables)
             
-        predictionService.$predictedLandingTimeString
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] time in
-                self?.predictedLandingTimeString = time
-            }
-            .store(in: &cancellables)
+        // UI binds directly to PredictionService for time strings
             
         // Subscribe to device settings changes
         bleCommunicationService.$deviceSettings
@@ -439,19 +448,17 @@ final class ServiceCoordinator: ObservableObject {
     // MARK: - High-Level UI Methods for View Actions
     
     func triggerShowAllAnnotations() {
-        showAllAnnotations = true
-        appLog("🔍 ZOOM: ServiceCoordinator triggerShowAllAnnotations called", category: .general, level: .info)
+        appLog("🔍 ZOOM: ServiceCoordinator triggerShowAllAnnotations called (computing region)", category: .general, level: .info)
+        updateCameraToShowAllAnnotations()
     }
     
     func triggerPrediction() {
         appLog("ServiceCoordinator: Manual prediction triggered from UI", category: .general, level: .info)
-        
         guard let telemetry = balloonTelemetry else {
             appLog("ServiceCoordinator: No telemetry available for prediction", category: .general, level: .error)
             return
         }
-        
-        Task {
+        Task { @MainActor in
             await executePrediction(
                 telemetry: telemetry,
                 measuredDescentRate: smoothedDescentRate,
@@ -471,6 +478,20 @@ final class ServiceCoordinator: ObservableObject {
         bleCommunicationService.setMute(muted)
     }
     
+    func sendFrequencyAndTypeToDevice(frequency: Double, probeType: String) {
+        appLog("ServiceCoordinator: Sending frequency \(frequency) MHz and type \(probeType) to device", category: .ble, level: .info)
+        
+        // Map probe type to command value (matching BLEService.ProbeType enum)
+        let sondeTypeMapping = [
+            "RS41": 1, "M20": 2, "M10": 3, "PILOT": 4, "DFM": 5
+        ]
+        let probeTypeNumber = sondeTypeMapping[probeType] ?? 1
+        
+        // Generate and send command
+        let commandString = "o{f=\(String(format: "%.2f", frequency))/tipo=\(probeTypeNumber)}o"
+        bleCommunicationService.sendCommand(command: commandString)
+    }
+    
     func saveDataOnAppClose() {
         appLog("ServiceCoordinator: Saving data on app close", category: .general, level: .info)
         persistenceService.saveOnAppClose(balloonTrackService: balloonTrackService)
@@ -483,33 +504,33 @@ final class ServiceCoordinator: ObservableObject {
     
     // Direct telemetry handling with prediction timing
     private func handleBalloonTelemetry(_ telemetry: TelemetryData) {
-        // Processing telemetry (log removed for reduction)
+        // Suppress verbose per-packet telemetry summary in debug logs
         
         // Update ServiceCoordinator with telemetry data (direct subscription)
         balloonTelemetry = telemetry
+        // Keep frequency visible without waiting for device settings
+        if telemetry.frequency > 0 {
+            frequencyString = String(format: "%.3f", telemetry.frequency)
+        }
         
         // Update AFC frequency tracking (moved from SettingsView for proper separation of concerns)
         updateAFCTracking(telemetry)
         
-        // Calculate smoothed descent rate for data panel
-        calculateAutomaticDescentRate(telemetry)
+        // Adjusted descent rate is computed by BalloonTrackService; subscription updates UI
         
         // Update map with balloon position and annotations
         updateMapWithBalloonPosition(telemetry)
         
-        // Check if we should request a prediction based on timing
-        if shouldRequestPrediction(telemetry) {
-            appLog("ServiceCoordinator: Prediction needed - executing directly", category: .general, level: .info)
-            
+        // Startup trigger: first telemetry after launch -> immediate prediction once
+        if !hasTriggeredStartupPrediction {
+            hasTriggeredStartupPrediction = true
             Task {
                 await executePrediction(
                     telemetry: telemetry,
                     measuredDescentRate: smoothedDescentRate,
-                    force: false
+                    force: true
                 )
             }
-        } else {
-            appLog("ServiceCoordinator: Prediction not needed yet", category: .general, level: .debug)
         }
     }
     
@@ -517,10 +538,17 @@ final class ServiceCoordinator: ObservableObject {
     private func handleUserLocation(_ locationData: LocationData?) {
         // Update ServiceCoordinator with location data (direct subscription)
         userLocation = locationData
-        
+
         guard let locationData = locationData else { return }
-        
-        // Processing user location update
+
+        appLog(String(format: "User: lat=%.5f lon=%.5f alt=%.0f hAcc=%.1f vAcc=%.1f heading=%.0f",
+                       locationData.latitude,
+                       locationData.longitude,
+                       locationData.altitude,
+                       locationData.horizontalAccuracy,
+                       locationData.verticalAccuracy,
+                       locationData.heading),
+               category: .general, level: .debug)
         
         // Direct ServiceCoordinator update - no parallel state needed
         
@@ -552,48 +580,94 @@ final class ServiceCoordinator: ObservableObject {
     
     // MARK: - Prediction Logic
     
+    // Manual prediction trigger for UI (balloon annotation tap)
+    // Note: there is already a high-level triggerPrediction() earlier; keep single definition
+    
     private func shouldRequestPrediction(_ telemetry: TelemetryData, force: Bool = false) -> Bool {
         if force {
             appLog("ServiceCoordinator: Prediction forced", category: .general, level: .debug)
             return true
         }
         
-        // Simple time-based trigger
-        let timeSinceLastPrediction = Date().timeIntervalSince(lastPredictionTime)
-        let shouldTrigger = timeSinceLastPrediction > predictionInterval
-        
-        // shouldRequestPrediction evaluation (log removed)
+        // Time-based trigger with in-flight guard and attempt-based cooldown
+        if isPredictionInFlight {
+            appLog("ServiceCoordinator: shouldRequestPrediction? inFlight=YES -> NO", category: .general, level: .debug)
+            return false
+        }
+        let timeSinceLastAttempt = Date().timeIntervalSince(lastPredictionAttemptTime)
+        let shouldTrigger = timeSinceLastAttempt > predictionInterval
+        appLog(String(format: "ServiceCoordinator: shouldRequestPrediction? sinceLastAttempt=%.1fs interval=%.0fs -> %@",
+                      timeSinceLastAttempt,
+                      predictionInterval,
+                      shouldTrigger ? "YES" : "NO"),
+               category: .general, level: .debug)
         
         return shouldTrigger
+    }
+
+    private func startCoordinatorPredictionTimer() {
+        // Ensure only one timer
+        predictionTimer?.invalidate()
+        predictionTimer = Timer.scheduledTimer(withTimeInterval: predictionInterval, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self = self else { return }
+                guard let telemetry = self.balloonTelemetry else {
+                    appLog("ServiceCoordinator: Timer tick - no telemetry yet", category: .general, level: .debug)
+                    return
+                }
+                appLog("ServiceCoordinator: Timer tick - evaluating prediction trigger", category: .general, level: .debug)
+                if self.shouldRequestPrediction(telemetry) {
+                    await self.executePrediction(telemetry: telemetry, measuredDescentRate: self.smoothedDescentRate, force: false)
+                }
+            }
+        }
     }
     
     private func executePrediction(telemetry: TelemetryData, measuredDescentRate: Double?, force: Bool) async {
         // Check cache first
         let cacheKey = generateCacheKey(telemetry)
         if let cachedPrediction = await predictionCache.get(key: cacheKey), !force {
-            appLog("ServiceCoordinator: Using cached prediction for \(telemetry.sondeName)", category: .general, level: .info)
+            appLog("ServiceCoordinator: Using cached prediction (source=Coordinator) key=\(cacheKey)", category: .general, level: .info)
             updateMapWithPrediction(cachedPrediction)
             return
+        } else if !force {
+            appLog("ServiceCoordinator: Cache miss (source=Coordinator) key=\(cacheKey)", category: .general, level: .debug)
         }
         
         do {
+            let sinceLast = String(format: "%.1f", Date().timeIntervalSince(lastPredictionTime))
+            appLog("ServiceCoordinator: executePrediction start (sinceLast=\(sinceLast)s)", category: .general, level: .debug)
+            // Mark attempt start and prevent overlap
+            lastPredictionAttemptTime = Date()
+            isPredictionInFlight = true
+            defer { isPredictionInFlight = false }
             // Determine if balloon is descending based on vertical speed
             let balloonDescends = telemetry.verticalSpeed < 0
-            appLog("ServiceCoordinator: Balloon descending: \(balloonDescends) (verticalSpeed: \(telemetry.verticalSpeed) m/s)", category: .general, level: .info)
-            
+            if balloonDescends {
+                appLog("ServiceCoordinator: Balloon descending (verticalSpeed: \(telemetry.verticalSpeed) m/s)", category: .general, level: .info)
+            } else {
+                appLog("ServiceCoordinator: Balloon ascending (verticalSpeed: \(telemetry.verticalSpeed) m/s)", category: .general, level: .info)
+            }
+
             // Determine effective descent rate based on altitude
             let effectiveDescentRate: Double
             if telemetry.altitude < 10000, let smoothedRate = measuredDescentRate {
                 // Below 10000m: Use automatically calculated smoothed descent rate
                 effectiveDescentRate = abs(smoothedRate)
-                appLog("ServiceCoordinator: Using smoothed descent rate: \(String(format: "%.2f", effectiveDescentRate)) m/s (below 10000m)", category: .general, level: .info)
+                if balloonDescends {
+                    appLog("ServiceCoordinator: Using smoothed descent rate: \(String(format: "%.2f", effectiveDescentRate)) m/s (below 10000m)", category: .general, level: .info)
+                }
             } else {
                 // Above 10000m: Use user settings default
                 effectiveDescentRate = userSettings.descentRate
-                appLog("ServiceCoordinator: Using settings descent rate: \(String(format: "%.2f", effectiveDescentRate)) m/s (above 10000m or no smoothed rate)", category: .general, level: .info)
+                if balloonDescends {
+                    appLog("ServiceCoordinator: Using settings descent rate: \(String(format: "%.2f", effectiveDescentRate)) m/s (above 10000m or no smoothed rate)", category: .general, level: .info)
+                }
             }
             
-            appLog("ServiceCoordinator: Calling prediction service for \(telemetry.sondeName)", category: .general, level: .info)
+            // Suppress verbose log for calling prediction service
+            // Debug: show cache key components and miss/hit outcome
+            appLog("ServiceCoordinator: Triggering prediction (source=Coordinator) key=\(cacheKey)", category: .general, level: .debug)
             let predictionData = try await predictionService.fetchPrediction(
                 telemetry: telemetry,
                 userSettings: userSettings,
@@ -679,9 +753,8 @@ final class ServiceCoordinator: ObservableObject {
     // Prediction logic now handled directly in ServiceCoordinator
     
     func updateMapWithPrediction(_ prediction: PredictionData) {
-        // Update prediction data for DataPanelView (flight time, landing time)
+        // Update prediction data
         predictionData = prediction
-        appLog("ServiceCoordinator: Set predictionData - landingTime: \(prediction.landingTime?.description ?? "N/A")", category: .general, level: .debug)
         
         // Update prediction path
         if let path = prediction.path, !path.isEmpty {
@@ -838,14 +911,18 @@ final class ServiceCoordinator: ObservableObject {
         lastRouteCalculationTime = Date()
     }
     
-    private func updateCameraToShowAllAnnotations() {
+    func updateCameraToShowAllAnnotations() {
+        if suspendCameraUpdates {
+            appLog("ServiceCoordinator: Camera update suspended (settings open)", category: .general, level: .debug)
+            return
+        }
         // Don't override zoom when in heading mode - let TrackingMapView handle it
         if isHeadingMode {
             appLog("ServiceCoordinator: Skipping camera update - heading mode active", category: .general, level: .debug)
             return
         }
         
-        // Camera update to show all annotations with appropriate zoom level
+        // Camera update to show all annotations and overlay paths with appropriate zoom level
         let allCoordinates = annotations.map { $0.coordinate }
         guard !allCoordinates.isEmpty else { 
             appLog("ServiceCoordinator: No annotations to show on map", category: .general, level: .debug)
@@ -856,6 +933,15 @@ final class ServiceCoordinator: ObservableObject {
         var coordinates = allCoordinates
         if let userLocation = userLocation {
             coordinates.append(CLLocationCoordinate2D(latitude: userLocation.latitude, longitude: userLocation.longitude))
+        }
+        // Include balloon track points
+        let trackPoints = balloonTrackService.getAllTrackPoints()
+        if !trackPoints.isEmpty {
+            coordinates.append(contentsOf: trackPoints.map { CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude) })
+        }
+        // Include prediction path points (if available)
+        if let path = predictionData?.path, !path.isEmpty {
+            coordinates.append(contentsOf: path)
         }
         
         // Calculate bounding region
@@ -939,13 +1025,13 @@ final class ServiceCoordinator: ObservableObject {
     // MARK: - Helper Methods
     
     private func generateCacheKey(_ telemetry: TelemetryData) -> String {
-        // Keep the valuable cache key generation logic
-        let lat = round(telemetry.latitude * 10) / 10  // 0.1 degree precision
-        let lon = round(telemetry.longitude * 10) / 10
-        let alt = round(telemetry.altitude / 500) * 500  // 500m altitude buckets
-        let timeSlot = Int(Date().timeIntervalSince1970 / 600) * 600  // 10-minute slots
-        
-        return "\(telemetry.sondeName)-\(lat)-\(lon)-\(Int(alt))-\(timeSlot)"
+        // Unify with PredictionService: use PredictionCache.makeKey with 5-min buckets and 2dp rounding
+        return PredictionCache.makeKey(
+            balloonID: telemetry.sondeName,
+            coordinate: CLLocationCoordinate2D(latitude: telemetry.latitude, longitude: telemetry.longitude),
+            altitude: telemetry.altitude,
+            timeBucket: Date()
+        )
     }
     
     private func generateRouteCacheKey(_ from: CLLocationCoordinate2D, _ to: CLLocationCoordinate2D, _ transportMode: TransportationMode) -> String {
@@ -968,65 +1054,8 @@ final class ServiceCoordinator: ObservableObject {
         return balloonTrackService.getAllTrackPoints()
     }
     
-    // MARK: - Automatic Descent Rate Calculation
-    
-    private func calculateAutomaticDescentRate(_ telemetry: TelemetryData) {
-        
-        // Get current balloon track from the track service
-        let trackPoints = balloonTrackService.getAllTrackPoints()
-        
-        // Find historical reference point (60 seconds ago)
-        let currentTime = Date() // Use current time since telemetry doesn't have timestamp
-        let targetHistoricalTime = currentTime.addingTimeInterval(-60.0) // 60 seconds ago
-        
-        // Find the first point that is older than 60 seconds
-        var historicalPoint: BalloonTrackPoint? = nil
-        for point in trackPoints.reversed() { // Start from most recent
-            if point.timestamp < targetHistoricalTime {
-                historicalPoint = point
-                break
-            }
-        }
-        
-        guard let historical = historicalPoint else {
-            appLog("ServiceCoordinator: No historical point found from 60 seconds ago - need more track history", category: .general, level: .debug)
-            // Insufficient track data - show settings value, but still display it
-            displayDescentRateString = String(format: "%.1f", userSettings.descentRate)
-            return
-        }
-        
-        // Calculate descent rate: (current_altitude - historical_altitude) / time_difference
-        let altitudeDiff = telemetry.altitude - historical.altitude
-        let timeDiff = currentTime.timeIntervalSince(historical.timestamp)
-        
-        guard timeDiff > 0 else {
-            appLog("ServiceCoordinator: Invalid time difference for descent rate calculation", category: .general, level: .error)
-            return
-        }
-        
-        let instantDescentRate = altitudeDiff / timeDiff // m/s (negative when descending)
-        
-        appLog("ServiceCoordinator: Calculated instant descent rate: \(String(format: "%.2f", instantDescentRate)) m/s (alt: \(Int(telemetry.altitude))m -> \(Int(historical.altitude))m over \(String(format: "%.1f", timeDiff))s)", category: .general, level: .debug)
-        
-        // Add to history for smoothing (keep up to 20 values)
-        descentRateHistory.append(instantDescentRate)
-        if descentRateHistory.count > 20 {
-            descentRateHistory.removeFirst()
-        }
-        
-        // Calculate smoothed descent rate (average of up to 20 values)
-        let smoothedRate = descentRateHistory.reduce(0.0, +) / Double(descentRateHistory.count)
-        
-        appLog("ServiceCoordinator: Smoothed descent rate: \(String(format: "%.2f", smoothedRate)) m/s (based on \(descentRateHistory.count) values)", category: .general, level: .info)
-        
-        // Update map state with smoothed descent rate
-        smoothedDescentRate = smoothedRate
-        displayDescentRateString = String(format: "%.1f", abs(smoothedRate))
-        
-        // Sync smoothed descent rate to DomainModel for better ascent/descent detection
-        // Smoothed rate already stored in ServiceCoordinator property above
-    }
-    
+    // MARK: - Automatic Descent Rate Calculation moved to BalloonTrackService
+
     // MARK: - AFC Frequency Tracking (moved from SettingsView for proper separation of concerns)
     
     private func updateAFCTracking(_ telemetry: TelemetryData) {

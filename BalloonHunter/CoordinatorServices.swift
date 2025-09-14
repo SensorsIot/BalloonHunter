@@ -12,6 +12,63 @@ import OSLog
 import UIKit
 
 // MARK: - Startup Sequence Extension
+/** [markdown]
+# Startup
+
+This section captures the startup flow defined in the Balloon Hunter App FSD (V5) and
+documents how the coordinator orchestrates initialization. It is provided here as
+in‑code markup for quick reference while working on the startup sequence.
+
+## Sequence
+
+1) Service Initialization
+   - Initialize core services as early as possible.
+   - Present the logo page immediately during startup.
+
+2) Initial Map
+   - After calling the location service, render the tracking map (with button row and data panel).
+   - Show the user's position with a zoom of ~25 km.
+
+3) Connect Device
+   - BLE service attempts to connect to MySondyGo.
+   - Wait up to 5 seconds for a connection; BLE remains non‑blocking and may connect later.
+   - If no connection, set the "no tracking" flag (degraded mode) and continue.
+
+4) Publish Telemetry
+   - After the first BLE packet is received and decoded, BLE publishes whether telemetry is available.
+
+5) Device Settings (optional, non‑blocking)
+   - BLE issues o{?}o opportunistically after the first packet, and SettingsView can also request on demand.
+   - Startup does not wait for a settings response; configuration is stored when received and used by settings views.
+
+6) Read Persistence
+   - Load from persistence:
+     - Prediction parameters
+     - Historic track data
+     - Landing point (if available)
+
+7) Landing Point Determination (priorities)
+   - Prio 1: If telemetry is received and the balloon is landed, set landing point to current balloon position.
+   - Prio 2: If balloon is still in flight (telemetry available), use the predicted landing position.
+   - Prio 3: Parse a landing point from the clipboard (OpenStreetMap URL), if available.
+   - Prio 4: If none of the above apply, use the persisted landing point.
+   - Otherwise: No landing point is available.
+
+8) Final Map Displayed
+   - Show the initial map at a zoom/region that includes:
+     - User position
+     - Landing position (if available)
+     - If a balloon is flying, the route and predicted path
+
+9) End of Setup
+   - Transition to steady‑state tracking: BLE telemetry updates, prediction scheduling (60 s),
+     and route recalculation (on mode change and significant user movement).
+
+## Notes
+ - Views remain presentation‑only; logic resides in services and this coordinator.
+ - BalloonTrackService provides smoothed speeds, adjusted descent rate, and landed state.
+ - PredictionService handles both API calls and automatic 60‑second scheduling.
+*/
 extension ServiceCoordinator {
     
     /// Performs the complete 8-step startup sequence as defined in FSD
@@ -45,8 +102,7 @@ extension ServiceCoordinator {
         let _ = await startBLEConnectionWithTimeout()
         // Step 5: First Telemetry Package
         await waitForFirstBLEPackageAndPublishTelemetryStatus()
-        // Step 6: Device Settings
-        await waitForSettingsResponse()
+        // Step 6: Device Settings - handled opportunistically by BLE service; no blocking needed
         
         let phase2Time = Date().timeIntervalSince(phase2Start)
         appLog("STARTUP: Steps 4-6 ✅ BLE Connect → Telemetry → Settings (\(String(format: "%.1f", phase2Time))s)", category: .general, level: .info)
@@ -180,30 +236,7 @@ extension ServiceCoordinator {
         }
     }
     
-    // MARK: - Step 6: Device Settings
-    
-    private func waitForSettingsResponse() async {
-        // Step 6: Requesting device settings (log removed)
-        
-        // Issue settings command
-        bleCommunicationService.getParameters()
-        
-        let initialDeviceSettings = bleCommunicationService.deviceSettings
-        let timeout = Date().addingTimeInterval(3) // 3 seconds for settings response
-        
-        while Date() < timeout {
-            // Check if device settings have been updated (different from initial)
-            if bleCommunicationService.deviceSettings.frequency != initialDeviceSettings.frequency ||
-               !bleCommunicationService.deviceSettings.probeType.isEmpty {
-                // Device settings received
-                return
-            }
-            
-            try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 second checks
-        }
-        
-        appLog("Step 6: Settings response timeout - proceeding with defaults", category: .general, level: .info)
-    }
+    // Step 6 removed: BLE service issues o{?}o after first packet; SettingsView also requests on demand.
     
     // MARK: - Step 7: Persistence Data
     
@@ -222,16 +255,30 @@ extension ServiceCoordinator {
     // MARK: - Step 8: Landing Point & Final Display
     
     func determineLandingPointWithPriorities() async {
-        // Step 8: Starting landing point determination (log removed)
+        appLog("Landing: Starting landing point determination", category: .general, level: .info)
+        if let t = balloonTelemetry {
+            let condA = (t.altitude < 1000 && abs(t.verticalSpeed) < 2.0)
+            let condB = (t.altitude < 500)
+            appLog(String(format: "Landing: Telemetry present: lat=%.5f lon=%.5f alt=%.1f v=%.2f h=%.2f condA=%@ condB=%@",
+                          t.latitude, t.longitude, t.altitude, t.verticalSpeed, t.horizontalSpeed,
+                          condA ? "true" : "false", condB ? "true" : "false"),
+                   category: .general, level: .info)
+        } else {
+            appLog("Landing: No telemetry available at decision time", category: .general, level: .info)
+        }
         
         // Priority 1: If telemetry received and balloon has landed, current position is landing point
-        // Priority 1: Check if balloon has landed
-        if let telemetry = balloonTelemetry, telemetry.verticalSpeed >= -0.5 && telemetry.altitude < 500 {
+        // Priority 1: Check if balloon has landed (improved criteria)
+        if let telemetry = balloonTelemetry, 
+           (telemetry.altitude < 1000 && abs(telemetry.verticalSpeed) < 2.0) || 
+           (telemetry.altitude < 500) {
             let currentPosition = CLLocationCoordinate2D(latitude: telemetry.latitude, longitude: telemetry.longitude)
             await MainActor.run {
                 landingPoint = currentPosition
             }
-            appLog("Priority 1: SUCCESS - Landing point set from current balloon position (landed)", category: .general, level: .info)
+            appLog(String(format: "Priority 1: SUCCESS - Landing set from telemetry at %.5f, %.5f (alt=%.1f v=%.2f)",
+                          telemetry.latitude, telemetry.longitude, telemetry.altitude, telemetry.verticalSpeed),
+                   category: .general, level: .info)
             return
         }
         
@@ -260,7 +307,12 @@ extension ServiceCoordinator {
         
         // Priority 3: Read and parse from clipboard
         if setLandingPointFromClipboard() {
-            appLog("Priority 3: SUCCESS - Landing point set from clipboard", category: .general, level: .info)
+            if let lp = landingPoint {
+                appLog(String(format: "Priority 3: SUCCESS - Landing set from clipboard at %.5f, %.5f",
+                              lp.latitude, lp.longitude), category: .general, level: .info)
+            } else {
+                appLog("Priority 3: SUCCESS - Landing set from clipboard", category: .general, level: .info)
+            }
             return
         }
         
@@ -270,7 +322,9 @@ extension ServiceCoordinator {
                 await MainActor.run {
                     landingPoint = persistedLanding
                 }
-                appLog("Priority 4: SUCCESS - Landing point set from persistence for sonde \(telemetry.sondeName)", category: .general, level: .info)
+                appLog(String(format: "Priority 4: SUCCESS - Landing set from persistence for %@ at %.5f, %.5f",
+                              telemetry.sondeName, persistedLanding.latitude, persistedLanding.longitude),
+                       category: .general, level: .info)
                 return
             }
             appLog("Priority 4: FAILED - No persisted landing point for sonde \(telemetry.sondeName)", category: .general, level: .info)
@@ -295,9 +349,8 @@ extension ServiceCoordinator {
         
         // Only trigger show all annotations if we have a landing point to display
         if landingPoint != nil {
-            appLog("🔍 ZOOM: CoordinatorServices triggering show all annotations (landing point available)", category: .general, level: .info)
-            triggerShowAllAnnotations()
-            try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds for map to update
+            appLog("🔍 ZOOM: CoordinatorServices computing camera for all annotations (landing point available)", category: .general, level: .info)
+            updateCameraToShowAllAnnotations()
         } else {
             appLog("🔍 ZOOM: CoordinatorServices NOT triggering show all annotations (no landing point)", category: .general, level: .info)
         }

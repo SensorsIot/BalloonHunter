@@ -17,6 +17,15 @@ enum TransportationMode: String, CaseIterable, Codable {
     case bike = "bike"
 }
 
+// Flight phase of the balloon
+enum BalloonPhase: String, Codable {
+    case ascending
+    case descendingAbove10k
+    case descendingBelow10k
+    case landed
+    case unknown
+}
+
 @MainActor
 class UserSettings: ObservableObject, Codable {
     @Published var burstAltitude: Double = 30000
@@ -82,7 +91,7 @@ struct TelemetryData {
         case "0":
             // Type 0: Device Basic Info and Status (8 fields)
             guard components.count >= 8 else { return }
-            probeType = components[1]
+            probeType = normalizeProbeType(components[1])
             frequency = Double(components[2]) ?? 0.0
             signalStrength = Int(Double(components[3]) ?? 0.0)
             batteryPercentage = Int(components[4]) ?? 0
@@ -93,7 +102,7 @@ struct TelemetryData {
         case "1":
             // Type 1: Probe Telemetry (20 fields)
             guard components.count >= 20 else { return }
-            probeType = components[1]
+            probeType = normalizeProbeType(components[1])
             frequency = Double(components[2]) ?? 0.0
             sondeName = components[3]
             latitude = Double(components[4]) ?? 0.0
@@ -114,7 +123,7 @@ struct TelemetryData {
         case "2":
             // Type 2: Name Only (10 fields)
             guard components.count >= 10 else { return }
-            probeType = components[1]
+            probeType = normalizeProbeType(components[1])
             frequency = Double(components[2]) ?? 0.0
             sondeName = components[3]
             signalStrength = Int(Double(components[4]) ?? 0.0)
@@ -133,6 +142,17 @@ struct TelemetryData {
         default:
             // Unknown packet type
             break
+        }
+    }
+    
+    /// Normalize probe type string to handle device abbreviations
+    private func normalizeProbeType(_ input: String) -> String {
+        let upperCaseType = input.uppercased()
+        switch upperCaseType {
+        case "PIL":
+            return "PILOT"
+        default:
+            return upperCaseType
         }
     }
 }
@@ -499,8 +519,7 @@ final class BalloonPositionService: ObservableObject {
         updateDistanceToUser()
         
         // Position and telemetry are now available through @Published properties
-        
-        appLog("BalloonPositionService: Updated position for balloon \(telemetry.sondeName) at (\(telemetry.latitude), \(telemetry.longitude), \(telemetry.altitude)m)", category: .service, level: .debug)
+        // Suppress verbose position update log in debug output
     }
     
     private func handleUserLocationUpdate(_ location: LocationData) {
@@ -560,10 +579,12 @@ final class BalloonTrackService: ObservableObject {
     @Published var isBalloonFlying: Bool = false
     @Published var isBalloonLanded: Bool = false
     @Published var landingPosition: CLLocationCoordinate2D?
+    @Published var balloonPhase: BalloonPhase = .unknown
     
     // Smoothed telemetry data (moved from DataPanelView for proper separation of concerns)
     @Published var smoothedHorizontalSpeed: Double = 0
     @Published var smoothedVerticalSpeed: Double = 0
+    @Published var adjustedDescentRate: Double? = nil
     @Published var isTelemetryStale: Bool = true
     
     private let persistenceService: PersistenceService
@@ -581,10 +602,28 @@ final class BalloonTrackService: ObservableObject {
     private let verticalSpeedBufferSize = 20
     private let horizontalSpeedBufferSize = 20
     private let landingPositionBufferSize = 100
+
+    // Adjusted descent rate smoothing buffer (FSD: 20 values)
+    private var adjustedDescentHistory: [Double] = []
     
     // Staleness detection (moved from DataPanelView for proper separation of concerns)
     private var stalenessTimer: Timer?
     private let stalenessThreshold: TimeInterval = 3.0 // 3 seconds threshold
+
+    // Robust speed smoothing state
+    private var lastEmaTimestamp: Date? = nil
+    private var emaHorizontalMS: Double = 0
+    private var emaVerticalMS: Double = 0
+    private var hasEma: Bool = false
+    private var hWindow: [Double] = []
+    private var vWindow: [Double] = []
+    private let hampelWindowSize = 10
+    private let hampelK = 3.0
+    private let vHDeadbandMS: Double = 0.2   // ~0.72 km/h
+    private let vVDeadbandMS: Double = 0.05
+    private let tauHorizontal: Double = 10.0 // seconds
+    private let tauVertical: Double = 10.0   // seconds
+    private var lastMetricsLog: Date? = nil
     
     init(persistenceService: PersistenceService, balloonPositionService: BalloonPositionService) {
         self.persistenceService = persistenceService
@@ -639,31 +678,156 @@ final class BalloonTrackService: ObservableObject {
         
         currentBalloonName = telemetryData.sondeName
         
+        // Compute track-derived speeds prior to appending, so we can store derived values
+        var derivedHorizontalMS: Double? = nil
+        var derivedVerticalMS: Double? = nil
+        if let prev = currentBalloonTrack.last {
+            let dt = telemetryData.timestamp.timeIntervalSince(prev.timestamp)
+            if dt > 0 {
+                let R = 6371000.0
+                let lat1 = prev.latitude * .pi / 180, lon1 = prev.longitude * .pi / 180
+                let lat2 = telemetryData.latitude * .pi / 180, lon2 = telemetryData.longitude * .pi / 180
+                let dlat = lat2 - lat1, dlon = lon2 - lon1
+                let a = sin(dlat/2) * sin(dlat/2) + cos(lat1) * cos(lat2) * sin(dlon/2) * sin(dlon/2)
+                let c = 2 * atan2(sqrt(a), sqrt(1 - a))
+                let distance = R * c // meters
+                derivedHorizontalMS = distance / dt
+                derivedVerticalMS = (telemetryData.altitude - prev.altitude) / dt
+                // Diagnostics: compare derived vs telemetry
+                let hTele = telemetryData.horizontalSpeed
+                let vTele = telemetryData.verticalSpeed
+                let hDiff = ((derivedHorizontalMS ?? hTele) - hTele) * 3.6
+                let vDiff = (derivedVerticalMS ?? vTele) - vTele
+                if abs(hDiff) > 3.0 || abs(vDiff) > 0.5 {
+                    appLog(String(format: "BalloonTrackService: Speed check — h(track)=%.2f km/h vs h(tele)=%.2f km/h, v(track)=%.2f m/s vs v(tele)=%.2f m/s", (derivedHorizontalMS ?? 0)*3.6, hTele*3.6, (derivedVerticalMS ?? 0), vTele), category: .service, level: .debug)
+                }
+            }
+        }
+
         let trackPoint = BalloonTrackPoint(
             latitude: telemetryData.latitude,
             longitude: telemetryData.longitude,
             altitude: telemetryData.altitude,
             timestamp: telemetryData.timestamp,
-            verticalSpeed: telemetryData.verticalSpeed,
-            horizontalSpeed: telemetryData.horizontalSpeed
+            verticalSpeed: derivedVerticalMS ?? telemetryData.verticalSpeed,
+            horizontalSpeed: derivedHorizontalMS ?? telemetryData.horizontalSpeed
         )
         
         currentBalloonTrack.append(trackPoint)
-        
+
         // Calculate effective descent rate from track history
         updateEffectiveDescentRate()
-        
+
         // Update landing detection
         updateLandingDetection(telemetryData)
-        
+
+        // Update adjusted descent rate (60s robust + 20-sample smoothing)
+        updateAdjustedDescentRate()
+
+        // Development CSV logging (DEBUG only)
+        #if DEBUG
+        DebugCSVLogger.shared.logTelemetry(telemetryData)
+        #endif
+
         // Publish track update
         trackUpdated.send()
-        
+
+        // Robust smoothed speeds update (EMA pipeline)
+        if let prev = currentBalloonTrack.dropLast().last {
+            let dt = trackPoint.timestamp.timeIntervalSince(prev.timestamp)
+            updateSmoothedSpeedsPipeline(instH: trackPoint.horizontalSpeed, instV: trackPoint.verticalSpeed, timestamp: trackPoint.timestamp, dt: dt)
+        } else {
+            updateSmoothedSpeedsPipeline(instH: trackPoint.horizontalSpeed, instV: trackPoint.verticalSpeed, timestamp: trackPoint.timestamp, dt: 1.0)
+        }
+
+        // Update published balloon phase
+        if isBalloonLanded {
+            balloonPhase = .landed
+        } else if trackPoint.verticalSpeed >= 0 {
+            balloonPhase = .ascending
+        } else {
+            balloonPhase = trackPoint.altitude < 10_000 ? .descendingBelow10k : .descendingAbove10k
+        }
+
         // Periodic persistence
         telemetryPointCounter += 1
         if telemetryPointCounter % saveInterval == 0 {
             saveCurrentTrack()
         }
+    }
+
+    private func updateSmoothedSpeedsPipeline(instH: Double, instV: Double, timestamp: Date, dt: TimeInterval) {
+        // Append to Hampel windows
+        hWindow.append(instH); if hWindow.count > hampelWindowSize { hWindow.removeFirst() }
+        vWindow.append(instV); if vWindow.count > hampelWindowSize { vWindow.removeFirst() }
+
+        func median(_ a: [Double]) -> Double {
+            if a.isEmpty { return 0 }
+            let s = a.sorted(); let m = s.count/2
+            return s.count % 2 == 0 ? (s[m-1] + s[m]) / 2.0 : s[m]
+        }
+        func mad(_ a: [Double], med: Double) -> Double {
+            if a.isEmpty { return 0 }
+            let dev = a.map { abs($0 - med) }
+            return median(dev)
+        }
+
+        // Hampel filter for outliers
+        var xh = instH
+        var xv = instV
+        let mh = median(hWindow); let mhd = 1.4826 * mad(hWindow, med: mh)
+        if mhd > 0, abs(instH - mh) > hampelK * mhd { xh = mh }
+        let mv = median(vWindow); let mvd = 1.4826 * mad(vWindow, med: mv)
+        if mvd > 0, abs(instV - mv) > hampelK * mvd { xv = mv }
+
+        // Deadbands near zero to kill jitter
+        if xh.magnitude < vHDeadbandMS { xh = 0 }
+        if xv.magnitude < vVDeadbandMS { xv = 0 }
+
+        // EMA smoothing with time constants
+        let prevTime = lastEmaTimestamp
+        lastEmaTimestamp = timestamp
+        let dtEff: Double
+        if let pt = prevTime { dtEff = max(0.01, timestamp.timeIntervalSince(pt)) } else { dtEff = max(0.01, dt > 0 ? dt : 1.0) }
+        let alphaH = dtEff / (tauHorizontal + dtEff)
+        let alphaV = dtEff / (tauVertical + dtEff)
+
+        if !hasEma {
+            emaHorizontalMS = xh
+            emaVerticalMS = xv
+            hasEma = true
+        } else {
+            emaHorizontalMS = (1 - alphaH) * emaHorizontalMS + alphaH * xh
+            emaVerticalMS = (1 - alphaV) * emaVerticalMS + alphaV * xv
+        }
+
+        smoothedHorizontalSpeed = emaHorizontalMS
+        smoothedVerticalSpeed = emaVerticalMS
+    }
+
+    private func updateAdjustedDescentRate() {
+        let now = Date()
+        let windowStart = now.addingTimeInterval(-60)
+        let window = currentBalloonTrack.filter { $0.timestamp >= windowStart }
+        guard window.count >= 3 else { return }
+
+        var intervalRates: [Double] = []
+        for i in 1..<window.count {
+            let dt = window[i].timestamp.timeIntervalSince(window[i-1].timestamp)
+            if dt <= 0 { continue }
+            let dv = window[i].altitude - window[i-1].altitude
+            intervalRates.append(dv / dt)
+        }
+        guard !intervalRates.isEmpty else { return }
+
+        let sorted = intervalRates.sorted()
+        let mid = sorted.count/2
+        let instant = (sorted.count % 2 == 0) ? (sorted[mid-1] + sorted[mid]) / 2.0 : sorted[mid]
+
+        adjustedDescentHistory.append(instant)
+        if adjustedDescentHistory.count > 20 { adjustedDescentHistory.removeFirst() }
+        let smoothed = adjustedDescentHistory.reduce(0.0, +) / Double(adjustedDescentHistory.count)
+        adjustedDescentRate = smoothed
     }
     
     private func updateEffectiveDescentRate() {
@@ -688,13 +852,21 @@ final class BalloonTrackService: ObservableObject {
     }
     
     private func updateLandingDetection(_ telemetryData: TelemetryData) {
-        // Update speed buffers for smoothing
-        verticalSpeedBuffer.append(telemetryData.verticalSpeed)
+        // Update speed buffers for smoothing (prefer track-derived values)
+        if let last = currentBalloonTrack.last {
+            verticalSpeedBuffer.append(last.verticalSpeed)
+        } else {
+            verticalSpeedBuffer.append(telemetryData.verticalSpeed)
+        }
         if verticalSpeedBuffer.count > verticalSpeedBufferSize {
             verticalSpeedBuffer.removeFirst()
         }
         
-        horizontalSpeedBuffer.append(telemetryData.horizontalSpeed)
+        if let last = currentBalloonTrack.last {
+            horizontalSpeedBuffer.append(last.horizontalSpeed)
+        } else {
+            horizontalSpeedBuffer.append(telemetryData.horizontalSpeed)
+        }
         if horizontalSpeedBuffer.count > horizontalSpeedBufferSize {
             horizontalSpeedBuffer.removeFirst()
         }
@@ -708,21 +880,46 @@ final class BalloonTrackService: ObservableObject {
         
         // Check if we have telemetry signal (within last 3 seconds)
         let hasRecentTelemetry = Date().timeIntervalSince(telemetryData.timestamp) < 3.0
+
+        // Build time windows for stationarity metrics
+        let now = Date()
+        let window30 = currentBalloonTrack.filter { now.timeIntervalSince($0.timestamp) <= 30.0 }
+        let window10 = currentBalloonTrack.filter { now.timeIntervalSince($0.timestamp) <= 10.0 }
+
+        // Altitude stationarity (spread)
+        func altSpread(_ pts: [BalloonTrackPoint]) -> Double {
+            guard let minA = pts.map({ $0.altitude }).min(), let maxA = pts.map({ $0.altitude }).max() else { return .greatestFiniteMagnitude }
+            return maxA - minA
+        }
+
+        // Horizontal stationarity (95th percentile distance from centroid)
+        func p95Radius(_ pts: [BalloonTrackPoint]) -> Double {
+            guard !pts.isEmpty else { return .greatestFiniteMagnitude }
+            let latMean = pts.map({ $0.latitude }).reduce(0, +) / Double(pts.count)
+            let lonMean = pts.map({ $0.longitude }).reduce(0, +) / Double(pts.count)
+            func dist(_ lat1: Double, _ lon1: Double, _ lat2: Double, _ lon2: Double) -> Double {
+                let R = 6371000.0
+                let a1 = lat1 * .pi/180, b1 = lon1 * .pi/180
+                let a2 = lat2 * .pi/180, b2 = lon2 * .pi/180
+                let dA = a2 - a1, dB = b2 - b1
+                let a = sin(dA/2)*sin(dA/2) + cos(a1)*cos(a2)*sin(dB/2)*sin(dB/2)
+                let c = 2 * atan2(sqrt(a), sqrt(1-a))
+                return R * c
+            }
+            let d = pts.map { dist($0.latitude, $0.longitude, latMean, lonMean) }.sorted()
+            let idx = min(d.count-1, Int(ceil(0.95 * Double(d.count))) - 1)
+            return d[max(0, idx)]
+        }
+
+        let altSpread30 = altSpread(window30)
+        let radius30 = p95Radius(window30)
         
-        // Calculate smoothed speeds - require minimum buffer size for reliable detection
-        let smoothedVerticalSpeed = verticalSpeedBuffer.count >= 10 ? verticalSpeedBuffer.reduce(0, +) / Double(verticalSpeedBuffer.count) : telemetryData.verticalSpeed
-        let smoothedHorizontalSpeedKmh = horizontalSpeedBuffer.count >= 10 ? (horizontalSpeedBuffer.reduce(0, +) / Double(horizontalSpeedBuffer.count)) * 3.6 : telemetryData.horizontalSpeed * 3.6 // Convert m/s to km/h
+        // Use smoothed horizontal speed (km/h) for an additional guard
+        let smoothedHorizontalSpeedKmh = horizontalSpeedBuffer.count >= 10 ? (horizontalSpeedBuffer.reduce(0, +) / Double(horizontalSpeedBuffer.count)) * 3.6 : telemetryData.horizontalSpeed * 3.6
         
-        // Landing detection criteria with hysteresis to prevent false positives:
-        // - Telemetry signal available during last 3 seconds
-        // - Smoothed (10+) vertical speed < 2 m/s
-        // - Smoothed (10+) horizontal speed < 2 km/h
-        // - Require sufficient buffer for reliable smoothing
-        let isLandedNow = hasRecentTelemetry && 
-                         verticalSpeedBuffer.count >= 10 &&
-                         horizontalSpeedBuffer.count >= 10 &&
-                         abs(smoothedVerticalSpeed) < 2.0 && 
-                         smoothedHorizontalSpeedKmh < 2.0
+        // Landed decision (≤30s worst-case): altitude hardly changes and horizontal drift tiny
+        // Relaxed thresholds to account for GPS jitter
+        let isLandedNow = hasRecentTelemetry && window30.count >= 10 && altSpread30 < 2.0 && radius30 < 10.0 && smoothedHorizontalSpeedKmh < 2.0
         
         // Update balloon flying/landed state
         let wasPreviouslyFlying = isBalloonFlying
@@ -741,14 +938,45 @@ final class BalloonTrackService: ObservableObject {
                 landingPosition = currentPosition
             }
             
-            appLog("BalloonTrackService: Balloon LANDED detected - vSpeed: \(smoothedVerticalSpeed)m/s, hSpeed: \(smoothedHorizontalSpeedKmh)km/h at \(landingPosition!)", category: .service, level: .info)
+            appLog("BalloonTrackService: Balloon LANDED — altSpread30=\(String(format: "%.2f", altSpread30))m, radius30=\(String(format: "%.1f", radius30))m", category: .service, level: .info)
             
         } else if wasPreviouslyFlying && isBalloonFlying {
-            appLog("BalloonTrackService: Balloon FLYING - vSpeed: \(smoothedVerticalSpeed)m/s, hSpeed: \(smoothedHorizontalSpeedKmh)km/h", category: .service, level: .debug)
+            let instH = telemetryData.horizontalSpeed * 3.6
+            let instV = telemetryData.verticalSpeed
+            let avgV = smoothedVerticalSpeed
+            let phase: String = {
+                if isBalloonLanded { return "Landed" }
+                if telemetryData.verticalSpeed >= 0 { return "Ascending" }
+                return telemetryData.altitude < 10_000 ? "Descending <10k" : "Descending"
+            }()
+            appLog(
+                "BalloonTrackService: Balloon FLYING - phase=\(phase), hSpeed(avg)=\(String(format: "%.2f", smoothedHorizontalSpeedKmh)) km/h, hSpeed(inst)=\(String(format: "%.2f", instH)) km/h, vSpeed(avg)=\(String(format: "%.2f", avgV)) m/s, vSpeed(inst)=\(String(format: "%.2f", instV)) m/s",
+                category: .service,
+                level: .debug
+            )
+        }
+
+        // Hysteresis to clear landed: if recent movement is clear in last 10s
+        if isBalloonLanded {
+            let altSpread10 = altSpread(window10)
+            let radius10 = p95Radius(window10)
+            if altSpread10 > 3.0 || radius10 > 12.0 || smoothedHorizontalSpeedKmh > 3.0 {
+                isBalloonLanded = false
+                appLog("BalloonTrackService: Landed CLEARED — altSpread10=\(String(format: "%.2f", altSpread10))m, radius10=\(String(format: "%.1f", radius10))m, hSpeed(avg)=\(String(format: "%.2f", smoothedHorizontalSpeedKmh)) km/h", category: .service, level: .info)
+            }
         }
         
-        // Update smoothed speeds after processing telemetry (moved from DataPanelView)
-        updateSmoothedSpeeds()
+        // Periodic debug metrics while not landed (compile-time gated)
+        #if DEBUG
+        if !isBalloonLanded && window30.count >= 10 {
+            let nowT = Date()
+            if lastMetricsLog == nil || nowT.timeIntervalSince(lastMetricsLog!) > 10.0 {
+                lastMetricsLog = nowT
+                appLog("BalloonTrackService: Metrics — altSpread30=\(String(format: "%.2f", altSpread30))m, radius30=\(String(format: "%.1f", radius30))m, hSpeed(avg)=\(String(format: "%.2f", smoothedHorizontalSpeedKmh)) km/h", category: .service, level: .debug)
+            }
+        }
+        #endif
+        
     }
     
     private func saveCurrentTrack() {
@@ -816,523 +1044,8 @@ final class BalloonTrackService: ObservableObject {
     }
 }
 
-// MARK: - Prediction Service
-
-@MainActor
-final class PredictionService: ObservableObject {
-    // MARK: - API Dependencies
-    private let session: URLSession
-    private var serviceHealth: ServiceHealth = .healthy
-    
-    // MARK: - Scheduling Dependencies  
-    private let predictionCache: PredictionCache
-    private weak var serviceCoordinator: ServiceCoordinator?
-    private let userSettings: UserSettings
-    private let balloonTrackService: BalloonTrackService?
-    
-    // MARK: - Published State
-    @Published var isRunning: Bool = false
-    @Published var hasValidPrediction: Bool = false
-    @Published var lastPredictionTime: Date?
-    @Published var predictionStatus: String = "Not started"
-    @Published var latestPrediction: PredictionData?
-    
-    // Time calculations (moved from DataPanelView for proper separation of concerns)
-    @Published var predictedLandingTimeString: String = "--:--"
-    @Published var remainingFlightTimeString: String = "--:--"
-    
-    // MARK: - Private State
-    private var internalTimer: Timer?
-    private let predictionInterval: TimeInterval = 60.0
-    private var lastProcessedTelemetry: TelemetryData?
-    
-    // MARK: - Simplified Constructor (API-only mode)
-    init() {
-        // Initialize API session only
-        let config = URLSessionConfiguration.default
-        config.timeoutIntervalForRequest = 30.0
-        config.timeoutIntervalForResource = 60.0
-        self.session = URLSession(configuration: config)
-        
-        // Initialize scheduling dependencies as nil (API-only mode)
-        self.predictionCache = PredictionCache() // Default cache
-        self.serviceCoordinator = nil
-        self.userSettings = UserSettings() // Default settings
-        // API-only mode - no service dependencies needed for predictions
-        self.balloonTrackService = nil // Not needed for API-only predictions
-        
-        // PredictionService initialized in API-only mode
-        publishHealthEvent(.healthy, message: "Prediction service initialized (API-only)")
-    }
-    
-    // MARK: - Full Constructor (with scheduling)
-    init(
-        predictionCache: PredictionCache,
-        serviceCoordinator: ServiceCoordinator,
-        userSettings: UserSettings,
-        balloonTrackService: BalloonTrackService
-    ) {
-        // Initialize API session
-        let config = URLSessionConfiguration.default
-        config.timeoutIntervalForRequest = 30.0
-        config.timeoutIntervalForResource = 60.0
-        self.session = URLSession(configuration: config)
-        
-        // Initialize scheduling dependencies
-        self.predictionCache = predictionCache
-        self.serviceCoordinator = serviceCoordinator
-        self.userSettings = userSettings
-        self.balloonTrackService = balloonTrackService
-        
-        // PredictionService initialized with scheduling
-        publishHealthEvent(.healthy, message: "Prediction service initialized")
-    }
-    
-    // MARK: - Service Lifecycle
-    
-    func startAutomaticPredictions() {
-        guard !isRunning else {
-            appLog("PredictionService: Already running automatic predictions", category: .service, level: .debug)
-            return
-        }
-        
-        isRunning = true
-        predictionStatus = "Running"
-        startInternalTimer()
-        
-        appLog("PredictionService: Started automatic predictions with 60-second interval", category: .service, level: .info)
-    }
-    
-    func stopAutomaticPredictions() {
-        isRunning = false
-        internalTimer?.invalidate()
-        internalTimer = nil
-        predictionStatus = "Stopped"
-        
-        appLog("PredictionService: Stopped automatic predictions", category: .service, level: .info)
-    }
-    
-    // MARK: - Manual Prediction Triggers
-    
-    func triggerManualPrediction() async {
-        guard let serviceCoordinator = serviceCoordinator,
-              let telemetry = serviceCoordinator.balloonTelemetry else {
-            appLog("PredictionService: Manual trigger ignored - no telemetry available", category: .service, level: .debug)
-            return
-        }
-        
-        appLog("PredictionService: Manual trigger - performing prediction", category: .service, level: .info)
-        await performPrediction(telemetry: telemetry, trigger: "manual")
-    }
-    
-    func triggerStartupPrediction() async {
-        guard let serviceCoordinator = serviceCoordinator,
-              let telemetry = serviceCoordinator.balloonTelemetry else {
-            return
-        }
-        
-        appLog("PredictionService: Startup trigger - first telemetry received", category: .service, level: .info)
-        await performPrediction(telemetry: telemetry, trigger: "startup")
-    }
-    
-    // MARK: - Private Timer Implementation
-    
-    private func startInternalTimer() {
-        stopInternalTimer() // Ensure no duplicate timers
-        
-        internalTimer = Timer.scheduledTimer(withTimeInterval: predictionInterval, repeats: true) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                await self?.handleTimerTrigger()
-            }
-        }
-        
-        appLog("PredictionService: Internal 60-second timer started", category: .service, level: .info)
-    }
-    
-    private func stopInternalTimer() {
-        internalTimer?.invalidate()
-        internalTimer = nil
-    }
-    
-    private func handleTimerTrigger() async {
-        guard let serviceCoordinator = serviceCoordinator,
-              let telemetry = serviceCoordinator.balloonTelemetry else {
-            appLog("PredictionService: Timer trigger - no telemetry available", category: .service, level: .debug)
-            return
-        }
-        
-        appLog("PredictionService: Timer trigger - performing prediction", category: .service, level: .info)
-        await performPrediction(telemetry: telemetry, trigger: "timer")
-    }
-    
-    // MARK: - Core Prediction Logic
-    
-    private func performPrediction(telemetry: TelemetryData, trigger: String) async {
-        predictionStatus = "Processing prediction..."
-        
-        do {
-            // Determine if balloon is descending
-            let balloonDescends = telemetry.verticalSpeed < 0
-            appLog("PredictionService: Balloon descending: \(balloonDescends) (verticalSpeed: \(telemetry.verticalSpeed) m/s)", category: .service, level: .info)
-            
-            // Calculate effective descent rate
-            let effectiveDescentRate = calculateEffectiveDescentRate(telemetry: telemetry)
-            
-            // Create cache key
-            let cacheKey = createCacheKey(telemetry)
-            
-            // Check cache first
-            if let cachedPrediction = await predictionCache.get(key: cacheKey) {
-                appLog("PredictionService: Using cached prediction", category: .service, level: .info)
-                await handlePredictionResult(cachedPrediction, trigger: trigger)
-                return
-            }
-            
-            // Call API
-            let predictionData = try await fetchPrediction(
-                telemetry: telemetry,
-                userSettings: userSettings,
-                measuredDescentRate: effectiveDescentRate,
-                cacheKey: cacheKey,
-                balloonDescends: balloonDescends
-            )
-            
-            // Cache the result
-            await predictionCache.set(key: cacheKey, value: predictionData)
-            
-            // Handle successful prediction
-            await handlePredictionResult(predictionData, trigger: trigger)
-            
-        } catch {
-            hasValidPrediction = false
-            predictionStatus = "Prediction failed: \(error.localizedDescription)"
-            appLog("PredictionService: Prediction failed from \(trigger): \(error)", category: .service, level: .error)
-        }
-    }
-    
-    private func calculateEffectiveDescentRate(telemetry: TelemetryData) -> Double {
-        if telemetry.altitude < 10000, let smoothedRate = serviceCoordinator?.smoothedDescentRate {
-            appLog("PredictionService: Using smoothed descent rate: \(String(format: "%.2f", abs(smoothedRate))) m/s (below 10000m)", category: .service, level: .info)
-            return abs(smoothedRate)
-        } else {
-            appLog("PredictionService: Using settings descent rate: \(String(format: "%.2f", userSettings.descentRate)) m/s (above 10000m or no smoothed rate)", category: .service, level: .info)
-            return userSettings.descentRate
-        }
-    }
-    
-    private func createCacheKey(_ telemetry: TelemetryData) -> String {
-        return PredictionCache.makeKey(
-            balloonID: telemetry.sondeName,
-            coordinate: CLLocationCoordinate2D(latitude: telemetry.latitude, longitude: telemetry.longitude),
-            altitude: telemetry.altitude,
-            timeBucket: telemetry.timestamp
-        )
-    }
-    
-    private func handlePredictionResult(_ predictionData: PredictionData, trigger: String) async {
-        await MainActor.run {
-            latestPrediction = predictionData
-            hasValidPrediction = true
-            lastPredictionTime = Date()
-            predictionStatus = "Prediction successful"
-            
-            // Update time calculations (moved from DataPanelView)
-            updateTimeCalculations()
-        }
-        
-        appLog("PredictionService: Prediction completed successfully from \(trigger)", category: .service, level: .info)
-        
-        // Update ServiceCoordinator with results
-        guard let serviceCoordinator = serviceCoordinator else {
-            appLog("PredictionService: ServiceCoordinator is nil, cannot update", category: .service, level: .error)
-            return
-        }
-        
-        await MainActor.run {
-            serviceCoordinator.predictionData = predictionData
-            serviceCoordinator.updateMapWithPrediction(predictionData)
-        }
-        
-        appLog("PredictionService: Updated ServiceCoordinator with prediction results", category: .service, level: .info)
-    }
-    
-    func fetchPrediction(telemetry: TelemetryData, userSettings: UserSettings, measuredDescentRate: Double, cacheKey: String, balloonDescends: Bool = false) async throws -> PredictionData {
-        appLog("PredictionService: Starting Sondehub v2 prediction fetch for \(telemetry.sondeName) at altitude \(telemetry.altitude)m", category: .service, level: .info)
-        
-        let request = try buildPredictionRequest(telemetry: telemetry, userSettings: userSettings, descentRate: abs(measuredDescentRate), balloonDescends: balloonDescends)
-        
-        do {
-            appLog("PredictionService: Making GET request to Sondehub v2 API", category: .service, level: .debug)
-            let (data, response) = try await session.data(for: request)
-            
-            guard let httpResponse = response as? HTTPURLResponse else {
-                throw PredictionError.invalidResponse
-            }
-            
-            // HTTP response received (log removed)
-            
-            guard httpResponse.statusCode == 200 else {
-                publishHealthEvent(.degraded("HTTP \(httpResponse.statusCode)"), message: "HTTP \(httpResponse.statusCode)")
-                throw PredictionError.httpError(httpResponse.statusCode)
-            }
-            
-            // JSON decode (log removed)
-            
-            // First, let's see what we actually received
-            if let _ = String(data: data, encoding: .utf8) {
-                // Raw JSON response (log removed for reduction)
-            }
-            
-            // Parse the Sondehub v2 response
-            let sondehubResponse = try JSONDecoder().decode(SondehubPredictionResponse.self, from: data)
-            
-            // Convert to our internal PredictionData format
-            let predictionData = try convertSondehubToPredictionData(sondehubResponse)
-            
-            let landingPoint = predictionData.landingPoint
-            let burstPoint = predictionData.burstPoint
-            
-            let landingPointDesc = landingPoint.map { "(\($0.latitude), \($0.longitude))" } ?? "nil"
-            let burstPointDesc = burstPoint.map { "(\($0.latitude), \($0.longitude))" } ?? "nil"
-            appLog("PredictionService: Sondehub v2 prediction completed - Landing: \(landingPointDesc), Burst: \(burstPointDesc)", category: .service, level: .info)
-            
-            publishHealthEvent(.healthy, message: "Prediction successful")
-            return predictionData
-            
-        } catch let decodingError as DecodingError {
-            appLog("PredictionService: JSON decoding failed: \(decodingError)", category: .service, level: .error)
-            
-            // More detailed decoding error analysis
-            switch decodingError {
-            case .keyNotFound(let key, let context):
-                appLog("PredictionService: Missing key '\(key.stringValue)' at \(context.codingPath)", category: .service, level: .error)
-            case .typeMismatch(let type, let context):
-                appLog("PredictionService: Type mismatch for \(type) at \(context.codingPath)", category: .service, level: .error)
-            case .valueNotFound(let type, let context):
-                appLog("PredictionService: Value not found for \(type) at \(context.codingPath)", category: .service, level: .error)
-            case .dataCorrupted(let context):
-                appLog("PredictionService: Data corrupted at \(context.codingPath): \(context.debugDescription)", category: .service, level: .error)
-            @unknown default:
-                appLog("PredictionService: Unknown decoding error: \(decodingError)", category: .service, level: .error)
-            }
-            
-            publishHealthEvent(.unhealthy("JSON decode failed"), message: "JSON decode failed")
-            throw PredictionError.decodingError(decodingError.localizedDescription)
-            
-        } catch {
-            let errorMessage = error.localizedDescription
-            appLog("PredictionService: Sondehub v2 API failed: \(errorMessage)", category: .service, level: .error)
-            publishHealthEvent(.unhealthy("API failed: \(errorMessage)"), message: "API failed: \(errorMessage)")
-            throw error
-        }
-    }
-    
-    private func buildPredictionRequest(telemetry: TelemetryData, userSettings: UserSettings, descentRate: Double, balloonDescends: Bool = false) throws -> URLRequest {
-        var components = URLComponents()
-        components.scheme = "https"
-        components.host = "api.v2.sondehub.org"
-        components.path = "/tawhiri"
-        
-        // Burst altitude logic based on requirements:
-        // - During ascent: use settings burst altitude (default 35000m)
-        // - During descent: current altitude + 10m
-        let effectiveBurstAltitude = if balloonDescends {
-            telemetry.altitude + 10  // Requirements: current altitude + 10m for descent
-        } else {
-            max(userSettings.burstAltitude, telemetry.altitude + 100)  // Ensure above current for ascent
-        }
-        
-        appLog("PredictionService: Burst altitude - descending: \(balloonDescends), effective: \(effectiveBurstAltitude)m", category: .service, level: .info)
-        
-        let queryItems = [
-            URLQueryItem(name: "launch_latitude", value: String(telemetry.latitude)),
-            URLQueryItem(name: "launch_longitude", value: String(telemetry.longitude)),
-            URLQueryItem(name: "launch_altitude", value: String(telemetry.altitude)),
-            URLQueryItem(name: "launch_datetime", value: ISO8601DateFormatter().string(from: Date().addingTimeInterval(60))), // Requirements: actual time + 1 minute
-            URLQueryItem(name: "ascent_rate", value: String(userSettings.ascentRate)),
-            URLQueryItem(name: "burst_altitude", value: String(effectiveBurstAltitude)),
-            URLQueryItem(name: "descent_rate", value: String(abs(descentRate)))
-        ]
-        
-        components.queryItems = queryItems
-        
-        guard let url = components.url else {
-            throw PredictionError.invalidResponse
-        }
-        
-        var request = URLRequest(url: url)
-        request.httpMethod = "GET"
-        
-        // Debug logging
-        // Prediction API request (log removed)
-        
-        return request
-    }
-    
-    private func convertSondehubToPredictionData(_ sondehubResponse: SondehubPredictionResponse) throws -> PredictionData {
-        var trajectoryCoordinates: [CLLocationCoordinate2D] = []
-        var burstPoint: CLLocationCoordinate2D?
-        var landingPoint: CLLocationCoordinate2D?
-        var landingTime: Date?
-        var launchPoint: CLLocationCoordinate2D?
-        var burstAltitude: Double?
-        var flightTime: TimeInterval?
-        
-        // ISO8601 date formatter for parsing Sondehub datetime strings with fractional seconds
-        let dateFormatter = ISO8601DateFormatter()
-        dateFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        
-        // Process ascent stage
-        if let ascent = sondehubResponse.prediction.first(where: { $0.stage == "ascent" }) {
-            for point in ascent.trajectory {
-                let coordinate = CLLocationCoordinate2D(latitude: point.latitude, longitude: point.longitude)
-                trajectoryCoordinates.append(coordinate)
-            }
-            
-            // Launch point is the first point of ascent
-            if let firstAscentPoint = ascent.trajectory.first {
-                launchPoint = CLLocationCoordinate2D(latitude: firstAscentPoint.latitude, longitude: firstAscentPoint.longitude)
-            }
-            
-            // Burst point and altitude are from the last point of ascent
-            if let lastAscentPoint = ascent.trajectory.last {
-                burstPoint = CLLocationCoordinate2D(latitude: lastAscentPoint.latitude, longitude: lastAscentPoint.longitude)
-                burstAltitude = lastAscentPoint.altitude
-            }
-        }
-        
-        // Process descent stage
-        if let descent = sondehubResponse.prediction.first(where: { $0.stage == "descent" }) {
-            appLog("PredictionService: Found descent stage with \(descent.trajectory.count) trajectory points", category: .service, level: .debug)
-            
-            for point in descent.trajectory {
-                let coordinate = CLLocationCoordinate2D(latitude: point.latitude, longitude: point.longitude)
-                trajectoryCoordinates.append(coordinate)
-            }
-            
-            // Landing point and time are from the last point of descent
-            if let lastDescentPoint = descent.trajectory.last {
-                landingPoint = CLLocationCoordinate2D(latitude: lastDescentPoint.latitude, longitude: lastDescentPoint.longitude)
-                appLog("PredictionService: Last descent point datetime string: '\(lastDescentPoint.datetime)'", category: .service, level: .debug)
-                
-                landingTime = dateFormatter.date(from: lastDescentPoint.datetime)
-                
-                if landingTime == nil {
-                    appLog("PredictionService: Failed to parse landing time from: '\(lastDescentPoint.datetime)'", category: .service, level: .error)
-                    appLog("PredictionService: DateFormatter expects ISO8601 format (e.g., '2024-03-15T10:30:45Z')", category: .service, level: .error)
-                } else {
-                    appLog("PredictionService: Successfully parsed landing time: \(landingTime!) from '\(lastDescentPoint.datetime)'", category: .service, level: .info)
-                }
-                
-                // Calculate flight time from NOW to predicted landing time (per FSD)
-                if let landingTime = landingTime {
-                    flightTime = landingTime.timeIntervalSinceNow
-                    if flightTime! > 0 {
-                        let hours = Int(flightTime!) / 3600
-                        let minutes = Int(flightTime!) % 3600 / 60
-                        appLog("PredictionService: Calculated flight time from NOW to landing: \(flightTime!) seconds (\(hours)h \(minutes)m)", category: .service, level: .info)
-                    } else {
-                        appLog("PredictionService: Predicted landing time is in the past", category: .service, level: .info)
-                    }
-                }
-            } else {
-                appLog("PredictionService: No trajectory points found in descent stage", category: .service, level: .error)
-            }
-        } else {
-            appLog("PredictionService: No descent stage found in prediction response", category: .service, level: .error)
-        }
-        
-        return PredictionData(
-            path: trajectoryCoordinates,
-            burstPoint: burstPoint,
-            landingPoint: landingPoint,
-            landingTime: landingTime,
-            launchPoint: launchPoint,
-            burstAltitude: burstAltitude,
-            flightTime: flightTime,
-            metadata: nil
-        )
-    }
-    
-    // MARK: - Time Calculations (moved from DataPanelView)
-    
-    private func updateTimeCalculations() {
-        // Update predicted landing time string
-        if let predictionData = latestPrediction, let landingTime = predictionData.landingTime {
-            let formatter = DateFormatter()
-            formatter.timeStyle = .short
-            predictedLandingTimeString = formatter.string(from: landingTime)
-        } else if let serviceCoordinator = serviceCoordinator,
-                  let balloonTelemetry = serviceCoordinator.balloonTelemetry {
-            // Fallback calculation for landing time
-            predictedLandingTimeString = calculateFallbackLandingTime(telemetry: balloonTelemetry)
-        } else {
-            predictedLandingTimeString = "--:--"
-        }
-        
-        // Update remaining flight time string
-        if let predictionData = latestPrediction, let landingTime = predictionData.landingTime {
-            let remainingSeconds = landingTime.timeIntervalSinceNow
-            if remainingSeconds > 0 {
-                let hours = Int(remainingSeconds) / 3600
-                let minutes = Int(remainingSeconds) % 3600 / 60
-                remainingFlightTimeString = String(format: "%d:%02d", hours, minutes)
-            } else {
-                remainingFlightTimeString = "--:--"
-            }
-        } else {
-            remainingFlightTimeString = "--:--"
-        }
-    }
-    
-    private func calculateFallbackLandingTime(telemetry: TelemetryData) -> String {
-        let currentAltitude = telemetry.altitude
-        let descentRate: Double
-        
-        if telemetry.verticalSpeed < 0 {
-            // Descending - use actual descent rate
-            descentRate = abs(telemetry.verticalSpeed)
-        } else {
-            // Ascending - use smoothed/estimated descent rate
-            descentRate = serviceCoordinator?.smoothedDescentRate != nil ? 
-                abs(serviceCoordinator!.smoothedDescentRate!) : 5.0
-        }
-        
-        guard descentRate > 0.1 else {
-            return "--:--"
-        }
-        
-        let timeToLandingSeconds = currentAltitude / descentRate
-        let estimatedLandingTime = Date().addingTimeInterval(timeToLandingSeconds)
-        
-        let formatter = DateFormatter()
-        formatter.timeStyle = .short
-        return formatter.string(from: estimatedLandingTime)
-    }
-    
-    private func publishHealthEvent(_ health: ServiceHealth, message: String) {
-        serviceHealth = health
-        // Health status logging removed for log reduction
-    }
-}
-
-// MARK: - Sondehub API Models
-
-struct SondehubPredictionResponse: Codable {
-    let prediction: [SondehubStage]
-}
-
-struct SondehubStage: Codable {
-    let stage: String // "ascent" or "descent"
-    let trajectory: [SondehubTrajectoryPoint]
-}
-
-struct SondehubTrajectoryPoint: Codable {
-    let latitude: Double
-    let longitude: Double
-    let altitude: Double
-    let datetime: String
-}
+// MARK: - Prediction Service (moved)
+/* PredictionService moved to BalloonHunter/PredictionService.swift */
 
 // MARK: - Route Calculation Service
 
@@ -1346,35 +1059,103 @@ final class RouteCalculationService: ObservableObject {
     }
     
     func calculateRoute(from userLocation: LocationData, to destination: CLLocationCoordinate2D, transportMode: TransportationMode) async throws -> RouteData {
-        let request = MKDirections.Request()
-        
-        // Source
-        let sourcePlacemark = MKPlacemark(coordinate: CLLocationCoordinate2D(latitude: userLocation.latitude, longitude: userLocation.longitude))
-        request.source = MKMapItem(placemark: sourcePlacemark)
-        
-        // Destination
-        let destinationPlacemark = MKPlacemark(coordinate: destination)
-        request.destination = MKMapItem(placemark: destinationPlacemark)
-        
-        // Transport mode per FSD: Use .cycling for bike, .automobile for car
-        request.transportType = transportMode == .car ? .automobile : .cycling
-        
-        let directions = MKDirections(request: request)
-        let response = try await directions.calculate()
-        
-        guard let route = response.routes.first else {
-            throw RouteError.noRouteFound
+        // Log inputs
+        appLog(String(format: "RouteCalculationService: Request src=(%.5f,%.5f) dst=(%.5f,%.5f) mode=%@",
+                      userLocation.latitude, userLocation.longitude, destination.latitude, destination.longitude, transportMode.rawValue),
+               category: .service, level: .debug)
+
+        // Helper to build a request for a given transport type
+        func makeRequest(_ type: MKDirectionsTransportType, to dest: CLLocationCoordinate2D) -> MKDirections.Request {
+            let req = MKDirections.Request()
+            req.source = MKMapItem(placemark: MKPlacemark(coordinate: CLLocationCoordinate2D(latitude: userLocation.latitude, longitude: userLocation.longitude)))
+            req.destination = MKMapItem(placemark: MKPlacemark(coordinate: dest))
+            req.transportType = type
+            req.requestsAlternateRoutes = true
+            return req
         }
-        
-        // Apply 30% time reduction for bicycle mode per FSD requirement
-        let adjustedTravelTime = transportMode == .bike ? route.expectedTravelTime * 0.7 : route.expectedTravelTime
-        
-        return RouteData(
-            coordinates: extractCoordinates(from: route.polyline),
-            distance: route.distance,
-            expectedTravelTime: adjustedTravelTime,
-            transportType: transportMode
-        )
+
+        // Try preferred mode first
+        let preferredType: MKDirectionsTransportType = (transportMode == .car) ? .automobile : .cycling
+        do {
+            let response = try await MKDirections(request: makeRequest(preferredType, to: destination)).calculate()
+            if let route = response.routes.first {
+                let adjusted = transportMode == .bike ? route.expectedTravelTime * 0.7 : route.expectedTravelTime
+                return RouteData(
+                    coordinates: extractCoordinates(from: route.polyline),
+                    distance: route.distance,
+                    expectedTravelTime: adjusted,
+                    transportType: transportMode
+                )
+            }
+            throw RouteError.noRouteFound
+        } catch {
+            // If directions not available, try shifting destination by 500m in random directions
+            if let nserr = error as NSError?, nserr.domain == MKErrorDomain && nserr.code == 2 {
+                let maxAttempts = 10
+                for attempt in 1...maxAttempts {
+                    let bearing = Double.random(in: 0..<(2 * .pi))
+                    let shifted = offsetCoordinate(origin: destination, distanceMeters: 500, bearingRadians: bearing)
+                    appLog(String(format: "RouteCalculationService: Attempt %d — shifted destination to (%.5f,%.5f) bearing=%.0f°",
+                                  attempt, shifted.latitude, shifted.longitude, bearing * 180 / .pi),
+                           category: .service, level: .debug)
+                    do {
+                        let response = try await MKDirections(request: makeRequest(preferredType, to: shifted)).calculate()
+                        if let route = response.routes.first {
+                            let adjusted = transportMode == .bike ? route.expectedTravelTime * 0.7 : route.expectedTravelTime
+                            return RouteData(
+                                coordinates: extractCoordinates(from: route.polyline),
+                                distance: route.distance,
+                                expectedTravelTime: adjusted,
+                                transportType: transportMode
+                            )
+                        }
+                    } catch {
+                        // Keep trying other random shifts on directionsNotAvailable; bail on other errors
+                        if let e = error as NSError?, !(e.domain == MKErrorDomain && e.code == 2) {
+                            appLog("RouteCalculationService: Shift attempt failed with non-DNA error: \(error.localizedDescription)", category: .service, level: .debug)
+                            break
+                        }
+                    }
+                }
+                // Final fallback: straight-line polyline with heuristic ETA
+                let coords = [
+                    CLLocationCoordinate2D(latitude: userLocation.latitude, longitude: userLocation.longitude),
+                    destination
+                ]
+                let distance = CLLocation(latitude: coords[0].latitude, longitude: coords[0].longitude)
+                    .distance(from: CLLocation(latitude: coords[1].latitude, longitude: coords[1].longitude))
+                // Heuristic speeds (m/s)
+                let speed: Double = (transportMode == .car) ? 22.0 : 4.2 // ~79 km/h car, ~15 km/h bike
+                let eta = distance / speed
+                appLog(String(format: "RouteCalculationService: Directions not available — using straight-line fallback (dist=%.1f km, eta=%d min)", distance/1000.0, Int(eta/60)), category: .service, level: .info)
+                return RouteData(coordinates: coords, distance: distance, expectedTravelTime: eta, transportType: transportMode)
+            } else {
+                // Propagate other errors
+                throw error
+            }
+        }
+    }
+
+    private func offsetCoordinate(origin: CLLocationCoordinate2D, distanceMeters: Double, bearingRadians: Double) -> CLLocationCoordinate2D {
+        let R = 6_371_000.0 // meters
+        let δ = distanceMeters / R
+        let θ = bearingRadians
+        let φ1 = origin.latitude * .pi / 180
+        let λ1 = origin.longitude * .pi / 180
+        let sinφ1 = sin(φ1), cosφ1 = cos(φ1)
+        let sinδ = sin(δ), cosδ = cos(δ)
+
+        let sinφ2 = sinφ1 * cosδ + cosφ1 * sinδ * cos(θ)
+        let φ2 = asin(sinφ2)
+        let y = sin(θ) * sinδ * cosφ1
+        let x = cosδ - sinφ1 * sinφ2
+        let λ2 = λ1 + atan2(y, x)
+
+        var lon = λ2 * 180 / .pi
+        // Normalize lon to [-180, 180]
+        lon = (lon + 540).truncatingRemainder(dividingBy: 360) - 180
+        let lat = φ2 * 180 / .pi
+        return CLLocationCoordinate2D(latitude: lat, longitude: lon)
     }
     
     private func extractCoordinates(from polyline: MKPolyline) -> [CLLocationCoordinate2D] {
@@ -1621,5 +1402,3 @@ enum RouteError: Error, LocalizedError {
         }
     }
 }
-
-

@@ -6,23 +6,33 @@ import Foundation
 struct DataPanelView: View {
     // MapState eliminated - ServiceCoordinator now holds all state
     @EnvironmentObject var serviceCoordinator: ServiceCoordinator
+    @EnvironmentObject var predictionService: PredictionService
+    @EnvironmentObject var userSettings: UserSettings
+    @EnvironmentObject var bleService: BLECommunicationService
+    @EnvironmentObject var balloonTrackService: BalloonTrackService
+    @EnvironmentObject var balloonPositionService: BalloonPositionService
 
     var body: some View {
         GeometryReader { geometry in // Added GeometryReader
             let _ : CGFloat = 120 // Column width no longer needed after FSD restructure
 
             VStack {
-                // Table 1: 4 columns - Connected, Sonde Type, Sonde Name, Altitude
+                // Table 1: 5 columns - Connected, Flight Status, Sonde Type, Sonde Name, Altitude
                 Grid(alignment: .leading, horizontalSpacing: 5, verticalSpacing: 10) {
                     GridRow {
-                        Image(systemName: serviceCoordinator.connectionStatus == ConnectionStatus.connected ? "antenna.radiowaves.left.and.right" : "antenna.radiowaves.left.and.right.slash")
-                            .foregroundColor(serviceCoordinator.connectionStatus == ConnectionStatus.connected ? .green : .red)
-                            .font(.system(size: 32))
-                        Text(serviceCoordinator.balloonTelemetry?.probeType ?? "N/A")
+                        Image(systemName: bleService.connectionStatus == ConnectionStatus.connected ? "antenna.radiowaves.left.and.right" : "antenna.radiowaves.left.and.right.slash")
+                            .foregroundColor(bleService.connectionStatus == ConnectionStatus.connected ? .green : .red)
+                            .font(.system(size: 28))
+                        Image(systemName: flightStatusIconName)
+                            .foregroundColor(flightStatusTint)
+                            .font(.system(size: 24))
                             .frame(maxWidth: .infinity, alignment: .leading)
-                        Text(serviceCoordinator.balloonTelemetry?.sondeName ?? "N/A")
+                            .accessibilityLabel(Text(flightStatusString))
+                        Text(balloonPositionService.currentTelemetry?.probeType ?? "N/A")
                             .frame(maxWidth: .infinity, alignment: .leading)
-                        Text("\(serviceCoordinator.balloonTelemetry != nil ? "\(Int(serviceCoordinator.balloonTelemetry!.altitude)) m" : "N/A")")
+                        Text(balloonPositionService.currentTelemetry?.sondeName ?? "N/A")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Text("\(balloonPositionService.currentTelemetry != nil ? "\(Int(balloonPositionService.currentTelemetry!.altitude)) m" : "N/A")")
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
@@ -32,7 +42,7 @@ struct DataPanelView: View {
                 Grid(alignment: .leading, horizontalSpacing: 5, verticalSpacing: 10) {
                     // Row 1: Frequency, Signal Strength, Battery %
                     GridRow {
-                        Text("\(serviceCoordinator.frequencyString) MHz")
+                        Text("\(String(format: "%.3f", bleService.deviceSettings.frequency)) MHz")
                             .frame(maxWidth: .infinity, alignment: .leading)
                         Text("\(signalStrengthString) dBm")
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -41,10 +51,10 @@ struct DataPanelView: View {
                     }
                     // Row 2: Vertical speed, Horizontal speed, Distance
                     GridRow {
-                        Text("V: \(String(format: "%.1f", serviceCoordinator.smoothedVerticalSpeed)) m/s")
+                        Text("V: \(String(format: "%.1f", balloonTrackService.smoothedVerticalSpeed)) m/s")
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .foregroundColor((serviceCoordinator.balloonTelemetry?.verticalSpeed ?? 0) >= 0 ? .green : .red)
-                        Text("H: \(String(format: "%.1f", serviceCoordinator.smoothedHorizontalSpeed * 3.6)) km/h")
+                            .foregroundColor((balloonPositionService.currentTelemetry?.verticalSpeed ?? 0) >= 0 ? .green : .red)
+                        Text("H: \(String(format: "%.1f", balloonTrackService.smoothedHorizontalSpeed * 3.6)) km/h")
                             .frame(maxWidth: .infinity, alignment: .leading)
                         Text("Dist: \(distanceString) km")
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -60,7 +70,11 @@ struct DataPanelView: View {
                     }
                     // Row 4: Adjusted descent rate (per FSD requirement) - spans all 3 columns
                     GridRow {
-                        Text("Descent Rate: \(serviceCoordinator.displayDescentRateString) m/s")
+                        let descentValue: String = {
+                            if let r = balloonTrackService.adjustedDescentRate { return String(format: "%.1f", abs(r)) }
+                            return String(format: "%.1f", userSettings.descentRate)
+                        }()
+                        Text("Descent Rate: \(descentValue) m/s")
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .gridCellColumns(3)
                     }
@@ -73,19 +87,40 @@ struct DataPanelView: View {
             .background(Color(.systemGray6))
             .overlay(
                 RoundedRectangle(cornerRadius: 8)
-                    .stroke(serviceCoordinator.isTelemetryStale ? Color.red : Color.clear, lineWidth: 3)
+                    .stroke(balloonTrackService.isTelemetryStale ? Color.red : Color.clear, lineWidth: 3)
             )
         } // End GeometryReader
     }
 
     // MARK: - Computed properties for presentation only (business logic moved to services)
     
+    private var flightStatusString: String {
+        if balloonTrackService.isBalloonLanded { return "Landed" }
+        let v = balloonPositionService.currentTelemetry?.verticalSpeed ?? 0
+        return v >= 0 ? "Ascending" : "Descending"
+    }
+
+    private var flightStatusIconName: String {
+        if balloonTrackService.isBalloonLanded { return "target" }
+        let v = balloonPositionService.currentTelemetry?.verticalSpeed ?? 0
+        return v >= 0 ? "arrow.up.circle.fill" : "arrow.down.circle.fill"
+    }
+
+    private var flightStatusTint: Color {
+        if balloonTrackService.isBalloonLanded { return .purple }
+        let v = balloonPositionService.currentTelemetry?.verticalSpeed ?? 0
+        let alt = balloonPositionService.currentTelemetry?.altitude ?? 0
+        if v >= 0 { return .green }
+        // Descending: color based on altitude threshold
+        return alt < 10_000 ? .red : .orange
+    }
+
     private var remainingFlightTimeString: String {
-        return serviceCoordinator.remainingFlightTimeString
+        return predictionService.remainingFlightTimeString
     }
     
     private var predictedLandingTimeString: String {
-        return serviceCoordinator.predictedLandingTimeString
+        return predictionService.predictedLandingTimeString
     }
     
     private var arrivalTimeString: String {
@@ -107,7 +142,7 @@ struct DataPanelView: View {
     }
 
     private var signalStrengthString: String {
-        if let val = serviceCoordinator.balloonTelemetry?.signalStrength {
+        if let val = balloonPositionService.currentTelemetry?.signalStrength {
             // signalStrength is RSSI in dBm (typically negative values like -50 to -120)
             return String(format: "%d", val)
         }
@@ -115,21 +150,21 @@ struct DataPanelView: View {
     }
 
     private var batteryPercentageString: String {
-        if let val = serviceCoordinator.balloonTelemetry?.batteryPercentage {
+        if let val = balloonPositionService.currentTelemetry?.batteryPercentage {
             return "\(val)"
         }
         return "0"
     }
 
     private var verticalSpeedAvg: Double {
-        return serviceCoordinator.balloonTelemetry?.verticalSpeed ?? 0
+        return balloonPositionService.currentTelemetry?.verticalSpeed ?? 0
     }
     private var verticalSpeedAvgString: String {
         String(format: "%.1f", verticalSpeedAvg)
     }
 
     private var horizontalSpeedString: String {
-        if let hs = serviceCoordinator.balloonTelemetry?.horizontalSpeed {
+        if let hs = balloonPositionService.currentTelemetry?.horizontalSpeed {
             return String(format: "%.1f", hs)
         }
         return "N/A"
@@ -156,5 +191,9 @@ struct DataPanelView: View {
     
     DataPanelView()
         .environmentObject(mockServiceCoordinator)
+        .environmentObject(mockServiceCoordinator.predictionService)
+        .environmentObject(mockAppServices.userSettings)
+        .environmentObject(mockAppServices.bleCommunicationService)
+        .environmentObject(mockAppServices.balloonTrackService)
+        .environmentObject(mockAppServices.balloonPositionService)
 }
-

@@ -56,7 +56,6 @@ actor PredictionCache {
         cleanExpiredEntries()
         guard let entry = cache[key] else {
             metrics.misses += 1
-            appLog("PredictionCache: Miss for key \(key)", category: .cache, level: .debug)
             return nil
         }
         

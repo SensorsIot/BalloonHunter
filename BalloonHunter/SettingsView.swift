@@ -121,37 +121,42 @@ struct DeviceSettingsView: View {
                 HStack {
                     Text("oledSDA")
                     Spacer()
-                    TextField("", value: $deviceSettingsCopy.oledSDA, formatter: NumberFormatter())
-                        .keyboardType(.numberPad)
-                        .multilineTextAlignment(.trailing)
+                    NumericTextField("", value: $deviceSettingsCopy.oledSDA)
+                }
+                if let warn = ESP32PinRules.i2cWarning(pin: deviceSettingsCopy.oledSDA) {
+                    Text(warn).font(.footnote).foregroundColor(.red)
                 }
                 HStack {
                     Text("oledSCL")
                     Spacer()
-                    TextField("", value: $deviceSettingsCopy.oledSCL, formatter: NumberFormatter())
-                        .keyboardType(.numberPad)
-                        .multilineTextAlignment(.trailing)
+                    NumericTextField("", value: $deviceSettingsCopy.oledSCL)
+                }
+                if let warn = ESP32PinRules.i2cWarning(pin: deviceSettingsCopy.oledSCL) {
+                    Text(warn).font(.footnote).foregroundColor(.red)
                 }
                 HStack {
                     Text("oledRST")
                     Spacer()
-                    TextField("", value: $deviceSettingsCopy.oledRST, formatter: NumberFormatter())
-                        .keyboardType(.numberPad)
-                        .multilineTextAlignment(.trailing)
+                    NumericTextField("", value: $deviceSettingsCopy.oledRST)
+                }
+                if let warn = ESP32PinRules.outputWarning(pin: deviceSettingsCopy.oledRST) {
+                    Text(warn).font(.footnote).foregroundColor(.red)
                 }
                 HStack {
                     Text("ledPin")
                     Spacer()
-                    TextField("", value: $deviceSettingsCopy.ledPin, formatter: NumberFormatter())
-                        .keyboardType(.numberPad)
-                        .multilineTextAlignment(.trailing)
+                    NumericTextField("", value: $deviceSettingsCopy.ledPin)
+                }
+                if let warn = ESP32PinRules.outputWarning(pin: deviceSettingsCopy.ledPin) {
+                    Text(warn).font(.footnote).foregroundColor(.red)
                 }
                 HStack {
                     Text("buzPin")
                     Spacer()
-                    TextField("", value: $deviceSettingsCopy.buzPin, formatter: NumberFormatter())
-                        .keyboardType(.numberPad)
-                        .multilineTextAlignment(.trailing)
+                    NumericTextField("", value: $deviceSettingsCopy.buzPin)
+                }
+                if let warn = ESP32PinRules.outputWarning(pin: deviceSettingsCopy.buzPin) {
+                    Text(warn).font(.footnote).foregroundColor(.red)
                 }
             }
         }
@@ -163,23 +168,20 @@ struct DeviceSettingsView: View {
                 HStack {
                     Text("batPin")
                     Spacer()
-                    TextField("", value: $deviceSettingsCopy.batPin, formatter: NumberFormatter())
-                        .keyboardType(.numberPad)
-                        .multilineTextAlignment(.trailing)
+                    NumericTextField("", value: $deviceSettingsCopy.batPin)
+                }
+                if let warn = ESP32PinRules.batteryWarning(pin: deviceSettingsCopy.batPin) {
+                    Text(warn).font(.footnote).foregroundColor(.red)
                 }
                 HStack {
                     Text("batMin")
                     Spacer()
-                    TextField("", value: $deviceSettingsCopy.batMin, formatter: NumberFormatter())
-                        .keyboardType(.numberPad)
-                        .multilineTextAlignment(.trailing)
+                    NumericTextField("", value: $deviceSettingsCopy.batMin)
                 }
                 HStack {
                     Text("batMax")
                     Spacer()
-                    TextField("", value: $deviceSettingsCopy.batMax, formatter: NumberFormatter())
-                        .keyboardType(.numberPad)
-                        .multilineTextAlignment(.trailing)
+                    NumericTextField("", value: $deviceSettingsCopy.batMax)
                 }
                 HStack {
                     Text("batType")
@@ -207,37 +209,27 @@ struct DeviceSettingsView: View {
                 HStack {
                     Text("RS41Bandwidth")
                     Spacer()
-                    TextField("", value: $deviceSettingsCopy.RS41Bandwidth, formatter: NumberFormatter())
-                        .keyboardType(.numberPad)
-                        .multilineTextAlignment(.trailing)
+                    NumericTextField("", value: $deviceSettingsCopy.RS41Bandwidth)
                 }
                 HStack {
                     Text("M20Bandwidth")
                     Spacer()
-                    TextField("", value: $deviceSettingsCopy.M20Bandwidth, formatter: NumberFormatter())
-                        .keyboardType(.numberPad)
-                        .multilineTextAlignment(.trailing)
+                    NumericTextField("", value: $deviceSettingsCopy.M20Bandwidth)
                 }
                 HStack {
                     Text("M10Bandwidth")
                     Spacer()
-                    TextField("", value: $deviceSettingsCopy.M10Bandwidth, formatter: NumberFormatter())
-                        .keyboardType(.numberPad)
-                        .multilineTextAlignment(.trailing)
+                    NumericTextField("", value: $deviceSettingsCopy.M10Bandwidth)
                 }
                 HStack {
                     Text("PILOTBandwidth")
                     Spacer()
-                    TextField("", value: $deviceSettingsCopy.PILOTBandwidth, formatter: NumberFormatter())
-                        .keyboardType(.numberPad)
-                        .multilineTextAlignment(.trailing)
+                    NumericTextField("", value: $deviceSettingsCopy.PILOTBandwidth)
                 }
                 HStack {
                     Text("DFMBandwidth")
                     Spacer()
-                    TextField("", value: $deviceSettingsCopy.DFMBandwidth, formatter: NumberFormatter())
-                        .keyboardType(.numberPad)
-                        .multilineTextAlignment(.trailing)
+                    NumericTextField("", value: $deviceSettingsCopy.DFMBandwidth)
                 }
             }
         }
@@ -298,16 +290,12 @@ struct DeviceSettingsView: View {
                 HStack {
                     Text("serialSpeed")
                     Spacer()
-                    TextField("", value: $deviceSettingsCopy.serialSpeed, formatter: NumberFormatter())
-                        .keyboardType(.numberPad)
-                        .multilineTextAlignment(.trailing)
+                    NumericTextField("", value: $deviceSettingsCopy.serialSpeed)
                 }
                 HStack {
                     Text("serialPort")
                     Spacer()
-                    TextField("", value: $deviceSettingsCopy.serialPort, formatter: NumberFormatter())
-                        .keyboardType(.numberPad)
-                        .multilineTextAlignment(.trailing)
+                    NumericTextField("", value: $deviceSettingsCopy.serialPort)
                 }
                 HStack {
                     Text("aprsName")
@@ -357,147 +345,15 @@ struct DeviceSettingsView: View {
         deviceSettingsCopy = initialDeviceSettings
     }
     
-    private func serialSpeedToBaudIndex(_ baudRate: Int) -> Int {
-        // Per FSD: 0 (4800), 1 (9600), 2 (19200), 3 (38400), 4 (57600), 5 (115200)
-        switch baudRate {
-        case 4800: return 0
-        case 9600: return 1
-        case 19200: return 2
-        case 38400: return 3
-        case 57600: return 4
-        case 115200: return 5
-        default: return 5 // Default to 115200
-        }
-    }
+    // serialSpeedToBaudIndex removed (logic now in BLECommunicationService)
 
     private func sendDeviceSettingsToBLE() {
         // Business logic moved to BLECommunicationService for proper separation of concerns
         bleService.sendDeviceSettings(current: deviceSettingsCopy, initial: initialDeviceSettings)
     }
-    
-    // DEPRECATED: Old business logic moved to BLECommunicationService
-    private func sendDeviceSettingsToBLE_OLD() {
-        // Compare current settings with initial and send commands only for changed values.
-        
-        // Pins
-        if deviceSettingsCopy.oledSDA != initialDeviceSettings.oledSDA {
-            let command = "o{oled_sda=\(deviceSettingsCopy.oledSDA)}o"
-            bleService.sendCommand(command: command)
-        }
-        if deviceSettingsCopy.oledSCL != initialDeviceSettings.oledSCL {
-            let command = "o{oled_scl=\(deviceSettingsCopy.oledSCL)}o"
-            bleService.sendCommand(command: command)
-        }
-        if deviceSettingsCopy.oledRST != initialDeviceSettings.oledRST {
-            let command = "o{oled_rst=\(deviceSettingsCopy.oledRST)}o"
-            bleService.sendCommand(command: command)
-        }
-        if deviceSettingsCopy.ledPin != initialDeviceSettings.ledPin {
-            let command = "o{led_pout=\(deviceSettingsCopy.ledPin)}o"
-            bleService.sendCommand(command: command)
-        }
-        if deviceSettingsCopy.buzPin != initialDeviceSettings.buzPin {
-            let command = "o{buz_pin=\(deviceSettingsCopy.buzPin)}o"
-            bleService.sendCommand(command: command)
-        }
-        
-        // Battery
-        if deviceSettingsCopy.batPin != initialDeviceSettings.batPin {
-            let command = "o{battery=\(deviceSettingsCopy.batPin)}o"
-            bleService.sendCommand(command: command)
-        }
-        if deviceSettingsCopy.batMin != initialDeviceSettings.batMin {
-            let command = "o{vBatMin=\(deviceSettingsCopy.batMin)}o"
-            bleService.sendCommand(command: command)
-        }
-        if deviceSettingsCopy.batMax != initialDeviceSettings.batMax {
-            let command = "o{vBatMax=\(deviceSettingsCopy.batMax)}o"
-            bleService.sendCommand(command: command)
-        }
-        if deviceSettingsCopy.batType != initialDeviceSettings.batType {
-            let command = "o{vBatType=\(deviceSettingsCopy.batType)}o"
-            bleService.sendCommand(command: command)
-        }
-        
-        // Radio Settings
-        if deviceSettingsCopy.frequency != initialDeviceSettings.frequency {
-            // Per FSD: Use 'f=' for frequency command
-            let command = "o{f=\(String(format: "%.3f", deviceSettingsCopy.frequency))}o"
-            bleService.sendCommand(command: command)
-        }
-        if deviceSettingsCopy.callSign != initialDeviceSettings.callSign {
-            let command = "o{myCall=\(deviceSettingsCopy.callSign)}o"
-            bleService.sendCommand(command: command)
-        }
-        if deviceSettingsCopy.frequencyCorrection != initialDeviceSettings.frequencyCorrection {
-            let command = "o{freqofs=\(deviceSettingsCopy.frequencyCorrection)}o"
-            bleService.sendCommand(command: command)
-        }
-        if deviceSettingsCopy.RS41Bandwidth != initialDeviceSettings.RS41Bandwidth {
-            let command = "o{rs41.rxbw=\(deviceSettingsCopy.RS41Bandwidth)}o"
-            bleService.sendCommand(command: command)
-        }
-        if deviceSettingsCopy.M20Bandwidth != initialDeviceSettings.M20Bandwidth {
-            let command = "o{m20.rxbw=\(deviceSettingsCopy.M20Bandwidth)}o"
-            bleService.sendCommand(command: command)
-        }
-        if deviceSettingsCopy.M10Bandwidth != initialDeviceSettings.M10Bandwidth {
-            let command = "o{m10.rxbw=\(deviceSettingsCopy.M10Bandwidth)}o"
-            bleService.sendCommand(command: command)
-        }
-        if deviceSettingsCopy.PILOTBandwidth != initialDeviceSettings.PILOTBandwidth {
-            let command = "o{pilot.rxbw=\(deviceSettingsCopy.PILOTBandwidth)}o"
-            bleService.sendCommand(command: command)
-        }
-        if deviceSettingsCopy.DFMBandwidth != initialDeviceSettings.DFMBandwidth {
-            let command = "o{dfm.rxbw=\(deviceSettingsCopy.DFMBandwidth)}o"
-            bleService.sendCommand(command: command)
-        }
 
-        // Other Settings
-        if deviceSettingsCopy.lcdType != initialDeviceSettings.lcdType {
-            let command = "o{lcd=\(deviceSettingsCopy.lcdType)}o"
-            bleService.sendCommand(command: command)
-        }
-        if deviceSettingsCopy.lcdStatus != initialDeviceSettings.lcdStatus {
-            let command = "o{lcdOn=\(deviceSettingsCopy.lcdStatus)}o"
-            bleService.sendCommand(command: command)
-        }
-        if deviceSettingsCopy.serialSpeed != initialDeviceSettings.serialSpeed {
-            // Convert from baud rate to FSD index (0=4800, 1=9600, ..., 5=115200)
-            let baudIndex = serialSpeedToBaudIndex(deviceSettingsCopy.serialSpeed)
-            let command = "o{baud=\(baudIndex)}o"
-            bleService.sendCommand(command: command)
-        }
-        if deviceSettingsCopy.serialPort != initialDeviceSettings.serialPort {
-            let command = "o{com=\(deviceSettingsCopy.serialPort)}o"
-            bleService.sendCommand(command: command)
-        }
-        if deviceSettingsCopy.aprsName != initialDeviceSettings.aprsName {
-            let command = "o{aprsName=\(deviceSettingsCopy.aprsName)}o"
-            bleService.sendCommand(command: command)
-        }
-        if deviceSettingsCopy.bluetoothStatus != initialDeviceSettings.bluetoothStatus {
-            let command = "o{blu=\(deviceSettingsCopy.bluetoothStatus)}o"
-            bleService.sendCommand(command: command)
-        }
-        if deviceSettingsCopy.lcdStatus != initialDeviceSettings.lcdStatus {
-            let command = "o{lcdOn=\(deviceSettingsCopy.lcdStatus)}o"
-            bleService.sendCommand(command: command)
-        }
-        if deviceSettingsCopy.serialSpeed != initialDeviceSettings.serialSpeed {
-            let command = "o{baud=\(deviceSettingsCopy.serialSpeed)}o"
-            bleService.sendCommand(command: command)
-        }
-        if deviceSettingsCopy.serialPort != initialDeviceSettings.serialPort {
-            let command = "o{com=\(deviceSettingsCopy.serialPort)}o"
-            bleService.sendCommand(command: command)
-        }
-        if deviceSettingsCopy.aprsName != initialDeviceSettings.aprsName {
-            let command = "o{aprsName=\(deviceSettingsCopy.aprsName)}o"
-            bleService.sendCommand(command: command)
-        }
-    }
+    // Pin validation helpers moved to ESP32PinRules for reuse and testing
+    
 }
 
 
@@ -524,8 +380,7 @@ struct SettingsView: View {
     @State private var isSavingTune: Bool = false
     
     // AFC tracking managed by ServiceCoordinator (moved for proper separation of concerns)
-    
-    private let sondeTypeMapping: [String: Int] = ["RS41": 1, "M20": 2, "M10": 3, "PILOT": 4, "DFM": 5]
+    // Sonde type mapping moved to ServiceCoordinator for proper separation of concerns
     
     var body: some View {
         NavigationStack {
@@ -599,17 +454,16 @@ struct SettingsView: View {
     }
     
     private func saveSondeSettingsOnDismiss() {
-        let frequency = frequencyFromDigits()
-        tempDeviceSettings.frequency = frequency
+        // Update frequency from digits using service layer
+        tempDeviceSettings.updateFrequencyFromDigits(freqDigits)
         
-        let probeType = tempDeviceSettings.probeType
-        let probeTypeNumber = sondeTypeMapping[probeType] ?? 0
-        let commandString = "o{f=\(String(format: "%.2f", frequency))/tipo=\(probeTypeNumber)}o"
-        bleService.sendCommand(command: commandString)
+        // Delegate command generation and sending to ServiceCoordinator
+        serviceCoordinator.sendFrequencyAndTypeToDevice(
+            frequency: tempDeviceSettings.frequency,
+            probeType: tempDeviceSettings.probeType
+        )
         
-        tempDeviceSettings.frequency = frequency
-        tempDeviceSettings.probeType = probeType
-        
+        // Save to persistence
         persistenceService.save(deviceSettings: tempDeviceSettings)
     }
     
@@ -619,14 +473,17 @@ struct SettingsView: View {
         updateFreqDigitsFromFrequency()
     }
     
+    
     private func updateFreqDigitsFromFrequency() {
         // Business logic moved to DeviceSettings model for proper separation of concerns
         freqDigits = tempDeviceSettings.frequencyToDigits()
     }
 
     private func frequencyFromDigits() -> Double {
-        // Business logic moved to DeviceSettings model for proper separation of concerns
-        return tempDeviceSettings.frequency // Use current frequency directly
+        // Use DeviceSettings method for proper separation of concerns
+        var tempSettings = tempDeviceSettings
+        tempSettings.updateFrequencyFromDigits(freqDigits)
+        return tempSettings.frequency
     }
     
     // MARK: - Tune Settings Logic
@@ -706,6 +563,10 @@ struct SettingsView: View {
                             .clipped()
                             .disabled(!bleService.isReadyForCommands)
                             .layoutPriority(1)
+                            .onChange(of: freqDigits[i]) { _, _ in
+                                // Update frequency immediately when digits change
+                                tempDeviceSettings.frequency = frequencyFromDigits()
+                            }
                         }
                         Text("MHz")
                             .fixedSize()
@@ -775,4 +636,3 @@ struct SettingsView: View {
         .tabItem { Label("Tune", systemImage: "slider.horizontal.3") }
     }
 }
-
