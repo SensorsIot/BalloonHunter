@@ -863,17 +863,22 @@ final class ServiceCoordinator: ObservableObject {
         
         // Check cache first
         if let cachedRoute = await routingCache.get(key: routeKey) {
-            appLog("ServiceCoordinator: Using cached route", category: .general, level: .debug)
-            if !cachedRoute.coordinates.isEmpty {
-                userRoute = MKPolyline(coordinates: cachedRoute.coordinates, count: cachedRoute.coordinates.count)
-                isRouteVisible = true
-                routeData = cachedRoute  // Fix: Set route data for arrival time
+            // If bike-mode cached route is just a straight segment (fallback), prefer recalculation
+            if transportMode == .bike && cachedRoute.coordinates.count <= 2 {
+                appLog("ServiceCoordinator: Ignoring cached bike straight-line route; recalculating", category: .general, level: .info)
             } else {
-                userRoute = nil
-                isRouteVisible = false
-                routeData = nil
+                appLog("ServiceCoordinator: Using cached route", category: .general, level: .debug)
+                if !cachedRoute.coordinates.isEmpty {
+                    userRoute = MKPolyline(coordinates: cachedRoute.coordinates, count: cachedRoute.coordinates.count)
+                    isRouteVisible = true
+                    routeData = cachedRoute  // Fix: Set route data for arrival time
+                } else {
+                    userRoute = nil
+                    isRouteVisible = false
+                    routeData = nil
+                }
+                return
             }
-            return
         }
         
         appLog("ServiceCoordinator: Calculating new route", category: .general, level: .info)

@@ -1117,6 +1117,34 @@ final class RouteCalculationService: ObservableObject {
                         }
                     }
                 }
+                
+                // Expanded destination search (no transport type switching)
+                let searchRadii: [Double] = [300, 600, 1200] // meters
+                let bearingsDeg: [Double] = stride(from: 0.0, to: 360.0, by: 45.0).map { $0 }
+                searchLoop: for r in searchRadii {
+                    for deg in bearingsDeg {
+                        let shifted = offsetCoordinate(origin: destination, distanceMeters: r, bearingRadians: deg * .pi / 180)
+                        appLog(String(format: "RouteCalculationService: Radial search r=%.0fm bearing=%.0f° -> (%.5f,%.5f)", r, deg, shifted.latitude, shifted.longitude), category: .service, level: .debug)
+                        do {
+                            let response = try await MKDirections(request: makeRequest(preferredType, to: shifted)).calculate()
+                            if let route = response.routes.first {
+                                let adjusted = transportMode == .bike ? route.expectedTravelTime * 0.7 : route.expectedTravelTime
+                                return RouteData(
+                                    coordinates: extractCoordinates(from: route.polyline),
+                                    distance: route.distance,
+                                    expectedTravelTime: adjusted,
+                                    transportType: transportMode
+                                )
+                            }
+                        } catch {
+                            if let e = error as NSError?, !(e.domain == MKErrorDomain && e.code == 2) {
+                                appLog("RouteCalculationService: Radial search failed with non-DNA error: \(error.localizedDescription)", category: .service, level: .debug)
+                                break searchLoop
+                            }
+                        }
+                    }
+                }
+                // (fallback to straight-line handled below)
                 // Final fallback: straight-line polyline with heuristic ETA
                 let coords = [
                     CLLocationCoordinate2D(latitude: userLocation.latitude, longitude: userLocation.longitude),
