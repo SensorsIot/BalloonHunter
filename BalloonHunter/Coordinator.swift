@@ -7,10 +7,90 @@ import MapKit
 import OSLog
 import UIKit
 
+// MARK: - Landed Position Smoother
+// Handles adaptive position smoothing for landed balloon display
+
+@MainActor
+class LandedPositionSmoother: ObservableObject {
+    private var landedPositionBuffer: [CLLocationCoordinate2D] = []
+    private let maxBufferSize = 60 // 60 seconds of data
+    private let minSmoothingPoints = 5 // Minimum points for smoothing
+
+    @Published var displayPosition: CLLocationCoordinate2D?
+    @Published var smoothedPosition: CLLocationCoordinate2D?
+
+    func updateLandedPosition(newPosition: CLLocationCoordinate2D, isLanded: Bool) {
+        if isLanded {
+            // Add to smoothing buffer
+            landedPositionBuffer.append(newPosition)
+            if landedPositionBuffer.count > maxBufferSize {
+                landedPositionBuffer.removeFirst()
+            }
+
+            // Immediate display (no delay)
+            if displayPosition == nil {
+                displayPosition = newPosition
+            }
+
+            // Progressive smoothing
+            updateSmoothedPosition()
+
+        } else {
+            // Not landed - clear buffer and use real-time position
+            landedPositionBuffer.removeAll()
+            displayPosition = newPosition
+            smoothedPosition = nil
+        }
+    }
+
+    private func updateSmoothedPosition() {
+        guard landedPositionBuffer.count >= minSmoothingPoints else {
+            // Not enough points yet - use weighted average of available data
+            displayPosition = weightedAverage()
+            return
+        }
+
+        // Full smoothing with available data
+        let smoothed = calculateSmoothedPosition()
+        smoothedPosition = smoothed
+
+        // Gradually transition display position toward smoothed position
+        displayPosition = interpolatePosition(
+            from: displayPosition ?? smoothed,
+            to: smoothed,
+            factor: 0.1 // 10% step toward smoothed position each update
+        )
+    }
+
+    private func weightedAverage() -> CLLocationCoordinate2D {
+        let recent = landedPositionBuffer.suffix(min(landedPositionBuffer.count, 10))
+        let lat = recent.map { $0.latitude }.reduce(0, +) / Double(recent.count)
+        let lon = recent.map { $0.longitude }.reduce(0, +) / Double(recent.count)
+        return CLLocationCoordinate2D(latitude: lat, longitude: lon)
+    }
+
+    private func calculateSmoothedPosition() -> CLLocationCoordinate2D {
+        // Use all available data (up to 60 points)
+        let lat = landedPositionBuffer.map { $0.latitude }.reduce(0, +) / Double(landedPositionBuffer.count)
+        let lon = landedPositionBuffer.map { $0.longitude }.reduce(0, +) / Double(landedPositionBuffer.count)
+        return CLLocationCoordinate2D(latitude: lat, longitude: lon)
+    }
+
+    private func interpolatePosition(from: CLLocationCoordinate2D, to: CLLocationCoordinate2D, factor: Double) -> CLLocationCoordinate2D {
+        let lat = from.latitude + (to.latitude - from.latitude) * factor
+        let lon = from.longitude + (to.longitude - from.longitude) * factor
+        return CLLocationCoordinate2D(latitude: lat, longitude: lon)
+    }
+
+    func reset() {
+        landedPositionBuffer.removeAll()
+        displayPosition = nil
+        smoothedPosition = nil
+    }
+}
+
 // MARK: - Coordinator
 // Transitional class for service coordination and dependency injection
-
- 
 
 @MainActor
 final class ServiceCoordinator: ObservableObject {
@@ -34,6 +114,7 @@ final class ServiceCoordinator: ObservableObject {
     @Published var landingPoint: CLLocationCoordinate2D? = nil
     @Published var isBalloonLanded: Bool = false
     @Published var burstPoint: CLLocationCoordinate2D? = nil
+    @Published var balloonDisplayPosition: CLLocationCoordinate2D? = nil // Smoothed position for display
     
     // Additional data for DataPanelView
     @Published var predictionData: PredictionData? = nil
@@ -58,7 +139,7 @@ final class ServiceCoordinator: ObservableObject {
     @Published var isStartupComplete: Bool = false
     @Published var showLogo: Bool = true
     @Published var showTrackingMap: Bool = false
-    
+
     // UI state
     @Published var transportMode: TransportationMode = .car
     @Published var isHeadingMode: Bool = false
@@ -108,9 +189,22 @@ final class ServiceCoordinator: ObservableObject {
     
     // User settings reference (for external access)
     var userSettings = UserSettings()
-    
+
+    // Adaptive position smoothing for landed balloons
+    private let landedPositionSmoother = LandedPositionSmoother()
+
     // Adjusted descent rate now computed by BalloonTrackService
-    
+
+    // MARK: - Flight State Computed Properties
+    private var isFlying: Bool {
+        return balloonTrackService.balloonPhase != .landed &&
+               balloonTrackService.balloonPhase != .unknown
+    }
+
+    private var isLanded: Bool {
+        return balloonTrackService.balloonPhase == .landed
+    }
+
     // Phase 2: Telemetry counter for comparison logging
     private var telemetryCounter = 0
     
@@ -343,14 +437,8 @@ final class ServiceCoordinator: ObservableObject {
         // - The landing position  
         // - If a balloon is flying, the route and predicted path
         
-        // Only trigger show all annotations if we have a landing point to display
-        if landingPoint != nil {
-            appLog("🔍 ZOOM: ServiceCoordinator computing camera for all annotations (landing point available)", category: .general, level: .info)
-            updateCameraToShowAllAnnotations()
-            appLog("ServiceCoordinator: Initial map display complete with all annotations", category: .general, level: .info)
-        } else {
-            appLog("🔍 ZOOM: ServiceCoordinator NOT triggering show all annotations (no landing point)", category: .general, level: .info)
-        }
+        // Map display setup complete (zoom handled at end of startup sequence)
+        appLog("ServiceCoordinator: Initial map display setup complete", category: .general, level: .info)
     }
     
     // MARK: - Direct Event Handling
@@ -441,7 +529,15 @@ final class ServiceCoordinator: ObservableObject {
                 self?.frequencyString = String(format: "%.3f", settings.frequency)
             }
             .store(in: &cancellables)
-        
+
+        // Subscribe to landed position smoother for display position
+        landedPositionSmoother.$displayPosition
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] smoothedPos in
+                self?.balloonDisplayPosition = smoothedPos
+            }
+            .store(in: &cancellables)
+
         appLog("ServiceCoordinator: Setup direct telemetry, location, and BLE connection subscriptions", category: .general, level: .debug)
     }
         
@@ -505,19 +601,23 @@ final class ServiceCoordinator: ObservableObject {
     // Direct telemetry handling with prediction timing
     private func handleBalloonTelemetry(_ telemetry: TelemetryData) {
         // Suppress verbose per-packet telemetry summary in debug logs
-        
+
         // Update ServiceCoordinator with telemetry data (direct subscription)
         balloonTelemetry = telemetry
         // Keep frequency visible without waiting for device settings
         if telemetry.frequency > 0 {
             frequencyString = String(format: "%.3f", telemetry.frequency)
         }
-        
+
         // Update AFC frequency tracking (moved from SettingsView for proper separation of concerns)
         updateAFCTracking(telemetry)
-        
+
+        // Update landed position smoother with new position
+        let balloonPosition = CLLocationCoordinate2D(latitude: telemetry.latitude, longitude: telemetry.longitude)
+        landedPositionSmoother.updateLandedPosition(newPosition: balloonPosition, isLanded: isBalloonLanded)
+
         // Adjusted descent rate is computed by BalloonTrackService; subscription updates UI
-        
+
         // Update map with balloon position and annotations
         updateMapWithBalloonPosition(telemetry)
         
@@ -697,16 +797,19 @@ final class ServiceCoordinator: ObservableObject {
     // MARK: - Simplified Business Logic
     
     private func updateMapWithBalloonPosition(_ telemetry: TelemetryData) {
+        // Use smoothed position for display if available (for landed balloons), otherwise use raw telemetry
+        let displayCoordinate = balloonDisplayPosition ?? CLLocationCoordinate2D(latitude: telemetry.latitude, longitude: telemetry.longitude)
+
         // Update balloon annotation directly
         let balloonAnnotation = MapAnnotationItem(
-            coordinate: CLLocationCoordinate2D(latitude: telemetry.latitude, longitude: telemetry.longitude),
+            coordinate: displayCoordinate,
             title: "Balloon",
             type: .balloon
         )
         
-        // Update user annotation if available
+        // Update user annotation if available (flight mode only)
         var annotations: [MapAnnotationItem] = [balloonAnnotation]
-        if let userLocation = userLocation {
+        if isFlying, let userLocation = userLocation {
             let userAnnotation = MapAnnotationItem(
                 coordinate: CLLocationCoordinate2D(latitude: userLocation.latitude, longitude: userLocation.longitude),
                 title: "You",
@@ -724,8 +827,7 @@ final class ServiceCoordinator: ObservableObject {
         
         // Add burst point if available AND balloon is ascending
         if let burstPoint = burstPoint,
-           let telemetryData = balloonTelemetry,
-           telemetryData.verticalSpeed >= 0 { // Only show when ascending
+           balloonTrackService.balloonPhase == .ascending {
             let burstAnnotation = MapAnnotationItem(coordinate: burstPoint, title: "Burst",
                 type: .burst)
             annotations.append(burstAnnotation)
@@ -756,10 +858,13 @@ final class ServiceCoordinator: ObservableObject {
         // Update prediction data
         predictionData = prediction
         
-        // Update prediction path
-        if let path = prediction.path, !path.isEmpty {
+        // Update prediction path (flight mode only)
+        if isFlying, let path = prediction.path, !path.isEmpty {
             predictionPath = MKPolyline(coordinates: path, count: path.count)
             isPredictionPathVisible = true
+        } else if isLanded {
+            predictionPath = nil
+            isPredictionPathVisible = false
         }
         
         // Check if landing point moved significantly (trigger route update)
@@ -777,8 +882,7 @@ final class ServiceCoordinator: ObservableObject {
             updateMapWithBalloonPosition(telemetry)
         }
         
-        // Per FSD: Use maximum zoom level to show all annotations after data loading
-        updateCameraToShowAllAnnotations()
+        // Map annotations updated (no automatic zoom change)
         
         // Trigger route update if landing point moved significantly
         if shouldUpdateRouteFromLandingChange {
@@ -830,6 +934,14 @@ final class ServiceCoordinator: ObservableObject {
     }
     
     func updateRoute() async {
+        // Only show routes during flight - user navigates to actual landed position when landed
+        guard isFlying else {
+            userRoute = nil
+            isRouteVisible = false
+            appLog("ServiceCoordinator: Route hidden - balloon is landed", category: .general, level: .debug)
+            return
+        }
+
         guard let userLocation = userLocation,
               let landingPoint = landingPoint else {
             appLog("ServiceCoordinator: Cannot calculate route - missing user location or landing point", category: .general, level: .debug)
@@ -972,6 +1084,7 @@ final class ServiceCoordinator: ObservableObject {
         
         appLog("🔍 ZOOM: ServiceCoordinator updateCameraToShowAllAnnotations - \(zoomKm)km (\(String(format: "%.3f", span.latitudeDelta))°) for \(coordinates.count) points at [\(String(format: "%.4f", center.latitude)), \(String(format: "%.4f", center.longitude))]", category: .general, level: .info)
     }
+
     
     // MARK: - Persistence Data Loading (Per FSD)
     
@@ -1006,8 +1119,8 @@ final class ServiceCoordinator: ObservableObject {
     private func updateAnnotationsWithoutTelemetry() {
         var annotations: [MapAnnotationItem] = []
         
-        // Add user annotation if available
-        if let userLocation = userLocation {
+        // Add user annotation if available (flight mode only)
+        if isFlying, let userLocation = userLocation {
             let userAnnotation = MapAnnotationItem(
                 coordinate: CLLocationCoordinate2D(latitude: userLocation.latitude, longitude: userLocation.longitude),
                 title: "You",
@@ -1088,7 +1201,11 @@ final class ServiceCoordinator: ObservableObject {
                 persistenceService.saveLandingPoint(sondeName: sondeName, coordinate: clipboardLanding)
                 appLog("ServiceCoordinator: Successfully set and persisted landing point from clipboard", category: .service, level: .info)
             }
-            
+
+            // Set balloon as landed since we have a manual landing point from clipboard
+            balloonTrackService.setBalloonAsLanded(at: clipboardLanding)
+            appLog("ServiceCoordinator: Balloon set as landed due to clipboard landing point", category: .service, level: .info)
+
             // Update DomainModel
             // Landing point already set in ServiceCoordinator state above
             

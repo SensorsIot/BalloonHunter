@@ -596,6 +596,23 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
         switch messageType {
         case "0":
             // Device Basic Info and Status
+            let type0FieldLabels = [
+                "messageType",
+                "probeType",
+                "frequencyMHz",
+                "rssiDbm",
+                "batPercentage",
+                "batVoltageMillivolts",
+                "buzmute",
+                "softwareVersion",
+                "packetTerminator"
+            ]
+            let type0DebugLine = components.enumerated().map { index, value -> String in
+                let label = index < type0FieldLabels.count ? type0FieldLabels[index] : "field\(index)"
+                let displayValue = label == "rssiDbm" ? displayRssi(from: value) : value
+                return "\(label)=\(displayValue)"
+            }.joined(separator: " ")
+            appLog("🔍 BLE DBG (Type 0): \(type0DebugLine)", category: .ble, level: .debug)
             if let status = parseType0Message(components) {
                 // Show all available packet data for Type 0 messages
                 let packetInfo = components.enumerated().map { (index, value) in
@@ -612,6 +629,35 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
             
         case "1":
             // Probe Telemetry
+            let type1FieldLabels = [
+                "messageType",
+                "probeType",
+                "frequencyMHz",
+                "sondeName",
+                "latitude",
+                "longitude",
+                "altitudeMeters",
+                "horizontalSpeedMps",
+                "verticalSpeedMps",
+                "rssiDbm",
+                "batPercentage",
+                "afcFrequency",
+                "burstKillerEnabled",
+                "burstKillerTimeSeconds",
+                "batVoltageMillivolts",
+                "buzmute",
+                "reserved1",
+                "reserved2",
+                "reserved3",
+                "softwareVersion",
+                "packetTerminator"
+            ]
+            let type1DebugLine = components.enumerated().map { index, value -> String in
+                let label = index < type1FieldLabels.count ? type1FieldLabels[index] : "field\(index)"
+                let displayValue = label == "rssiDbm" ? displayRssi(from: value) : value
+                return "\(label)=\(displayValue)"
+            }.joined(separator: " ")
+            appLog("🔍 BLE DBG (Type 1): \(type1DebugLine)", category: .ble, level: .debug)
             if components.count >= 20 {
                 let named = [
                     "probeType=\(components[1])",
@@ -622,7 +668,7 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
                     "altitude=\(components[6])m",
                     "horizontalSpeed=\(components[7])m/s",
                     "verticalSpeed=\(components[8])m/s",
-                    "RSSI=\(components[9])dBm",
+                    "RSSI=\(displayRssi(from: components[9]))dBm",
                     "batPercentage=\(components[10])%",
                     "afcFrequency=\(components[11])",
                     "burstKillerEnabled=\(components[12])",
@@ -670,12 +716,31 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
             
         case "2":
             // Name Only
+            let type2FieldLabels = [
+                "messageType",
+                "probeType",
+                "frequencyMHz",
+                "sondeName",
+                "rssiDbm",
+                "batPercentage",
+                "afcFrequency",
+                "batVoltageMillivolts",
+                "buzmute",
+                "softwareVersion",
+                "packetTerminator"
+            ]
+            let type2DebugLine = components.enumerated().map { index, value -> String in
+                let label = index < type2FieldLabels.count ? type2FieldLabels[index] : "field\(index)"
+                let displayValue = label == "rssiDbm" ? displayRssi(from: value) : value
+                return "\(label)=\(displayValue)"
+            }.joined(separator: " ")
+            appLog("🔍 BLE DBG (Type 2): \(type2DebugLine)", category: .ble, level: .debug)
             if components.count >= 10 {
                 let named = [
                     "probeType=\(components[1])",
                     "frequency=\(components[2])MHz",
                     "sondeName=\(components[3])",
-                    "RSSI=\(components[4])dBm",
+                    "RSSI=\(displayRssi(from: components[4]))dBm",
                     "batPercentage=\(components[5])%",
                     "afcFrequency=\(components[6])",
                     "batVoltage=\(components[7])mV",
@@ -685,7 +750,7 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
                 appLog("🏷️ BLE MSG (Type 2): \(named)", category: .ble, level: .info)
                 // Plausibility checks (limited fields)
                 var warns: [String] = []
-                if let rssi = Double(components[4]), rssi > 0 { warns.append("RSSI positive (expected negative dBm)") }
+                if let rssi = adjustedRssiValue(from: components[4]), rssi > -10 { warns.append("RSSI unusually high (>-10 dBm)") }
                 if let batp = Int(components[5]), !(0...100).contains(batp) { warns.append("batPercentage out of range") }
                 if let batmv = Int(components[7]), !(2500...5000).contains(batmv) { warns.append("batVoltage mV implausible") }
                 if !warns.isEmpty { appLog("⚠️ BLE MSG (Type 2) plausibility: " + warns.joined(separator: ", "), category: .ble, level: .info) }
@@ -698,6 +763,36 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
             
         case "3":
             // Device Configuration
+            let type3FieldLabels = [
+                "messageType",
+                "probeType",
+                "frequencyMHz",
+                "oledSDA",
+                "oledSCL",
+                "oledRST",
+                "ledPin",
+                "rs41Bandwidth",
+                "m20Bandwidth",
+                "m10Bandwidth",
+                "pilotBandwidth",
+                "dfmBandwidth",
+                "callSign",
+                "frequencyCorrection",
+                "batPin",
+                "batMinMillivolts",
+                "batMaxMillivolts",
+                "batType",
+                "lcdType",
+                "nameType",
+                "buzPin",
+                "softwareVersion",
+                "packetTerminator"
+            ]
+            let type3DebugLine = components.enumerated().map { index, value -> String in
+                let label = index < type3FieldLabels.count ? type3FieldLabels[index] : "field\(index)"
+                return "\(label)=\(value)"
+            }.joined(separator: " ")
+            appLog("🔍 BLE DBG (Type 3): \(type3DebugLine)", category: .ble, level: .debug)
             if components.count >= 22 {
                 let named = [
                     "probeType=\(components[1])",
@@ -758,20 +853,42 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
         }
     }
 
+    private func adjustedRssiValue(from rawValue: String) -> Double? {
+        let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let value = Double(trimmed) else { return nil }
+        return value > 0 ? -value : value
+    }
+
+    private func displayRssi(from rawValue: String) -> String {
+        if let adjusted = adjustedRssiValue(from: rawValue) {
+            return String(adjusted)
+        }
+        return rawValue
+    }
+
     // Type 0: Device Basic Info and Status
     private func parseType0Message(_ components: [String]) -> DeviceStatusData? {
+        guard let messageType = components.first, messageType == "0" else {
+            appLog("BLE: Type 0 parse mismatch - expected leading '0', found '\(components.first ?? "nil")'", category: .ble, level: .error)
+            return nil
+        }
         guard components.count >= 8 else { return nil }
         
+        let rssiValue = adjustedRssiValue(from: components[3]) ?? (Double(components[3]) ?? 0.0)
         return DeviceStatusData(
             batteryVoltage: Double(components[5]) ?? 0.0,
             temperature: 0.0, // Not provided in this message type
-            signalStrength: Int(Double(components[3]) ?? 0.0),
+            signalStrength: Int(rssiValue),
             timestamp: Date()
         )
     }
     
     // Type 1: Probe Telemetry
     private func parseType1Message(_ components: [String]) -> TelemetryData? {
+        guard let messageType = components.first, messageType == "1" else {
+            appLog("BLE: Type 1 parse mismatch - expected leading '1', found '\(components.first ?? "nil")'", category: .ble, level: .error)
+            return nil
+        }
         guard components.count >= 20 else { return nil }
         
         let probeType = components[1]
@@ -782,9 +899,11 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
         let altitude = Double(components[6]) ?? 0.0
         let horizontalSpeed = Double(components[7]) ?? 0.0
         let verticalSpeed = Double(components[8]) ?? 0.0
-        let rssi = Double(components[9]) ?? 0.0
+        let rssi = adjustedRssiValue(from: components[9]) ?? (Double(components[9]) ?? 0.0)
+        let batteryPercentage = Int(components[10]) ?? 0
+        let batteryVoltage = Double(components[14]) ?? 0.0
         let buzmute = components[15] == "1"
-        
+
         return TelemetryData(
             sondeName: sondeName,
             probeType: probeType,
@@ -795,10 +914,11 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
             verticalSpeed: verticalSpeed,
             horizontalSpeed: horizontalSpeed,
             heading: 0.0, // Not provided in this message
-            temperature: 0.0, // Not provided in this message  
+            temperature: 0.0, // Not provided in this message
             humidity: 0.0, // Not provided in this message
             pressure: 0.0, // Not provided in this message
-            batteryVoltage: 0.0, // Not provided in this message type
+            batteryVoltage: batteryVoltage,
+            batteryPercentage: batteryPercentage,
             signalStrength: Int(rssi),
             timestamp: Date(),
             buzmute: buzmute
@@ -807,6 +927,10 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
     
     // Type 2: Name Only
     private func parseType2Message(_ components: [String]) -> NameOnlyData? {
+        guard let messageType = components.first, messageType == "2" else {
+            appLog("BLE: Type 2 parse mismatch - expected leading '2', found '\(components.first ?? "nil")'", category: .ble, level: .error)
+            return nil
+        }
         guard components.count >= 10 else { return nil }
         
         return NameOnlyData(
@@ -817,6 +941,10 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
 
     // Type 3: Device Configuration
     private func parseType3Message(_ components: [String]) -> DeviceSettings? {
+        guard let messageType = components.first, messageType == "3" else {
+            appLog("BLE: Type 3 parse mismatch - expected leading '3', found '\(components.first ?? "nil")'", category: .ble, level: .error)
+            return nil
+        }
         guard components.count >= 22 else { 
             appLog("BLE: Type 3 message has insufficient components: \(components.count), expected 22", category: .ble, level: .error)
             return nil 

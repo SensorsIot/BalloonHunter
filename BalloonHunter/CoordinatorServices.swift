@@ -25,42 +25,39 @@ in‑code markup for quick reference while working on the startup sequence.
    - Initialize core services as early as possible.
    - Present the logo page immediately during startup.
 
-2) Initial Map
-   - After calling the location service, render the tracking map (with button row and data panel).
-   - Show the user's position with a zoom of ~25 km.
-
-3) Connect Device
+2) Connect Device
    - BLE service attempts to connect to MySondyGo.
    - Wait up to 5 seconds for a connection; BLE remains non‑blocking and may connect later.
    - If no connection, set the "no tracking" flag (degraded mode) and continue.
 
-4) Publish Telemetry
+3) Publish Telemetry
    - After the first BLE packet is received and decoded, BLE publishes whether telemetry is available.
 
-5) Device Settings (optional, non‑blocking)
+4) Device Settings (optional, non‑blocking)
    - BLE issues o{?}o opportunistically after the first packet, and SettingsView can also request on demand.
    - Startup does not wait for a settings response; configuration is stored when received and used by settings views.
 
-6) Read Persistence
+5) Read Persistence
    - Load from persistence:
      - Prediction parameters
      - Historic track data
      - Landing point (if available)
 
-7) Landing Point Determination (priorities)
+6) Landing Point Determination (priorities)
    - Prio 1: If telemetry is received and the balloon is landed, set landing point to current balloon position.
    - Prio 2: If balloon is still in flight (telemetry available), use the predicted landing position.
    - Prio 3: Parse a landing point from the clipboard (OpenStreetMap URL), if available.
    - Prio 4: If none of the above apply, use the persisted landing point.
    - Otherwise: No landing point is available.
 
-8) Final Map Displayed
-   - Show the initial map at a zoom/region that includes:
+7) Final Map Displayed
+   - Show the tracking map (with button row and data panel).
+   - Initial map uses maximum zoom level to show all available overlays:
      - User position
      - Landing position (if available)
      - If a balloon is flying, the route and predicted path
 
-9) End of Setup
+8) End of Setup
    - Transition to steady‑state tracking: BLE telemetry updates, prediction scheduling (60 s),
      and route recalculation (on mode change and significant user movement).
 
@@ -71,62 +68,64 @@ in‑code markup for quick reference while working on the startup sequence.
 */
 extension ServiceCoordinator {
     
-    /// Performs the complete 8-step startup sequence as defined in FSD
+    /// Performs the complete 7-step startup sequence as defined in FSD
     func performCompleteStartupSequence() async {
         let startTime = Date()
         
-        // Phase 1: Steps 1-3 (Services → Location → Map)
+        // Phase 1: Steps 1-2 (Services → BLE)
         let phase1Start = Date()
-        await MainActor.run { 
+        await MainActor.run {
             currentStartupStep = 1
-            startupProgress = "1-3. Services & Location" 
+            startupProgress = "1-2. Services & BLE"
         }
-        
+
         // Step 1: Service Initialization (already done)
-        // Step 2: Location Services Activation
-        await activateLocationServices()
-        // Step 3: Initial Map Display  
-        await setupInitialMapView()
-        
-        let phase1Time = Date().timeIntervalSince(phase1Start)
-        appLog("STARTUP: Steps 1-3 ✅ Services → Location → Map (\(String(format: "%.1f", phase1Time))s)", category: .general, level: .info)
-        
-        // Phase 2: Steps 4-6 (BLE Connect → Telemetry → Settings)
-        let phase2Start = Date()
-        await MainActor.run { 
-            currentStartupStep = 4
-            startupProgress = "4-6. BLE & Data" 
-        }
-        
-        // Step 4: BLE Connection
+        // Step 2: BLE Connection
         let _ = await startBLEConnectionWithTimeout()
-        // Step 5: First Telemetry Package
-        await waitForFirstBLEPackageAndPublishTelemetryStatus()
-        // Step 6: Device Settings - handled opportunistically by BLE service; no blocking needed
-        
-        let phase2Time = Date().timeIntervalSince(phase2Start)
-        appLog("STARTUP: Steps 4-6 ✅ BLE Connect → Telemetry → Settings (\(String(format: "%.1f", phase2Time))s)", category: .general, level: .info)
-        
-        // Phase 3: Steps 7-8 (Persistence → Landing Point)
-        let phase3Start = Date()
-        await MainActor.run { 
-            currentStartupStep = 7
-            startupProgress = "7-8. Data & Display" 
+
+        let phase1Time = Date().timeIntervalSince(phase1Start)
+        appLog("STARTUP: Steps 1-2 ✅ Services → BLE (\(String(format: "%.1f", phase1Time))s)", category: .general, level: .info)
+
+        // Phase 2: Steps 3-5 (Telemetry → Settings → Data)
+        let phase2Start = Date()
+        await MainActor.run {
+            currentStartupStep = 3
+            startupProgress = "3-5. Telemetry & Data"
         }
-        
-        // Step 7: Persistence Data
+
+        // Step 3: First Telemetry Package
+        await waitForFirstBLEPackageAndPublishTelemetryStatus()
+        // Step 4: Device Settings - handled opportunistically by BLE service; no blocking needed
+        // Step 5: Persistence Data
         await loadAllPersistenceData()
-        // Step 8: Landing Point & Final Display
+
+        let phase2Time = Date().timeIntervalSince(phase2Start)
+        appLog("STARTUP: Steps 3-5 ✅ Telemetry → Settings → Data (\(String(format: "%.1f", phase2Time))s)", category: .general, level: .info)
+
+        // Phase 3: Steps 6-7 (Landing Point → Final Map)
+        let phase3Start = Date()
+        await MainActor.run {
+            currentStartupStep = 6
+            startupProgress = "6-7. Landing & Display"
+        }
+
+        // Step 6: Landing Point Determination
+        appLog("STARTUP: Step 6 - Starting landing point determination", category: .general, level: .info)
         await determineLandingPointWithPriorities()
+        appLog("STARTUP: Step 6 - Landing point determination complete", category: .general, level: .info)
+
+        // Step 7: Final Map Display
+        appLog("STARTUP: Step 7 - Starting final map display", category: .general, level: .info)
         await setupInitialMapDisplay()
-        
+        appLog("STARTUP: Step 7 - Final map display complete", category: .general, level: .info)
+
         let phase3Time = Date().timeIntervalSince(phase3Start)
-        appLog("STARTUP: Steps 7-8 ✅ Persistence → Landing Point (\(String(format: "%.1f", phase3Time))s)", category: .general, level: .info)
-        
+        appLog("STARTUP: Steps 6-7 ✅ Landing Point → Final Map (\(String(format: "%.1f", phase3Time))s)", category: .general, level: .info)
+
         // Mark startup as complete
         let totalTime = Date().timeIntervalSince(startTime)
         await MainActor.run {
-            currentStartupStep = 8
+            currentStartupStep = 7
             startupProgress = "Startup Complete"
             isStartupComplete = true
             showLogo = false
@@ -138,43 +137,10 @@ extension ServiceCoordinator {
     
     // MARK: - Startup Step Execution Helper (removed - using consolidated logging)
     
-    // MARK: - Step 2: Location Services Activation
-    
-    private func activateLocationServices() async {
-        // Wait briefly for location service to initialize
-        try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
-        
-        if let userLoc = userLocation {
-            // Set 25km zoom around user position for startup
-            let region = MKCoordinateRegion(
-                center: CLLocationCoordinate2D(latitude: userLoc.latitude, longitude: userLoc.longitude),
-                span: MKCoordinateSpan(latitudeDelta: 0.225, longitudeDelta: 0.225) // ~25km zoom for startup
-            )
-            let zoomKm = Int(region.span.latitudeDelta * 111) // Approximate km conversion
-            appLog("🔍 ZOOM: CoordinatorServices startup - \(zoomKm)km (\(String(format: "%.3f", region.span.latitudeDelta))°) at [\(String(format: "%.4f", region.center.latitude)), \(String(format: "%.4f", region.center.longitude))]", category: .general, level: .info)
-            await MainActor.run {
-                self.region = region
-            }
-        } else {
-            appLog("🔍 ZOOM: CoordinatorServices startup - no user location available", category: .general, level: .error)
-        }
-    }
-    
-    // MARK: - Step 3: Initial Map Display
-    
-    private func setupInitialMapView() async {
-        await MainActor.run {
-            showTrackingMap = true
-        }
-        
-        // Wait for UI to update
-        try? await Task.sleep(nanoseconds: 300_000_000) // 0.3 seconds
-    }
-    
-    // MARK: - Step 4: BLE Connection
+    // MARK: - Step 2: BLE Connection
     
     private func startBLEConnectionWithTimeout() async -> (connected: Bool, hasMessage: Bool) {
-        // Step 4: Starting BLE connection (log removed)
+        // Step 2: Starting BLE connection (log removed)
         
         // Wait for Bluetooth to be powered on (reasonable timeout)
         let bluetoothTimeout = Date().addingTimeInterval(5) // 5 seconds for Bluetooth
@@ -201,15 +167,15 @@ extension ServiceCoordinator {
             // BLE connection established
             return (connected: true, hasMessage: true)
         } else {
-            appLog("Step 4: No BLE connection established within timeout", category: .general, level: .info)
+            appLog("Step 2: No BLE connection established within timeout", category: .general, level: .info)
             return (connected: false, hasMessage: false)
         }
     }
-    
-    // MARK: - Step 5: First Telemetry Package
-    
+
+    // MARK: - Step 3: First Telemetry Package
+
     private func waitForFirstBLEPackageAndPublishTelemetryStatus() async {
-        // Step 5: Waiting for first BLE package (log removed)
+        // Step 3: Waiting for first BLE package (log removed)
         
         // Wait up to 3 seconds for the first BLE message of any type
         let timeout = Date().addingTimeInterval(3)
@@ -232,27 +198,27 @@ extension ServiceCoordinator {
         }
         
         if !hasReceivedFirstMessage {
-            appLog("Step 5: No BLE package received within timeout", category: .general, level: .info)
+            appLog("Step 3: No BLE package received within timeout", category: .general, level: .info)
         }
     }
-    
-    // Step 6 removed: BLE service issues o{?}o after first packet; SettingsView also requests on demand.
-    
-    // MARK: - Step 7: Persistence Data
+
+    // Step 4 removed: BLE service issues o{?}o after first packet; SettingsView also requests on demand.
+
+    // MARK: - Step 5: Persistence Data
     
     func loadAllPersistenceData() async {
-        // Step 7: Reading persistence data (log removed)
-        
+        // Step 5: Reading persistence data (log removed)
+
         // Load prediction parameters (already loaded during initialize)
-        // Historic track data will be loaded by BalloonTrackService when first telemetry arrives  
+        // Historic track data will be loaded by BalloonTrackService when first telemetry arrives
         // Landing point loaded from persistence (without clipboard parsing)
         loadPersistenceData()
-        
+
         try? await Task.sleep(nanoseconds: 200_000_000) // 0.2 seconds for loading
         // Persistence data loading complete
     }
-    
-    // MARK: - Step 8: Landing Point & Final Display
+
+    // MARK: - Step 6: Landing Point & Step 7: Final Display
     
     func determineLandingPointWithPriorities() async {
         appLog("Landing: Starting landing point determination", category: .general, level: .info)
@@ -340,21 +306,18 @@ extension ServiceCoordinator {
     }
     
     private func setupInitialMapDisplay() async {
-        // Display initial map with all annotations
-        
-        // Per FSD: Initial map uses maximum zoom level to show:
-        // - The user position
-        // - The landing position  
-        // - If a balloon is flying, the route and predicted path
-        
-        // Only trigger show all annotations if we have a landing point to display
-        if landingPoint != nil {
-            appLog("🔍 ZOOM: CoordinatorServices computing camera for all annotations (landing point available)", category: .general, level: .info)
-            updateCameraToShowAllAnnotations()
-        } else {
-            appLog("🔍 ZOOM: CoordinatorServices NOT triggering show all annotations (no landing point)", category: .general, level: .info)
+        // Show tracking map for the first time
+        // TrackingMapView will automatically trigger showAnnotations when map is ready
+
+        await MainActor.run {
+            showTrackingMap = true
         }
-        
-        // Initial map display complete
+
+        // Brief wait for UI to update
+        try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
+
+        appLog("🔍 ZOOM: TrackingMap displayed - will auto-trigger showAnnotations when ready", category: .general, level: .info)
+
+        // TrackingMapView will call updateCameraToShowAllAnnotations() when map camera initializes
     }
 }

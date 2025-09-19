@@ -26,34 +26,7 @@ enum BalloonPhase: String, Codable {
     case unknown
 }
 
-@MainActor
-class UserSettings: ObservableObject, Codable {
-    @Published var burstAltitude: Double = 30000
-    @Published var ascentRate: Double = 5.0
-    @Published var descentRate: Double = 5.0
-    
-    enum CodingKeys: CodingKey {
-        case burstAltitude, ascentRate, descentRate
-    }
-    
-    required init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        burstAltitude = try container.decode(Double.self, forKey: .burstAltitude)
-        ascentRate = try container.decode(Double.self, forKey: .ascentRate)
-        descentRate = try container.decode(Double.self, forKey: .descentRate)
-    }
-    
-    func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(burstAltitude, forKey: .burstAltitude)
-        try container.encode(ascentRate, forKey: .ascentRate)
-        try container.encode(descentRate, forKey: .descentRate)
-    }
-    
-    init() {
-        // Default values already set above
-    }
-}
+// UserSettings moved to Settings.swift
 
 // MARK: - Data Models
 
@@ -209,15 +182,7 @@ struct MapAnnotationItem: Identifiable {
 }
 
 
-@MainActor
-class AppSettings: ObservableObject {
-    // App-level settings can be added here as needed
-    @Published var debugMode: Bool = false
-    
-    init() {
-        // Default values
-    }
-}
+// AppSettings moved to Settings.swift
 
 // MARK: - Application Logging
 
@@ -724,10 +689,8 @@ final class BalloonTrackService: ObservableObject {
         // Update adjusted descent rate (60s robust + 20-sample smoothing)
         updateAdjustedDescentRate()
 
-        // Development CSV logging (DEBUG only)
-        #if DEBUG
+        // CSV logging (all builds)
         DebugCSVLogger.shared.logTelemetry(telemetryData)
-        #endif
 
         // Publish track update
         trackUpdated.send()
@@ -916,10 +879,49 @@ final class BalloonTrackService: ObservableObject {
         
         // Use smoothed horizontal speed (km/h) for an additional guard
         let smoothedHorizontalSpeedKmh = horizontalSpeedBuffer.count >= 10 ? (horizontalSpeedBuffer.reduce(0, +) / Double(horizontalSpeedBuffer.count)) * 3.6 : telemetryData.horizontalSpeed * 3.6
-        
-        // Landed decision (≤30s worst-case): altitude hardly changes and horizontal drift tiny
-        // Relaxed thresholds to account for GPS jitter
-        let isLandedNow = hasRecentTelemetry && window30.count >= 10 && altSpread30 < 2.0 && radius30 < 10.0 && smoothedHorizontalSpeedKmh < 2.0
+
+        // Calculate statistical confidence for landing detection
+        func calculateLandingConfidence(window30: [BalloonTrackPoint], smoothedHorizontalSpeedKmh: Double) -> (confidence: Double, isLanded: Bool) {
+            guard window30.count >= 3 else { return (0.0, false) }
+
+            // 1. Altitude stability - account for poor GPS altitude accuracy (±10-15m typical)
+            let altitudes = window30.map { $0.altitude }
+            let altMean = altitudes.reduce(0, +) / Double(altitudes.count)
+            let altVariance = altitudes.map { pow($0 - altMean, 2) }.reduce(0, +) / Double(altitudes.count)
+            let altStdDev = sqrt(altVariance)
+            let altConfidence = max(0, 1.0 - altStdDev / 12.0) // 12m = 0% confidence, 0m = 100% (reflects GPS altitude inaccuracy)
+
+            // 2. Position stability (movement radius confidence)
+            let firstPos = CLLocation(latitude: window30[0].latitude, longitude: window30[0].longitude)
+            let maxDistance = window30.map { point in
+                let pos = CLLocation(latitude: point.latitude, longitude: point.longitude)
+                return firstPos.distance(from: pos)
+            }.max() ?? 0
+            let posConfidence = max(0, 1.0 - maxDistance / 20.0) // 20m = 0%, 0m = 100%
+
+            // 3. Speed stability (velocity confidence) - more lenient thresholds
+            let avgHSpeed = window30.map { $0.horizontalSpeed }.reduce(0, +) / Double(window30.count)
+            let avgVSpeed = window30.map { abs($0.verticalSpeed) }.reduce(0, +) / Double(window30.count)
+            let avgTotalSpeed = max(avgHSpeed, avgVSpeed)
+            let speedConfidence = max(0, 1.0 - avgTotalSpeed / 2.0) // 2 m/s = 0%, 0 m/s = 100% (more lenient)
+
+            // 4. Sample size confidence (more samples = higher confidence)
+            let sampleConfidence = min(1.0, Double(window30.count) / 8.0) // 8+ samples = 100%
+
+            // Combined confidence - prioritize horizontal position (more accurate than altitude)
+            let totalConfidence = (altConfidence * 0.2 + posConfidence * 0.4 + speedConfidence * 0.3 + sampleConfidence * 0.1)
+
+            // Landing decision: 75% confidence threshold (reduced from 80% for better responsiveness)
+            return (totalConfidence, totalConfidence >= 0.75)
+        }
+
+        // Statistical confidence-based landing detection
+        let (landingConfidence, isLandedNow) = calculateLandingConfidence(window30: window30, smoothedHorizontalSpeedKmh: smoothedHorizontalSpeedKmh)
+
+        // Debug landing detection criteria
+        appLog(String(format: "🎯 LANDING: points=%d altSpread=%.1fm radius=%.1fm speed=%.1fkm/h confidence=%.1f%% → landed=%@",
+                      window30.count, altSpread30, radius30, smoothedHorizontalSpeedKmh, landingConfidence * 100, isLandedNow ? "YES" : "NO"),
+               category: .general, level: .info)
         
         // Update balloon flying/landed state
         let wasPreviouslyFlying = isBalloonFlying
@@ -960,7 +962,7 @@ final class BalloonTrackService: ObservableObject {
         if isBalloonLanded {
             let altSpread10 = altSpread(window10)
             let radius10 = p95Radius(window10)
-            if altSpread10 > 3.0 || radius10 > 12.0 || smoothedHorizontalSpeedKmh > 3.0 {
+            if altSpread10 > 5.0 || radius10 > 20.0 || smoothedHorizontalSpeedKmh > 6.0 {
                 isBalloonLanded = false
                 appLog("BalloonTrackService: Landed CLEARED — altSpread10=\(String(format: "%.2f", altSpread10))m, radius10=\(String(format: "%.1f", radius10))m, hSpeed(avg)=\(String(format: "%.2f", smoothedHorizontalSpeedKmh)) km/h", category: .service, level: .info)
             }
@@ -997,7 +999,15 @@ final class BalloonTrackService: ObservableObject {
         currentBalloonTrack.removeAll()
         trackUpdated.send()
     }
-    
+
+    // Manually set balloon as landed (e.g., when landing point comes from clipboard)
+    func setBalloonAsLanded(at coordinate: CLLocationCoordinate2D) {
+        isBalloonLanded = true
+        landingPosition = coordinate
+        balloonPhase = .landed
+        appLog("BalloonTrackService: Balloon manually set as LANDED at \(String(format: "%.5f, %.5f", coordinate.latitude, coordinate.longitude))", category: .service, level: .info)
+    }
+
     // MARK: - Smoothing and Staleness Detection (moved from DataPanelView)
     
     private func updateSmoothedSpeeds() {
@@ -1049,7 +1059,139 @@ final class BalloonTrackService: ObservableObject {
 
 // MARK: - Route Calculation Service
 
-@MainActor
+// MARK: - Routing Cache (co-located with RouteCalculationService)
+
+actor RoutingCache {
+    private struct RoutingCacheEntry: Sendable {
+        let data: RouteData
+        let timestamp: Date
+        let version: Int
+        let accessCount: Int
+
+        init(data: RouteData, version: Int, timestamp: Date = Date(), accessCount: Int = 1) {
+            self.data = data
+            self.timestamp = timestamp
+            self.version = version
+            self.accessCount = accessCount
+        }
+
+        func accessed() -> RoutingCacheEntry {
+            RoutingCacheEntry(data: data, version: version, timestamp: timestamp, accessCount: accessCount + 1)
+        }
+    }
+
+    private struct RoutingCacheMetrics: Sendable {
+        var hits: Int = 0
+        var misses: Int = 0
+        var evictions: Int = 0
+        var expirations: Int = 0
+
+        var hitRate: Double {
+            let total = hits + misses
+            return total > 0 ? Double(hits) / Double(total) : 0.0
+        }
+    }
+
+    private var cache: [String: RoutingCacheEntry] = [:]
+    private let ttl: TimeInterval
+    private let capacity: Int
+    private var lru: [String] = []
+    private var metrics = RoutingCacheMetrics()
+
+    init(ttl: TimeInterval = 300, capacity: Int = 100) {
+        self.ttl = ttl
+        self.capacity = capacity
+    }
+
+    func get(key: String) -> RouteData? {
+        cleanExpiredEntries()
+        guard let entry = cache[key] else {
+            metrics.misses += 1
+            appLog("RoutingCache: Miss for key \(key)", category: .cache, level: .debug)
+            return nil
+        }
+
+        if Date.now.timeIntervalSince(entry.timestamp) > ttl {
+            cache.removeValue(forKey: key)
+            lru.removeAll(where: { $0 == key })
+            metrics.expirations += 1
+            metrics.misses += 1
+            appLog("RoutingCache: Expired entry for key \(key)", category: .cache, level: .debug)
+            return nil
+        }
+
+        cache[key] = entry.accessed()
+
+        // Update LRU: move to front
+        lru.removeAll(where: { $0 == key })
+        lru.insert(key, at: 0)
+
+        metrics.hits += 1
+        appLog("RoutingCache: Hit for key \(key) (v\(entry.version), accessed \(entry.accessCount + 1) times)", category: .cache, level: .debug)
+        return entry.data
+    }
+
+    func set(key: String, value: RouteData, version: Int = 0) {
+        cleanExpiredEntries()
+
+        // Check if we need to evict entries
+        if cache.count >= capacity && cache[key] == nil {
+            // Evict LRU entry
+            if let lruKey = lru.popLast() {
+                cache.removeValue(forKey: lruKey)
+                metrics.evictions += 1
+                appLog("RoutingCache: Evicted LRU entry \(lruKey)", category: .cache, level: .debug)
+            }
+        }
+
+        let entry = RoutingCacheEntry(data: value, version: version, timestamp: Date())
+        cache[key] = entry
+
+        // Update LRU
+        lru.removeAll(where: { $0 == key })
+        lru.insert(key, at: 0)
+
+        appLog("RoutingCache: Set key \(key) with version \(version)", category: .cache, level: .debug)
+    }
+
+    private func cleanExpiredEntries() {
+        let now = Date.now
+        let expiredKeys = cache.compactMap { (key, entry) in
+            now.timeIntervalSince(entry.timestamp) > ttl ? key : nil
+        }
+
+        for key in expiredKeys {
+            cache.removeValue(forKey: key)
+            lru.removeAll(where: { $0 == key })
+            metrics.expirations += 1
+        }
+
+        if !expiredKeys.isEmpty {
+            appLog("RoutingCache: Cleaned \(expiredKeys.count) expired entries", category: .cache, level: .debug)
+        }
+    }
+
+    func getStats() -> [String: Any] {
+        let now = Date.now
+        let validEntries = cache.values.filter { now.timeIntervalSince($0.timestamp) <= ttl }
+        let avgAge = validEntries.isEmpty ? 0 : validEntries.map { now.timeIntervalSince($0.timestamp) }.reduce(0, +) / Double(validEntries.count)
+        let total = metrics.hits + metrics.misses
+        let hitRate = total > 0 ? Double(metrics.hits) / Double(total) : 0.0
+        return [
+            "totalEntries": cache.count,
+            "validEntries": validEntries.count,
+            "hitRate": hitRate,
+            "hits": metrics.hits,
+            "misses": metrics.misses,
+            "evictions": metrics.evictions,
+            "expirations": metrics.expirations,
+            "averageAge": avgAge,
+            "capacity": capacity,
+            "ttl": ttl
+        ]
+    }
+}
+
 final class RouteCalculationService: ObservableObject {
     private let currentLocationService: CurrentLocationService
     

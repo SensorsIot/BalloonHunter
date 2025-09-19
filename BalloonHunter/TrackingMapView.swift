@@ -3,6 +3,33 @@ import MapKit
 import Combine
 import OSLog
 
+// MARK: - Distance Overlay Component
+struct DistanceOverlayView: View {
+    let userLocation: LocationData
+    let balloonPosition: CLLocationCoordinate2D
+
+    private var distance: Double {
+        let userCoord = CLLocationCoordinate2D(latitude: userLocation.latitude, longitude: userLocation.longitude)
+        return CLLocation(latitude: userCoord.latitude, longitude: userCoord.longitude)
+            .distance(from: CLLocation(latitude: balloonPosition.latitude, longitude: balloonPosition.longitude))
+    }
+
+    var body: some View {
+        VStack {
+            Spacer()
+            Text(String(format: "%.0f m", distance))
+                .font(.headline)
+                .foregroundColor(.white)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(.black.opacity(0.7))
+                .cornerRadius(20)
+                .padding(.bottom, 20)
+        }
+        .animation(.easeInOut(duration: 0.3), value: distance) // Smooth distance changes
+    }
+}
+
 struct TrackingMapView: View {
     @EnvironmentObject var appServices: AppServices
     @EnvironmentObject var userSettings: UserSettings
@@ -13,7 +40,19 @@ struct TrackingMapView: View {
     @State private var hasInitializedFromLocation = false
     @State private var savedZoomLevel: MKCoordinateSpan = MKCoordinateSpan(latitudeDelta: 0.225, longitudeDelta: 0.225) // Default ~25km zoom for startup
     @State private var isInHeadingMode: Bool = false
-    
+    @State private var hasPreservedStartupZoom = false  // Track if we've preserved startup zoom on first appearance
+    @State private var needsStartupZoom = true  // Track if we need to apply startup zoom
+
+    // MARK: - Flight State Computed Properties
+    private var isFlying: Bool {
+        return serviceCoordinator.balloonTrackService.balloonPhase != .landed &&
+               serviceCoordinator.balloonTrackService.balloonPhase != .unknown
+    }
+
+    private var isLanded: Bool {
+        return serviceCoordinator.balloonTrackService.balloonPhase == .landed
+    }
+
     private func logZoomChange(_ description: String, span: MKCoordinateSpan, center: CLLocationCoordinate2D? = nil) {
         let zoomKm = Int(span.latitudeDelta * 111) // Approximate km conversion
         if let center = center {
@@ -106,7 +145,8 @@ struct TrackingMapView: View {
                 }
 
                 // Direct ServiceCoordinator Map Rendering
-                Map(position: $position, interactionModes: serviceCoordinator.isHeadingMode ? .zoom : .all) {
+                ZStack {
+                    Map(position: $position, interactionModes: serviceCoordinator.isHeadingMode ? .zoom : .all) {
                     
                     // 1. Balloon Track: Historic track as thin red line
                     if let balloonTrackPath = serviceCoordinator.balloonTrackPath {
@@ -114,21 +154,24 @@ struct TrackingMapView: View {
                             .stroke(.red, lineWidth: 2)
                     }
                     
-                    // 2. Balloon Predicted Path: Thick blue line (controlled by visibility toggle)
-                    if serviceCoordinator.isPredictionPathVisible,
+                    // 2. Balloon Predicted Path: Thick blue line (flying mode only)
+                    if isFlying,
+                       serviceCoordinator.isPredictionPathVisible,
                        let predictionPath = serviceCoordinator.predictionPath {
                         MapPolyline(predictionPath)
                             .stroke(.blue, lineWidth: 4)
                     }
                     
-                    // 3. Planned Route: Green path from user to landing point
-                    if let userRoute = serviceCoordinator.userRoute {
+                    // 3. Planned Route: Green path from user to landing point (flying mode only)
+                    if isFlying,
+                       let userRoute = serviceCoordinator.userRoute {
                         MapPolyline(userRoute)
                             .stroke(.green, lineWidth: 3)
                     }
                     
-                    // 4. User Position: Runner icon at user location
-                    if let userLocation = serviceCoordinator.userLocation {
+                    // 4. User Position: Runner icon at user location (flying mode only)
+                    if isFlying,
+                       let userLocation = serviceCoordinator.userLocation {
                         let userCoordinate = CLLocationCoordinate2D(
                             latitude: userLocation.latitude,
                             longitude: userLocation.longitude
@@ -141,18 +184,27 @@ struct TrackingMapView: View {
                         }
                     }
                     
-                    // 5. Balloon Live Position: Green (ascending) or Red (descending) balloon
+                    // 5. Balloon Live Position: Color based on flight phase
                     if let balloonTelemetry = serviceCoordinator.balloonTelemetry {
-                        let balloonCoordinate = CLLocationCoordinate2D(
+                        // Use smoothed display position when available (for landed balloons), otherwise use raw telemetry
+                        let balloonCoordinate = serviceCoordinator.balloonDisplayPosition ?? CLLocationCoordinate2D(
                             latitude: balloonTelemetry.latitude,
                             longitude: balloonTelemetry.longitude
                         )
-                        let isAscending = balloonTelemetry.verticalSpeed >= 0
+                        let balloonColor: Color = {
+                            switch serviceCoordinator.balloonTrackService.balloonPhase {
+                            case .ascending: return .green
+                            case .descendingAbove10k: return .orange
+                            case .descendingBelow10k: return .red
+                            case .landed: return .purple
+                            case .unknown: return .gray
+                            }
+                        }()
                         
                         Annotation("", coordinate: balloonCoordinate) {
                             Image(systemName: "balloon.fill")
                                 .font(.system(size: 30))
-                                .foregroundColor(isAscending ? .green : .red)
+                                .foregroundColor(balloonColor)
                             .onTapGesture {
                                 // Manual prediction trigger
                                 serviceCoordinator.triggerPrediction()
@@ -162,8 +214,7 @@ struct TrackingMapView: View {
                     
                     // 6. Burst Point: Only visible when balloon is ascending
                     if let burstPoint = serviceCoordinator.burstPoint,
-                       let balloonTelemetry = serviceCoordinator.balloonTelemetry,
-                       balloonTelemetry.verticalSpeed >= 0 {
+                       serviceCoordinator.balloonTrackService.balloonPhase == .ascending {
                         Annotation("Burst", coordinate: burstPoint) {
                             Image(systemName: "burst.fill")
                                 .font(.title2)
@@ -191,6 +242,15 @@ struct TrackingMapView: View {
                 .frame(height: geometry.size.height * 0.7)
                 .onMapCameraChange { context in
                     guard !showSettings else { return }
+
+                    // If this is the first camera change and we need startup zoom, trigger it
+                    if needsStartupZoom {
+                        needsStartupZoom = false
+                        appLog("🔍 ZOOM: Map initialized, triggering startup zoom", category: .general, level: .info)
+                        serviceCoordinator.updateCameraToShowAllAnnotations()
+                        return
+                    }
+
                     // Update saved zoom level when user changes map view
                     savedZoomLevel = context.region.span
                     logZoomChange("Map camera changed by user", span: context.region.span, center: context.region.center)
@@ -204,10 +264,21 @@ struct TrackingMapView: View {
                 }
                 .onReceive(serviceCoordinator.$isHeadingMode) { isHeadingMode in
                     guard !showSettings else { return }
+
+                    // On first appearance, preserve startup zoom by not switching modes yet
+                    if !hasPreservedStartupZoom {
+                        hasPreservedStartupZoom = true
+                        isInHeadingMode = isHeadingMode
+                        appLog("🔍 ZOOM: TrackingMapView first appearance - preserving startup zoom", category: .general, level: .info)
+                        return
+                    }
+
                     updateMapPositionForHeadingMode(isHeadingMode)
                 }
                 .onReceive(serviceCoordinator.$userLocation) { userLocation in
                     guard !showSettings else { return }
+                    // Don't override startup zoom until we've preserved it
+                    guard hasPreservedStartupZoom else { return }
                     if serviceCoordinator.isHeadingMode {
                         updateMapPositionForHeadingMode(true)
                     }
@@ -217,6 +288,18 @@ struct TrackingMapView: View {
                     // Transport mode changed - trigger route recalculation
                     Task {
                         await serviceCoordinator.updateRoute()
+                    }
+                }
+
+                    // Distance annotation overlay (landing mode only)
+                    if isLanded,
+                       let userLocation = serviceCoordinator.userLocation,
+                       let balloonPosition = serviceCoordinator.balloonDisplayPosition {
+
+                        DistanceOverlayView(
+                            userLocation: userLocation,
+                            balloonPosition: balloonPosition
+                        )
                     }
                 }
 

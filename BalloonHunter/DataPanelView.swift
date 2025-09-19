@@ -95,24 +95,31 @@ struct DataPanelView: View {
     // MARK: - Computed properties for presentation only (business logic moved to services)
     
     private var flightStatusString: String {
-        if balloonTrackService.isBalloonLanded { return "Landed" }
-        let v = balloonPositionService.currentTelemetry?.verticalSpeed ?? 0
-        return v >= 0 ? "Ascending" : "Descending"
+        switch balloonTrackService.balloonPhase {
+        case .landed: return "Landed"
+        case .ascending: return "Ascending"
+        case .descendingAbove10k, .descendingBelow10k: return "Descending"
+        case .unknown: return "Unknown"
+        }
     }
 
     private var flightStatusIconName: String {
-        if balloonTrackService.isBalloonLanded { return "target" }
-        let v = balloonPositionService.currentTelemetry?.verticalSpeed ?? 0
-        return v >= 0 ? "arrow.up.circle.fill" : "arrow.down.circle.fill"
+        switch balloonTrackService.balloonPhase {
+        case .landed: return "target"
+        case .ascending: return "arrow.up.circle.fill"
+        case .descendingAbove10k, .descendingBelow10k: return "arrow.down.circle.fill"
+        case .unknown: return "questionmark.circle"
+        }
     }
 
     private var flightStatusTint: Color {
-        if balloonTrackService.isBalloonLanded { return .purple }
-        let v = balloonPositionService.currentTelemetry?.verticalSpeed ?? 0
-        let alt = balloonPositionService.currentTelemetry?.altitude ?? 0
-        if v >= 0 { return .green }
-        // Descending: color based on altitude threshold
-        return alt < 10_000 ? .red : .orange
+        switch balloonTrackService.balloonPhase {
+        case .landed: return .purple
+        case .ascending: return .green
+        case .descendingBelow10k: return .red  // Low altitude descent - critical
+        case .descendingAbove10k: return .orange  // High altitude descent - normal
+        case .unknown: return .gray
+        }
     }
 
     private var remainingFlightTimeString: String {

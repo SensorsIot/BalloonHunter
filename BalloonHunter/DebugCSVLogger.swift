@@ -1,4 +1,3 @@
-#if DEBUG
 import Foundation
 import CoreLocation
 
@@ -73,4 +72,3 @@ final class DebugCSVLogger {
         return s
     }
 }
-#endif
