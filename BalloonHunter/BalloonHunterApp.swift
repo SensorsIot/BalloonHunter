@@ -35,6 +35,8 @@ import SwiftUI
 import Combine
 import UIKit // Import UIKit for UIApplication
 import OSLog // Import OSLog for appLog function
+import UserNotifications // Import for notification handling
+import MapKit // Import for Apple Maps integration
 
 @main
 struct BalloonHunterApp: App {
@@ -43,6 +45,7 @@ struct BalloonHunterApp: App {
     @StateObject var serviceCoordinator: ServiceCoordinator
     @StateObject var appSettings = AppSettings()
     @State private var animateLoading = false
+    @State private var notificationDelegate: NotificationDelegate?
     
     init() {
         let services = AppServices()
@@ -135,10 +138,17 @@ struct BalloonHunterApp: App {
                 }
             }
             .onAppear {
+                // Request notification permissions
+                requestNotificationPermissions()
+
+                // Set up notification handling
+                setupNotificationHandling()
+
                 // Initialize services
                 appServices.initialize()
+                serviceCoordinator.setAppSettings(appSettings)
                 serviceCoordinator.initialize()
-                
+
                 // Start the 8-step startup sequence
                 Task {
                     await serviceCoordinator.performCompleteStartupSequence()
@@ -152,5 +162,87 @@ struct BalloonHunterApp: App {
                 appLog("BalloonHunterApp: App became inactive, saved data.", category: .lifecycle, level: .info)
             }
         }
+    }
+
+    // MARK: - Notification Handling
+
+    private func requestNotificationPermissions() {
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, error in
+            if granted {
+                appLog("BalloonHunterApp: Notification permissions granted", category: .lifecycle, level: .info)
+            } else {
+                appLog("BalloonHunterApp: Notification permissions denied", category: .lifecycle, level: .error)
+            }
+        }
+    }
+
+    private func setupNotificationHandling() {
+        let center = UNUserNotificationCenter.current()
+        notificationDelegate = NotificationDelegate(serviceCoordinator: serviceCoordinator)
+        center.delegate = notificationDelegate
+
+    }
+
+}
+
+// MARK: - Notification Delegate
+
+class NotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
+    let serviceCoordinator: ServiceCoordinator
+
+    init(serviceCoordinator: ServiceCoordinator) {
+        self.serviceCoordinator = serviceCoordinator
+    }
+
+    // Handle notification tap
+    func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse, withCompletionHandler completionHandler: @escaping () -> Void) {
+
+        let userInfo = response.notification.request.content.userInfo
+
+        // User tapped the notification - open Apple Maps with new destination
+        if let latitude = userInfo["latitude"] as? Double,
+           let longitude = userInfo["longitude"] as? Double {
+
+            let newDestination = CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
+
+            DispatchQueue.main.async {
+                // Open Apple Maps with new destination
+                let placemark = MKPlacemark(coordinate: newDestination)
+                let mapItem = MKMapItem(placemark: placemark)
+                mapItem.name = "Updated Balloon Landing Site"
+
+                // Use persisted transport mode from UserDefaults
+                let persistedTransportMode = AppSettings.getPersistedTransportMode()
+                let directionsMode: String
+                switch persistedTransportMode {
+                case .car:
+                    directionsMode = MKLaunchOptionsDirectionsModeDriving
+                case .bike:
+                    if #available(iOS 14.0, *) {
+                        directionsMode = MKLaunchOptionsDirectionsModeCycling
+                    } else {
+                        directionsMode = MKLaunchOptionsDirectionsModeWalking // Fallback for older iOS
+                    }
+                }
+
+                let launchOptions = [
+                    MKLaunchOptionsDirectionsModeKey: directionsMode
+                ]
+
+                mapItem.openInMaps(launchOptions: launchOptions)
+
+                // Update the last destination
+                self.serviceCoordinator.updateLastAppleMapsDestination(newDestination)
+
+                appLog("BalloonHunterApp: Opened Apple Maps from notification", category: .lifecycle, level: .info)
+            }
+        }
+
+        completionHandler()
+    }
+
+    // Show notification even when app is in foreground
+    func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification, withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        completionHandler([.banner, .sound])
     }
 }

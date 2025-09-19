@@ -1,5 +1,12 @@
 import Foundation
 import Combine
+import OSLog
+
+// MARK: - Notification Names
+
+extension Notification.Name {
+    static let transportModeChanged = Notification.Name("transportModeChanged")
+}
 
 // MARK: - App and User Settings
 
@@ -35,7 +42,39 @@ final class AppSettings: ObservableObject {
     // App-level settings can be added here as needed
     @Published var debugMode: Bool = false
 
-    init() { }
+    // Transport mode with UserDefaults persistence
+    @Published var transportMode: TransportationMode = .car {
+        didSet {
+            UserDefaults.standard.set(transportMode.rawValue, forKey: "transportMode")
+            appLog("AppSettings: Transport mode saved to UserDefaults: \(transportMode.rawValue)", category: .general, level: .debug)
+
+            // Notify about transport mode change for route recalculation
+            NotificationCenter.default.post(name: .transportModeChanged, object: transportMode)
+        }
+    }
+
+    init() {
+        // Load transport mode from UserDefaults
+        if let savedMode = UserDefaults.standard.object(forKey: "transportMode") as? String,
+           let mode = TransportationMode(rawValue: savedMode) {
+            transportMode = mode
+            appLog("AppSettings: Loaded transport mode from UserDefaults: \(savedMode)", category: .general, level: .debug)
+        } else {
+            // Default to car mode if no saved preference
+            transportMode = .car
+            UserDefaults.standard.set(transportMode.rawValue, forKey: "transportMode")
+            appLog("AppSettings: Using default transport mode: car", category: .general, level: .debug)
+        }
+    }
+
+    // Static method for notification handler to read persisted transport mode
+    static func getPersistedTransportMode() -> TransportationMode {
+        if let savedMode = UserDefaults.standard.object(forKey: "transportMode") as? String,
+           let mode = TransportationMode(rawValue: savedMode) {
+            return mode
+        }
+        return .car // Default fallback
+    }
 }
 
 // MARK: - ESP32 Pin Validation Rules (used by settings)

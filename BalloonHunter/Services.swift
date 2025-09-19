@@ -220,114 +220,120 @@ nonisolated func appLog(_ message: String, category: LogCategory, level: OSLogTy
 
 @MainActor
 final class CurrentLocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
-    
+
     @Published var locationData: LocationData? = nil
     @Published var isLocationPermissionGranted: Bool = false
-    
-    private let locationManager = CLLocationManager()
+    @Published var significantMovementLocation: LocationData? = nil // Only updates on 10m+ movement
+    @Published var distanceOverlayText: String = "--" // Formatted distance text for overlay display
+    @Published var isWithin200mOfBalloon: Bool = false // For navigation logic
+
+    // Dual location managers for different operational modes
+    private let backgroundLocationManager = CLLocationManager() // 30-second updates, standard accuracy
+    private let precisionLocationManager = CLLocationManager()  // 1-2 second updates, best accuracy
+
     private var lastHeading: Double? = nil
     private var lastLocationTime: Date? = nil
     private var lastLocationUpdate: Date? = nil
-    private var currentBalloonPosition: CLLocationCoordinate2D?
-    private var currentProximityMode: ProximityMode = .far
+    private var lastSignificantMovementLocation: CLLocationCoordinate2D? = nil
+    private var currentBalloonDisplayPosition: CLLocationCoordinate2D?
+    private var isHeadingModeActive: Bool = false
+    private var backgroundTimer: Timer?
     private var cancellables = Set<AnyCancellable>()
     
-    // GPS configuration based on proximity to balloon per specification
-    enum ProximityMode {
-        case close  // <100m from balloon - Highest GPS precision, no movement threshold, 1Hz max
-        case far    // >100m from balloon - Reasonable precision, 5m movement threshold
+    // Location service operational modes
+    enum LocationMode {
+        case background  // 30-second updates, standard accuracy for tracking
+        case precision   // 1-2 second updates, best accuracy for heading mode
     }
+
     
     override init() {
         super.init()
-        locationManager.delegate = self
-        configureGPSForMode(.far) // Start with far-range settings
-        setupBalloonTrackingSubscription()
-        appLog("CurrentLocationService: GPS configured for FAR RANGE - 10m accuracy, 5m distance filter", category: .service, level: .info)
-        appLog("CurrentLocationService: Initialized with dynamic proximity filtering", category: .service, level: .info)
+        setupLocationManagers()
+        startBackgroundLocationService()
+        appLog("CurrentLocationService: Initialized with dual-mode architecture (background active)", category: .service, level: .info)
+    }
+
+    private func setupLocationManagers() {
+        // Configure background location manager
+        backgroundLocationManager.delegate = self
+        backgroundLocationManager.desiredAccuracy = kCLLocationAccuracyNearestTenMeters // ~10m accuracy
+        backgroundLocationManager.distanceFilter = 10.0 // Update on 10m movement
+
+        // Configure precision location manager
+        precisionLocationManager.delegate = self
+        precisionLocationManager.desiredAccuracy = kCLLocationAccuracyBest // ~3-5m accuracy
+        precisionLocationManager.distanceFilter = 2.0 // Update on 2m movement
     }
     
-    private func setupBalloonTrackingSubscription() {
-        // CurrentLocationService tracks balloon position for proximity-based GPS configuration
-        // This should observe balloon position updates, not telemetry directly
+    // MARK: - Mode Switching
+
+    func enableHeadingMode() {
+        guard !isHeadingModeActive else { return }
+        isHeadingModeActive = true
+
+        appLog("CurrentLocationService: Enabling precision mode for heading view", category: .service, level: .info)
+        precisionLocationManager.startUpdatingLocation()
     }
-    
-    private func updateBalloonPosition(_ telemetry: TelemetryData) {
-        let newBalloonPosition = CLLocationCoordinate2D(
-            latitude: telemetry.latitude,
-            longitude: telemetry.longitude
-        )
-        
-        currentBalloonPosition = newBalloonPosition
-        
-        // Check if we need to switch GPS modes based on distance
-        if let userLocation = locationData {
-            evaluateProximityMode(userLocation: userLocation)
-        }
+
+    func disableHeadingMode() {
+        guard isHeadingModeActive else { return }
+        isHeadingModeActive = false
+
+        appLog("CurrentLocationService: Disabling precision mode, returning to background mode", category: .service, level: .info)
+        precisionLocationManager.stopUpdatingLocation()
     }
-    
-    private func evaluateProximityMode(userLocation: LocationData) {
-        guard let balloonPosition = currentBalloonPosition else { return }
-        
-        let userCoordinate = CLLocationCoordinate2D(
-            latitude: userLocation.latitude,
-            longitude: userLocation.longitude
-        )
-        
-        let distance = CLLocation(latitude: userCoordinate.latitude, longitude: userCoordinate.longitude)
-            .distance(from: CLLocation(latitude: balloonPosition.latitude, longitude: balloonPosition.longitude))
-        
-        let newMode: ProximityMode
-        if distance < 100 { // <100m - CLOSE MODE per specification
-            newMode = .close
-        } else { // >100m - FAR MODE per specification
-            newMode = .far
+
+    private func startBackgroundLocationService() {
+        // Start 30-second timer for background location updates
+        backgroundTimer?.invalidate()
+        backgroundTimer = Timer.scheduledTimer(withTimeInterval: 30.0, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.requestSingleBackgroundUpdate()
+            }
         }
-        
-        if newMode != currentProximityMode {
-            currentProximityMode = newMode
-            configureGPSForMode(newMode)
-            
-            let modeString = newMode == .close ? "CLOSE" : "FAR"
-            appLog("CurrentLocationService: Switched to \(modeString) RANGE GPS (distance: \(Int(distance))m)", category: .service, level: .info)
-        }
+
+        // Get initial location immediately
+        requestSingleBackgroundUpdate()
+        appLog("CurrentLocationService: Background location service started (30-second intervals)", category: .service, level: .info)
     }
-    
-    private func configureGPSForMode(_ mode: ProximityMode) {
-        switch mode {
-        case .close:
-            // CLOSE MODE (<100m): kCLLocationAccuracyBest, no movement threshold, max 1 update/sec
-            locationManager.desiredAccuracy = kCLLocationAccuracyBest
-            locationManager.distanceFilter = kCLDistanceFilterNone // No movement threshold
-            appLog("CurrentLocationService: CLOSE MODE - Best accuracy, no distance filter, 1Hz max", category: .service, level: .info)
-            
-        case .far:
-            // FAR MODE (>100m): kCLLocationAccuracyNearestTenMeters, 20m movement threshold
-            locationManager.desiredAccuracy = kCLLocationAccuracyNearestTenMeters
-            locationManager.distanceFilter = 20.0 // Only update on 20+ meter movement
-            appLog("CurrentLocationService: FAR MODE - 10m accuracy, 20m distance filter", category: .service, level: .info)
-        }
+
+    private func requestSingleBackgroundUpdate() {
+        backgroundLocationManager.requestLocation()
     }
 
     func requestPermission() {
-        locationManager.requestWhenInUseAuthorization()
+        backgroundLocationManager.requestWhenInUseAuthorization()
     }
 
     func startUpdating() {
-        locationManager.startUpdatingLocation()
+        backgroundLocationManager.startUpdatingLocation()
     }
     
     func locationManager(_ manager: CLLocationManager, didChangeAuthorization status: CLAuthorizationStatus) {
         switch status {
-        case .authorizedWhenInUse, .authorizedAlways:
+        case .authorizedWhenInUse:
             isLocationPermissionGranted = true
-            locationManager.startUpdatingLocation()
-            locationManager.startUpdatingHeading()
-            publishHealthEvent(.healthy, message: "Location permission granted")
+            backgroundLocationManager.startUpdatingLocation()
+
+            // Request "Always" permission for better background operation
+            backgroundLocationManager.requestAlwaysAuthorization()
+            publishHealthEvent(.healthy, message: "Location permission granted (when in use)")
+
+        case .authorizedAlways:
+            isLocationPermissionGranted = true
+            backgroundLocationManager.startUpdatingLocation()
+
+            // Enable significant location changes for background updates
+            backgroundLocationManager.startMonitoringSignificantLocationChanges()
+            publishHealthEvent(.healthy, message: "Location permission granted (always)")
+
         case .denied, .restricted:
             isLocationPermissionGranted = false
             publishHealthEvent(.unhealthy("Location permission denied"), message: "Location permission denied")
         case .notDetermined:
+            // Request when-in-use first, then upgrade to always
+            backgroundLocationManager.requestWhenInUseAuthorization()
             publishHealthEvent(.degraded("Location permission not determined"), message: "Location permission not determined")
         @unknown default:
             publishHealthEvent(.degraded("Unknown location authorization status"), message: "Unknown location authorization status")
@@ -339,35 +345,32 @@ final class CurrentLocationService: NSObject, ObservableObject, CLLocationManage
             return
         }
         let heading = lastHeading ?? location.course
+
         DispatchQueue.main.async {
             let now = Date()
-            
-            // Check if this is the first location update
             let isFirstUpdate = self.locationData == nil
-            
-            // Time-based filtering for CLOSE mode (max 1 update per second)
-            if self.currentProximityMode == .close {
+
+            // Determine which manager provided this update
+            let isFromPrecisionManager = manager === self.precisionLocationManager
+            let modeString = isFromPrecisionManager ? "PRECISION" : "BACKGROUND"
+
+            // Rate limiting for precision mode (1-2 second intervals)
+            if isFromPrecisionManager {
                 if let lastUpdate = self.lastLocationUpdate {
                     let timeSinceLastUpdate = now.timeIntervalSince(lastUpdate)
                     if timeSinceLastUpdate < 1.0 && !isFirstUpdate {
-                        // Skip this update - too soon for CLOSE mode
-                        return
+                        return // Skip update - too frequent for precision mode
                     }
                 }
             }
-            
-            // Calculate distance and time differences for filtering
+
+            // Calculate movement distance for logging
             var distanceDiff: Double = 0
-            var timeDiff: TimeInterval = 0
-            
             if let previousLocation = self.locationData {
                 let prevCLLocation = CLLocation(latitude: previousLocation.latitude, longitude: previousLocation.longitude)
                 distanceDiff = location.distance(from: prevCLLocation)
-                if let lastTime = self.lastLocationTime {
-                    timeDiff = now.timeIntervalSince(lastTime)
-                }
             }
-            
+
             // Create new location data
             let newLocationData = LocationData(
                 latitude: location.coordinate.latitude,
@@ -378,22 +381,23 @@ final class CurrentLocationService: NSObject, ObservableObject, CLLocationManage
                 heading: heading,
                 timestamp: Date()
             )
-            
+
             self.locationData = newLocationData
             self.lastLocationTime = now
             self.lastLocationUpdate = now
-            
-            // Location is now available through @Published locationData property
-                
+
+            // Update significant movement location (10m threshold)
+            self.updateSignificantMovementLocation(newLocationData)
+
+            // Update distance overlay and proximity status
+            self.updateDistanceOverlay()
+            self.updateProximityStatus()
+
             if isFirstUpdate {
-                appLog("Initial user location: lat=\(location.coordinate.latitude), lon=\(location.coordinate.longitude)", category: .service, level: .info)
-            } else if distanceDiff > 50 { // Only log significant movement (>50m)
-                let modeString = self.currentProximityMode == .close ? "CLOSE" : "FAR"
-                appLog("User location update [\(modeString)]: lat=\(location.coordinate.latitude), lon=\(location.coordinate.longitude), dist=\(distanceDiff)m, timeDiff=\(timeDiff)s", category: .service, level: .debug)
+                appLog("Initial user location [\(modeString)]: lat=\(location.coordinate.latitude), lon=\(location.coordinate.longitude)", category: .service, level: .info)
+            } else if distanceDiff > 20 { // Log significant movement (>20m)
+                appLog("User location update [\(modeString)]: lat=\(location.coordinate.latitude), lon=\(location.coordinate.longitude), dist=\(Int(distanceDiff))m", category: .service, level: .debug)
             }
-            
-            // Re-evaluate proximity mode with new location
-            self.evaluateProximityMode(userLocation: newLocationData)
         }
     }
     
@@ -406,7 +410,81 @@ final class CurrentLocationService: NSObject, ObservableObject, CLLocationManage
         appLog("CurrentLocationService: Location error: \(error.localizedDescription)", category: .service, level: .error)
         publishHealthEvent(.unhealthy("Location error: \(error.localizedDescription)"), message: "Location error: \(error.localizedDescription)")
     }
-    
+
+    private func updateSignificantMovementLocation(_ newLocation: LocationData) {
+        // Check if this is the first location or movement exceeds 10m threshold
+        guard let lastSignificantLocation = lastSignificantMovementLocation else {
+            // First location update - always record
+            significantMovementLocation = newLocation
+            lastSignificantMovementLocation = CLLocationCoordinate2D(
+                latitude: newLocation.latitude,
+                longitude: newLocation.longitude
+            )
+            return
+        }
+
+        let currentCoordinate = CLLocationCoordinate2D(
+            latitude: newLocation.latitude,
+            longitude: newLocation.longitude
+        )
+
+        let movementDistance = CLLocation(
+            latitude: lastSignificantLocation.latitude,
+            longitude: lastSignificantLocation.longitude
+        ).distance(from: CLLocation(
+            latitude: currentCoordinate.latitude,
+            longitude: currentCoordinate.longitude
+        ))
+
+        if movementDistance >= 10.0 {
+            // Update significant movement location when 10m+ movement detected
+            significantMovementLocation = newLocation
+            lastSignificantMovementLocation = currentCoordinate
+            appLog("CurrentLocationService: Significant movement detected (\(Int(movementDistance))m) - updating significant movement location", category: .service, level: .debug)
+        }
+    }
+
+    // MARK: - Distance and Proximity Calculations
+
+    private func updateDistanceOverlay() {
+        guard let userLocation = locationData,
+              let balloonPosition = currentBalloonDisplayPosition else {
+            distanceOverlayText = "--"
+            return
+        }
+
+        let userCoord = CLLocationCoordinate2D(latitude: userLocation.latitude, longitude: userLocation.longitude)
+        let distance = CLLocation(latitude: userCoord.latitude, longitude: userCoord.longitude)
+            .distance(from: CLLocation(latitude: balloonPosition.latitude, longitude: balloonPosition.longitude))
+
+        if distance < 1000 {
+            distanceOverlayText = "\(Int(distance))m"
+        } else {
+            distanceOverlayText = String(format: "%.1fkm", distance / 1000)
+        }
+    }
+
+    private func updateProximityStatus() {
+        guard let userLocation = locationData,
+              let balloonPosition = currentBalloonDisplayPosition else {
+            isWithin200mOfBalloon = false
+            return
+        }
+
+        let userCoord = CLLocationCoordinate2D(latitude: userLocation.latitude, longitude: userLocation.longitude)
+        let distance = CLLocation(latitude: userCoord.latitude, longitude: userCoord.longitude)
+            .distance(from: CLLocation(latitude: balloonPosition.latitude, longitude: balloonPosition.longitude))
+
+        isWithin200mOfBalloon = distance < 200
+    }
+
+    func updateBalloonDisplayPosition(_ position: CLLocationCoordinate2D?) {
+        currentBalloonDisplayPosition = position
+        updateDistanceOverlay()
+        updateProximityStatus()
+    }
+
+
     private func publishHealthEvent(_ health: ServiceHealth, message: String) {
         // Health status logging removed for log reduction
     }

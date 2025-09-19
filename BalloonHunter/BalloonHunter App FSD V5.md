@@ -1,8 +1,4 @@
-
-
-
-
-KU7T2A-RJ4BUC-ZCFU8E-YNBSU8
+[TOC]
 
 # Functional Specifications Document (FSD) for the Balloon Hunter App
 
@@ -71,7 +67,7 @@ We want true separation of concerns with views handling only presentation logic 
 
 ### Key components and roles:
 
-####    \`AppServices\` (Dependency Container):
+####    1\. \`AppServices\` (Dependency Container):
 
 This class acts as a simple dependency injection (DI) container. It is  responsible for creating and owning the instances of the foundational services when the app starts.
 
@@ -87,16 +83,12 @@ Orchestrator: It contains the business logic that subscribes to events from the 
 Each service has a distinct responsibility:
 
 * BLE CommunicationService: Manages all aspects of Bluetooth communication.  
-
 * CurrentLocationService: Provides the user's GPS location.  
-
-* BalloonTrackService: Manages the history of the balloon's flight path.  
-
-* PredictionService & RouteCalculationService: Perform on-demand calculations then called by the ServiceCoordinator.  
-
+*  BalloonTrackService: Manages the history of the balloon's flight path.  
+*  PredictionService & RouteCalculationService: Perform on-demand calculations then called by the ServiceCoordinator.  
 * PersistenceService: Handles saving and loading data.
 
-  ####    Views (UI Layer):
+  ####    4\. Views (UI Layer):
 
 The SwiftUI views (like TrackingMapView and DataPanelView) are the presentation layer. They are designed to be "dumb" consumers of data. They use @EnvironmentObject to observe the ServiceCoordinator and automatically update whenever its @Published properties change. User interactions (like button taps) are forwarded as simple method calls to the ServiceCoordinator.
 
@@ -105,11 +97,8 @@ The SwiftUI views (like TrackingMapView and DataPanelView) are the presentation 
   The data flow is straightforward and centralized:
 
 1. Data In: Services like BLECommunicationService and CurrentLocationService receive data from external sources (the  BLE device, GPS).  
-
 2. Coordination: These services publish their data using Combine. The ServiceCoordinator subscribes to these publishers.  
-
 3. Logic & State Update: When the ServiceCoordinator receives new data, it runs its business logic (e.g., checks if  a new prediction is needed) and updates its own @Published state properties.  
-
 4. UI Update: Because the SwiftUI views are observing the ServiceCoordinator, they automatically re-render to display the new state.
 
    2. ## Services
@@ -160,26 +149,21 @@ Purpose: Manages Bluetooth communication with MySondyGo devices
    * It will only attempt to connect to devices whose name includes “MySondyGo”.  
    * At any time, the service will maintain a connection to at most one “MySondyGo” device. If a connection is lost, it will attempt to reconnect automatically.  
    * UART\_SERVICE\_UUID \= "53797269-614D-6972-6B6F-44616C6D6F6E"  
-   * UART\_RX\_CHARACTERISTIC\_UUID \= "53797267-614D-6972-6B6F-44616C6D6F8E"  
-   * UART\_TX\_CHARACTERISTIC\_UUID \= "53797268-614D-6972-6B6F-44616C6D6F7E"
+   *  UART\_RX\_CHARACTERISTIC\_UUID \= "53797267-614D-6972-6B6F-44616C6D6F8E"  
+   *  UART\_TX\_CHARACTERISTIC\_UUID \= "53797268-614D-6972-6B6F-44616C6D6F7E"
 
 2. Receiving Data from the Balloon  
-
 * When a connection to a device is established, the device begins transmitting data packets using the Serial BLE protocol as described in the Appendix.  
 * The service is responsible for receiving, buffering, and assembling these packets as they arrive.
 
 3. Packet Parsing and Data Extraction  
-
 * The service parses each incoming BLE packet according to the structure and definitions specified in the Appendix.  
-
 * All packets are parsed and the content made available to other parts of the app in real time.  
-
 * Type 1 Outliers with lat: \=0/lon=0 positions shall be skipped right after parsing and not be passed on.
 
   Reliability and Error Handling
 
 * If the BLE connection is dropped or interrupted for any reason, the service will attempt to reconnect and resume regular operation automatically.  
-
 * All parsing errors or malformed packets will be skipped to maintain stability, and attempts will be made to process subsequent packets.
 
   2. ### Current Location Service
@@ -313,14 +297,10 @@ At startup, it shall read the persisted historic track data from persistence ser
  Telemetry data is cleaned and prepared for presentation and decision:
 
 * Derived speeds: “Compute horizontal speed via Haversine/Δt and vertical speed via Δalt/Δt from track points; use these for all smoothing, detection, and descent calculations.”  
-
 * Prefilter \+ smoothing: “Apply Hampel filter (window 10, k=3) per stream and deadbands (v\_h \< 0.2 m/s, |v\_v| \< 0.05 m/s), then EMA with τ=10s for both horizontal and vertical speeds. Publish smoothed values.”  
-
 * Adjusted descent rate: “Per-update: 60 s robust estimate using the median of interval vertical speeds; maintain a 20-value moving average and publish adjustedDescentRate.”  
-
-* Landed detection: *"GPS accuracy-aware statistical confidence-based detection with 75% confidence threshold requiring minimum 3 data points. Accounts for poor GPS altitude accuracy (±10-15m) with 12m tolerance vs 3-5m horizontal accuracy. Confidence weighting: 40% horizontal position, 20% altitude, 30% speed stability, 10% sample size. Uses average speeds instead of maximum for more stable detection. Hysteresis clearing thresholds: altitude spread (10s) > 5.0m, radius95 (10s) > 20.0m, or smoothed horizontal speed > 6.0 km/h."*  
-
-* Persistence: “Append new track points, fire updates, and persist every 10 samples.”
+* Landed detection: “Within ≤30 s, declare landed when altitude spread (30 s) \< 2.0 m, radius95 (30 s) \< 10.0 m, smoothed horizontal speed\< 2.0 km/h, and recent telemetry present. Clear landed when altitude spread (10 s) \> 3.0 m, or radius95 (10 s) \> 12.0 m, or smoothed horizontal speed \> 3.0 km/h.”  
+*       Persistence: “Append new track points, fire updates, and persist every 10 samples.”
 
   \- Under ServiceCoordinator:  
       \- “Consumes BalloonTrackService’s adjustedDescentRate, smoothed speeds, and isBalloonLanded; decides when to trigger predictions and to recalc  
@@ -332,13 +312,10 @@ Before the app closes, or every 10 new telemetry points, the current track data 
 
 This service provides a “balloon flying” and a “balloon landed” signal (or a flight status signal) to other applications.
 
-*GPS accuracy-aware statistical confidence-based landing detection has replaced the simple fixed-threshold approach. The system accounts for real-world GPS limitations where altitude accuracy (±10-15m) is 2-3x worse than horizontal accuracy (±3-5m). The weighted confidence calculation combines:*
-*- Altitude stability (20% weight) - Standard deviation with 12m tolerance for GPS altitude noise*
-*- Position stability (40% weight) - Maximum drift distance, prioritized due to superior horizontal GPS accuracy*
-*- Speed stability (30% weight) - Average (not maximum) speeds for more stable detection*
-*- Sample size confidence (10% weight) - More data points increase confidence*
+A ballon is landed if telemetry shows: 
 
-*Landing decision requires 75% confidence threshold (reduced from 80% for better responsiveness) and minimum 3 data points, enabling immediate detection when persistent track data is available while maintaining accuracy through proper statistical analysis that accounts for GPS technology limitations.*
+- Vertical speed (smoothened 10\) is below 0.1m/s  
+- Horizontal speed (smoothened 10\) is below 2 km/s
 
 Adjusted descend rate: This value is calculated every time a new telemetry arrives.
 
@@ -397,14 +374,11 @@ It parses the JSON file and extracts the path, the burst point, and the landing 
 The api expects a date-time in the future, the burst altitude,  and the current altitude (launch altitude).
 
 * Burst Altitude: During ascent, the default is 35000m (can be changed in settings). When the balloon is descending, the burstAltitude parameter to be sent to the API is then automatically set to the current altitude plus 10 meters. The persisted burst altitude in the settings remains unchanged.  
-
 * Ascending Speed: Can be changed in settings, default is 5m/s.  
-
 * Descending Speed: Can be changed in settings, default is 5m/s. It is replaced by the adjusted descent speed if the balloon is below 10000m altitude  
-
 * Time: the actual time+1 minute
 
-  ### Route Calculation Service
+  5. ### Route Calculation Service
 
   Purpose: Calculates driving/cycling routes to landing point
 
@@ -449,13 +423,11 @@ Publishes
 
 #### Read landing point from clipboard
 
-If the user is too far from the balloon, the landing point information comes from [Radiosondy.info](http://Radiosondy.info). The user copies an openstreetmap link into the clipboard. The app can read it from there with a button press. A new landing position can be parsed from a URL in the clipboard.
-Example: [https://www.openstreetmap.org/directions?route=47.4738%2C7.75929%3B47.4987%2C7.667\#](https://www.openstreetmap.org/directions?route=47.4738%2C7.75929%3B47.4987%2C7.667#)
+If the user is too far from the balloon, the landing point information comes from [Radiosondy.info](http://Radiosondy.info). The user copies an openstreetmap link into the clipboard. The app can read it from there with a button press. A new landing position can be parsed from a URL in the clipboard.  
+Example: [https://www.openstreetmap.org/directions?route=47.4738%2C7.75929%3B47.4987%2C7.667\#](https://www.openstreetmap.org/directions?route=47.4738%2C7.75929%3B47.4987%2C7.667#)  
 This landing point is (lat: [47.4987, lon: 7.667](https://www.openstreetmap.org/directions?route=47.4738%2C7.75929%3B47.4987%2C7.667#)).
 
-*When a landing point is successfully parsed from the clipboard, the balloon is automatically set as landed. This triggers the landing mode UI which hides prediction paths, user routes, and runner icons while displaying the distance overlay for recovery operations.*
-
-###  Service Coordinator
+###  ServiceCoordinator
 
   Purpose: Central coordinator orchestrating all services
 
@@ -501,19 +473,16 @@ This landing point is (lat: [47.4987, lon: 7.667](https://www.openstreetmap.org/
    * Prediction parameters  
    * Historic track data  
    * Landing point (if available)  
-7. Landing point determination: With this information, a valid landing point shall be determined.The priorities for that process are:
-   * Prio 1: If telemetry is received and islanded is active, the current balloon position is the landing point
-   * Prio 2: If the balloon is still in flight(telemetry available), the predicted landing position is the landing point
-   * Prio 3: If priority 1 and 2 do not apply, the landing point shall be read and parsed from clipboard (as described below) *- this automatically sets the balloon as landed*
-   * Prio 4: If no valid coordinates can be parsed from the clipboard, the persisted landing point is used
+7. Landing point determination: With this information, a valid landing point shall be determined.The priorities for that process are:  
+   * Prio 1: If telemetry is received and islanded is active, the current balloon position is the landing point  
+   * Prio 2: If the balloon is still in flight(telemetry available), the predicted landing position is the landing point  
+   * Prio 3: If priority 1 and 2 do not apply, the landing point shall be read and parsed from clipboard (as described below)  
+   * Prio 4: If no valid coordinates can be parsed from the clipboard, the persisted landing point is used  
    * Otherwise: If all above fail, no landing point is available.  
-8. Final Map displayed: Next, the map + data panel is displayed. It uses the maximum zoom level to show the following annotations:  
-
+8. Final Map displayed: Next, the initial map is displayed (it uses the maximum zoom level to show the following annotations:  
 * The user position  
 * The landing position   
 * If a balloon is flying, the route and predicted path
-
-If no landing point is available: The map  shows the user's position (from location service) with a zoom of 25km.  
 
 9: End of Setup:
 
@@ -526,20 +495,13 @@ No calculations or business logic in views. Search for an appropriate service to
 A row for Buttons is placed above the map. It is fixed and covers the entire width of the screen. It contains (in the sequence of appearance):
 
 * Settings  
-
 * Mode of transportation: The transport mode (car or bicycle) shall be used to calculate the route and the predicted arrival time. Every time the mode is changed, a new calculation has to be done. Use icons to save horizontal space.  
-
 * Prediction on/off. It toggles if the balloon predicted path is displayed.  
-
 * If a landing point is available, The  button “All” is shown.  It maximizes  the zoom level so that all overlays (user location, balloon track, balloon landing point) are visible (showAnnotations())  
-
 * A button “Free/Heading”: It toggles between the two camera positions:  
-
   * “Heading” where the map centers the position of the iPhone and aligns the map direction to meet its heading. The user can only zoom freely.  
   * “Free” where the user can zoom and pan freely.  
-
 * The zoom level stays the same if switched between the two modes.  
-
 * Buzzer mute: Buzzer mute: On a button press, the buzzer shall be muted or unmuted by the mute BLE command (o{mute=setMute}o). The buzzer button shall indicate the current mute state.
 
   2. #### Map
@@ -594,17 +556,17 @@ Two tables, one below the other. All fonts the same
 
 Table 1: 4 columns
 
-| Column 1  | Column2      | Column 3   | Column 4  | Column 5 |
-| :-------- | :----------- | :--------- | :-------- | :------- |
-| Connected | Flight State | Sonde Type | sondeName | Altitude |
+| Column 1 | Column2 | Column 3 | Column 4 | Column 5 |
+| :---- | :---- | :---- | :---- | :---- |
+| Connected | Landed | Sonde Type | sondeName | Altitude |
 
 Table 2: 3 columns
 
-| Column 1       | Column 2         | Column 3     |
-| :------------- | :--------------- | :----------- |
-| Frequency      | Signal Strength  | Battery %    |
-| Vertical speed | Horizontal speed | Distance     |
-| Flight time    | Landing time     | Arrival time |
+| Column 1 | Column 2 | Column 3 |
+| :---- | :---- | :---- |
+| Frequency | Signal Strength | Battery % |
+| Vertical speed | Horizontal speed | Distance |
+| Flight time | Landing time | Arrival time |
 
 Text in Columns: left aligned  
 • "V: ... m/s" for vertical speed  
@@ -657,15 +619,10 @@ It uses the data loaded from RadioSondyGo and changes it. Therefore, we use the 
 We use a key-value store. The process shall be as follows:
 
 * When this screen is called, the app requests the current settings from MySondyGo.  
-
 * MySondyGo responds with a Type 3 configuration message.  
-
 * The app's BLE service parses this message and stores the settings in a key-value store (device settings).  
-
 * This data is then used for the settings views.  
-
 * If a user modifies a setting, the change is first applied to the “device settings”. This provides immediate feedback in the UI.  
-
 * When a settings view is left, a BLE command with the changed parameters is then sent to the MySondyGo device to update it.
 
   3. ### Tab Structure & Contents in Settings
@@ -675,27 +632,18 @@ Each tab contains logically grouped settings:
 1. #### Pins Tab
 
 * oled\_sda (oledSDA)  
-
 * oled\_scl (oledSCL)  
-
 * oled\_rst (oledRST)  
-
 * led\_pout (ledPin)  
-
 * buz\_pin (buzPin)  
-
 * lcd (lcdType)
 
   2. #### Battery Tab
 
 * battery (batPin)  
-
 * vBatMin (batMin)  
-
 * vBatMax (batMax)  
-
 * vBatType (batType)  
-
   * 0: Linear  
     1: Sigmoidal  
     2: Asigmoidal
@@ -703,27 +651,18 @@ Each tab contains logically grouped settings:
     3. #### Radio Tab
 
 * myCall (callSign)  
-
 * rs41.rxbw (RS41Bandwidth)  
-
 * m20.rxbw (M20Bandwidth)  
-
 * m10.rxbw (M10Bandwidth)  
-
 * pilot.rxbw (PILOTBandwidth)  
-
 * dfm.rxbw (DFMBandwidth)
 
   4. #### Others Tab
 
 * lcdOn (lcdStatus)  
-
 * blu (bluetoothStatus)  
-
 * baud (serialSpeed)  
-
 * com (serialPort)  
-
 * aprsName (aprsName / nameType)
 
   5. #### Prediction Tab
@@ -731,9 +670,7 @@ Each tab contains logically grouped settings:
 (These values are stored permanently on the iPhone via PersistenceService and are never transmitted to the device)
 
 * burstAltitude  
-
 * ascentRate  
-
 * descentRate
 
   4. ### Tune Function
@@ -755,153 +692,85 @@ Debugging should be according the services. It should contain
       1. ### Type 0 (No probe received)
 
 * Format: 0/probeType/frequency/RSSI/batPercentage/batVoltage/buzmute/softwareVersion/o  
-
 * Example: 0/RS41/403.500/117.5/100/4274/0/3.10/o  
-
 * Field Count: 7 fields  
-
 * Values:  
-
   * probeType: e.g., RS41  
-
   * frequency: e.g., 403.500 (MHz)  
-
   * RSSI: e.g., \-90 (dBm)  
-
   * batPercentage: e.g., 100 (%)  
-
   * batVoltage: e.g., 4000 (mV)  
-
   * buzmute: e.g., 0 (0 \= off, 1 \= on)  
-
   * softwareVersion: e.g., 3.10
 
     2. ### Type 1 (Probe telemetry)
 
 * Format: 1/probeType/frequency/sondeName/latitude/longitude/altitude/HorizontalSpeed/verticalSpeed/RSSI/batPercentage/afcFrequency/burstKillerEnabled/burstKillerTime/batVoltage/buzmute/reserved1/reserved2/reserved3/softwareVersion/o  
-
 * Example: 1/RS41/403.500/V4210150/47.38/8.54/500/10/2/117.5/100/0/0/0/4274/0/0/0/0/3.10/o (Example values for dynamic fields added for clarity)  
-
 * Field Count: 20 fields  
-
 * Variable names:  
-
   * probeType: e.g., RS41  
-
   * frequency: e.g., 403.500 (MHz)  
-
   * sondeName: e.g., V4210150  
-
   * latitude: (dynamic) e.g., 47.38 (degrees)  
-
   * longitude: (dynamic) e.g., 8.54 (degrees)  
-
   * altitude: (dynamic) e.g., 500 (meters)  
-
   * horizontalSpeed: (dynamic) e.g., 10 (m/s)  
-
   * verticalSpeed: (dynamic) e.g., 2 (m/s)  
-
   * RSSI: e.g., \-90 (dBm)  
-
   * batPercentage: e.g., 100 (%)  
-
   * afcFrequency: e.g., 0  
-
   * burstKillerEnabled: e.g., 0 (0 \= disabled, 1 \= enabled)  
-
   * burstKillerTime: e.g., 0 (seconds)  
-
   * batVoltage: e.g., 4000 (mV)  
-
   * buzmute: e.g., 0 (0 \= off, 1 \= on)  
-
   * reserved1: e.g., 0  
-
   * reserved2: e.g., 0  
-
   * reserved3: e.g., 0  
-
   * softwareVersion: e.g., 3.10
 
     3. ### Type 2 (Name only, coordinates are not available)
 
 * Corrected Format: 2/probeType/frequency/sondeName/RSSI/batPercentage/afcFrequency/batVoltage/buzmute/softwareVersion/o  
-
 * Example: 2/RS41/403.500/V4210150/117.5/100/0/4274/0/3.10/o  
-
 * Field Count: 10 fields  
-
 * Variable names:  
-
   * probeType: e.g., RS41  
-
   * frequency: e.g., 403.500 (MHz)  
-
   * sondeName: e.g., V4210150  
-
   * RSSI: e.g., \-90 (dBm)  
-
   * batPercentage: e.g., 100 (%)  
-
   * afcFrequency: e.g., 0  
-
   * batVoltage: e.g., 4000 (mV)  
-
   * buzmute: e.g., 0 (0 \= off, 1 \= on)  
-
   * softwareVersion: e.g., 3.10
 
     4. ### Type 3 (Configuration)
 
 * Format: 3/probeType/frequency/oledSDA/oledSCL/oledRST/ledPin/RS41Bandwidth/M20Bandwidth/M10Bandwidth/PILOTBandwidth/DFMBandwidth/callSign/frequencyCorrection/batPin/batMin/batMax/batType/lcdType/nameType/buzPin/softwareVersion/o  
-
 * Example: 3/RS41/404.600/21/22/16/25/1/7/7/7/6/MYCALL/0/35/2950/4180/1/0/0/0/3.10/o  
-
 * Field Count: 21 fields  
-
 * Variable names:  
-
   * probeType: e.g., RS41  
-
   * frequency: e.g., 404.600 (MHz)  
-
   * oledSDA: e.g., 21 (GPIO pin number)  
-
   * oledSCL: e.g., 22 (GPIO pin number)  
-
   * oledRST: e.g., 16 (GPIO pin number)  
-
   * ledPin: e.g., 25 (GPIO pin number)  
-
   * RS41Bandwidth: e.g., 1 (kHz)  
-
   * M20Bandwidth: e.g., 7 (kHz)  
-
   * M10Bandwidth: e.g., 7 (kHz)  
-
   * PILOTBandwidth: e.g., 7 (kHz)  
-
   * DFMBandwidth: e.g., 6 (kHz)  
-
   * callSign: e.g., MYCALL  
-
   * frequencyCorrection: e.g., 0 (Hz)  
-
   * batPin: e.g., 35 (GPIO pin number)  
-
   * batMin: e.g., 2950 (mV)  
-
   * batMax: e.g., 4180 (mV)  
-
   * batType: e.g., 1 (0:Linear, 1:Sigmoidal, 2:Asigmoidal)  
-
   * lcdType: e.g., 0 (0:SSD1306\_128X64, 1:SH1106\_128X64)  
-
   * nameType: e.g., 0  
-
   * buzPin: e.g., 0 (GPIO pin number)  
-
   * softwareVersion: e.g., 3.10
 
     5. ### Data Types for messages
@@ -909,129 +778,73 @@ Debugging should be according the services. It should contain
        1. #### Type 0 message: Device Basic Info and Status
 
 * 0: packet type (String) \- "0"  
-
 * 1: probeType (String)  
-
 * 2: frequency (Double)  
-
 * 3: RSSI (Double)  
-
 * 4: batPercentage (Int)  
-
 * 5: batVoltage (Int)  
-
 * 6: buzmute (Bool, 0 \= off, 1 \= on)  
-
 * 7: softwareVersion (String)
 
   2. #### Type 1 message: Probe Telemetry
 
 * 0: packet type (Int) \- "1"  
-
 * 1: probeType (String)  
-
 * 2: frequency (Double)  
-
 * 3: sondeName (String)  
-
 * 4: latitude (Double)  
-
 * 5: longitude (Double)  
-
 * 6: altitude (Double)  
-
 * 7: horizontalSpeed (Double)  
-
 * 8: verticalSpeed (Double)  
-
 * 9: RSSI (Double)  
-
 * 10: batPercentage (Int)  
-
 * 11: afcFrequency (Int)  
-
 * 12: burstKillerEnabled (Bool, 0 \= disabled, 1 \= enabled)  
-
 * 13: burstKillerTime (Int)  
-
 * 14: batVoltage (Int)  
-
 * 15: buzmute (Bool, 0 \= off, 1 \= on)  
-
 * 16: reserved1 (Int)  
-
 * 17: reserved2 (Int)  
-
 * 18: reserved3 (Int)  
-
 * 19: softwareVersion (String)
 
   3. #### Type 2 message: Name Only
 
 * 0: packet type (Int) \- "2"  
-
 * 1: probeType (String)  
-
 * 2: frequency (Double)  
-
 * 3: sondeName (String)  
-
 * 4: RSSI (Double)  
-
 * 5: batPercentage (Int)  
-
 * 6: afcFrequency (Int)  
-
 * 7: batVoltage (Int)  
-
 * 8: buzmute (Bool, 0 \= off, 1 \= on)  
-
 * 9: softwareVersion (String)
 
   4. #### Type 3 message: Configuration
 
 * 0: packet type (Int) \- "3"  
-
 * 1: probeType (String)  
-
 * 2: frequency (Double)  
-
 * 3: oledSDA (Int)  
-
 * 4: oledSCL (Int)  
-
 * 5: oledRST (Int)  
-
 * 6: ledPin (Int)  
-
 * 7: RS41Bandwidth (Int)  
-
 * 8: M20Bandwidth (Int)  
-
 * 9: M10Bandwidth (Int)  
-
 * 10: PILOTBandwidth (Int)  
-
 * 11: DFMBandwidth (Int)  
-
 * 12: callSign (String)  
-
 * 13: frequencyCorrection (Int)  
-
 * 14: batPin (Int)  
-
 * 15: batMin (Int)  
-
 * 16: batMax (Int)  
-
 * 17: batType (Int)  
-
 * 18: lcdType (Int)  
-
 * 19: nameType (Int)  
-
 * 20: buzPin (Int)  
-
 * 21: softwareVersion (String)
 
   2. ## RadioSondyGo Commands
@@ -1050,30 +863,30 @@ This command is used to configure various aspects of the RadioSondyGo device. Al
 
 Available Settings:
 
-| Variable Name | Description                                                  | Default Value | Reboot Required |
-| :------------ | :----------------------------------------------------------- | :------------ | :-------------- |
-| lcd           | Sets the LCD driver: 0 for SSD1306\_128X64, 1 for SH1106\_128X64. | 0             | Yes             |
-| lcdOn         | Turns the LCD on or off: 0 for Off, 1 for On.                | 1             | Yes             |
-| oled\_sda     | Sets the SDA OLED Pin.                                       | 21            | Yes             |
-| oled\_scl     | Sets the SCL OLED Pin.                                       | 22            | Yes             |
-| oled\_rst     | Sets the RST OLED Pin.                                       | 16            | Yes             |
-| led\_pout     | Sets the onboard LED Pin; 0 switches it off.                 | 25            | Yes             |
-| buz\_pin      | Sets the buzzer Pin: 0 for no buzzer installed, otherwise specify the pin. | 0             | Yes             |
-| myCall        | Sets the call shown on the display (max 8 characters). Set empty to hide. | MYCALL        | No              |
-| blu           | Turns BLE (Bluetooth Low Energy) on or off: 0 for off, 1 for on. | 1             | Yes             |
-| baud          | Sets the Serial Baud Rate: 0 (4800), 1 (9600), ..., 5 (115200). | 1             | Yes             |
-| com           | Sets the Serial Port: 0 for tx pin 1 – rx pin 3 – USB, 1 for tx pin 12 – rx pin 2 (3.3V logic). | 0             | Yes             |
-| rs41.rxbw     | Sets the RS41 Rx Bandwidth (see bandwidth table below).      | 4             | No              |
-| m20.rxbw      | Sets the M20 Rx Bandwidth (see bandwidth table below).       | 7             | No              |
-| m10.rxbw      | Sets the M10 Rx Bandwidth (see bandwidth table below).       | 7             | No              |
-| pilot.rxbw    | Sets the PILOT Rx Bandwidth (see bandwidth table below).     | 7             | No              |
-| dfm.rxbw      | Sets the DFM Rx Bandwidth (see bandwidth table below).       | 6             | No              |
-| aprsName      | Sets the Serial or APRS name: 0 for Serial, 1 for APRS NAME. | 0             | No              |
-| freqofs       | Sets the frequency correction.                               | 0             | No              |
-| battery       | Sets the battery measurement Pin; 0 means no battery and hides the icon. | 35            | Yes             |
-| vBatMin       | Sets the low battery value (in mV).                          | 2950          | No              |
-| vBatMax       | Sets the battery full value (in mV).                         | 4180          | No              |
-| vBatType      | Sets the battery discharge type: 0 for Linear, 1 for Sigmoidal, 2 for Asigmoidal. | 1             | No              |
+| Variable Name | Description | Default Value | Reboot Required |
+| :---- | :---- | :---- | :---- |
+| lcd | Sets the LCD driver: 0 for SSD1306\_128X64, 1 for SH1106\_128X64. | 0 | Yes |
+| lcdOn | Turns the LCD on or off: 0 for Off, 1 for On. | 1 | Yes |
+| oled\_sda | Sets the SDA OLED Pin. | 21 | Yes |
+| oled\_scl | Sets the SCL OLED Pin. | 22 | Yes |
+| oled\_rst | Sets the RST OLED Pin. | 16 | Yes |
+| led\_pout | Sets the onboard LED Pin; 0 switches it off. | 25 | Yes |
+| buz\_pin | Sets the buzzer Pin: 0 for no buzzer installed, otherwise specify the pin. | 0 | Yes |
+| myCall | Sets the call shown on the display (max 8 characters). Set empty to hide. | MYCALL | No |
+| blu | Turns BLE (Bluetooth Low Energy) on or off: 0 for off, 1 for on. | 1 | Yes |
+| baud | Sets the Serial Baud Rate: 0 (4800), 1 (9600), ..., 5 (115200). | 1 | Yes |
+| com | Sets the Serial Port: 0 for tx pin 1 – rx pin 3 – USB, 1 for tx pin 12 – rx pin 2 (3.3V logic). | 0 | Yes |
+| rs41.rxbw | Sets the RS41 Rx Bandwidth (see bandwidth table below). | 4 | No |
+| m20.rxbw | Sets the M20 Rx Bandwidth (see bandwidth table below). | 7 | No |
+| m10.rxbw | Sets the M10 Rx Bandwidth (see bandwidth table below). | 7 | No |
+| pilot.rxbw | Sets the PILOT Rx Bandwidth (see bandwidth table below). | 7 | No |
+| dfm.rxbw | Sets the DFM Rx Bandwidth (see bandwidth table below). | 6 | No |
+| aprsName | Sets the Serial or APRS name: 0 for Serial, 1 for APRS NAME. | 0 | No |
+| freqofs | Sets the frequency correction. | 0 | No |
+| battery | Sets the battery measurement Pin; 0 means no battery and hides the icon. | 35 | Yes |
+| vBatMin | Sets the low battery value (in mV). | 2950 | No |
+| vBatMax | Sets the battery full value (in mV). | 4180 | No |
+| vBatType | Sets the battery discharge type: 0 for Linear, 1 for Sigmoidal, 2 for Asigmoidal. | 1 | No |
 
 2. ### Frequency Command (sent separately)
 
@@ -1085,13 +898,9 @@ This command sets the receiving frequency and the type of radiosonde probe to li
 Available Sonde Types (enum):
 
 * 1: RS41  
-
 * 2: M20  
-
 * 3: M10  
-
 * 4: PILOT  
-
 * 5: DFM
 
   3. ### Mute Command
@@ -1099,11 +908,8 @@ Available Sonde Types (enum):
 This command controls the device's buzzer.
 
 * Syntax: o{mute=setMute}o  
-
 * Variable:  
-
   * setMute: 0 for off, 1 for on.  
-
 * Example: o{mute=0}o (Turns the buzzer off)
 
   4. ### Request Status Command
@@ -1115,27 +921,27 @@ This command requests the current status and configuration of the RadioSondyGo d
   3. ## Bandwidth Table (enum):
 
 | Value | Bandwidth (kHz) |
-| :---- | :-------------- |
-| 0     | 2.6             |
-| 1     | 3.1             |
-| 2     | 3.9             |
-| 3     | 5.2             |
-| 4     | 6.3             |
-| 5     | 7.8             |
-| 6     | 10.4            |
-| 7     | 12.5            |
-| 8     | 15.6            |
-| 9     | 20.8            |
-| 10    | 25.0            |
-| 11    | 31.3            |
-| 12    | 41.7            |
-| 13    | 50.0            |
-| 14    | 62.5            |
-| 15    | 83.3            |
-| 16    | 100.0           |
-| 17    | 125.0           |
-| 18    | 166.7           |
-| 19    | 200.0           |
+| :---- | :---- |
+| 0 | 2.6 |
+| 1 | 3.1 |
+| 2 | 3.9 |
+| 3 | 5.2 |
+| 4 | 6.3 |
+| 5 | 7.8 |
+| 6 | 10.4 |
+| 7 | 12.5 |
+| 8 | 15.6 |
+| 9 | 20.8 |
+| 10 | 25.0 |
+| 11 | 31.3 |
+| 12 | 41.7 |
+| 13 | 50.0 |
+| 14 | 62.5 |
+| 15 | 83.3 |
+| 16 | 100.0 |
+| 17 | 125.0 |
+| 18 | 166.7 |
+| 19 | 200.0 |
 
   4. ## Sample Response of the Sondehub API
 
@@ -1157,21 +963,21 @@ All requests to the API for the Standard Profile must include the following para
 
 1. #### General Parameters
 
-| Parameter          | Required | Default Value                | Description                                                  |
-| :----------------- | :------- | :--------------------------- | :----------------------------------------------------------- |
-| `profile`          | optional | `standard_profile`           | Set to `standard_profile` to use this prediction model (this is the default). |
-| `launch_latitude`  | required | \-                           | Launch latitude in decimal degrees (-90.0 to 90.0).          |
-| `launch_longitude` | required | \-                           | Launch longitude in decimal degrees (0.0 to 360.0).          |
-| `launch_datetime`  | required | \-                           | Time and date of launch, formatted as a RFC3339 timestamp.   |
-| `launch_altitude`  | optional | Elevation at launch location | Elevation of the launch location in meters above sea level.  |
+| Parameter | Required | Default Value | Description |
+| :---- | :---- | :---- | :---- |
+| `profile` | optional | `standard_profile` | Set to `standard_profile` to use this prediction model (this is the default). |
+| `launch_latitude` | required | \- | Launch latitude in decimal degrees (-90.0 to 90.0). |
+| `launch_longitude` | required | \- | Launch longitude in decimal degrees (0.0 to 360.0). |
+| `launch_datetime` | required | \- | Time and date of launch, formatted as a RFC3339 timestamp. |
+| `launch_altitude` | optional | Elevation at launch location | Elevation of the launch location in meters above sea level. |
 
 Standard Profile Specific Parameters
 
-| Parameter        | Required | Default Value | Description                                                  |
-| :--------------- | :------- | :------------ | :----------------------------------------------------------- |
-| `ascent_rate`    | required | \-            | The balloon's ascent rate in meters per second. Must be greater than 0.0. |
-| `burst_altitude` | required | \-            | The altitude at which the balloon is expected to burst, in meters above sea level. Must be greater than `launch_altitude`. |
-| `descent_rate`   | required | \-            | The descent rate of the payload under a parachute, in meters per second. Must be greater than 0.0. |
+| Parameter | Required | Default Value | Description |
+| :---- | :---- | :---- | :---- |
+| `ascent_rate` | required | \- | The balloon's ascent rate in meters per second. Must be greater than 0.0. |
+| `burst_altitude` | required | \- | The altitude at which the balloon is expected to burst, in meters above sea level. Must be greater than `launch_altitude`. |
+| `descent_rate` | required | \- | The descent rate of the payload under a parachute, in meters per second. Must be greater than 0.0. |
 
 3. ###  Input Data Structure
 
@@ -1185,11 +991,8 @@ The parser must be designed to accept a single JSON object with the following to
 The most critical data is within the `prediction` array. Each element of this array is an object with a `stage` key (string) and a `trajectory` key (array). Each element of the `trajectory` array is an object with the following structure:
 
 * `altitude`: Number (meters)  
-
 * `datetime`: String (ISO 8601 format)  
-
 * `latitude`: Number (degrees)  
-
 * `longitude`: Number (degrees)
 
   ---
@@ -1205,19 +1008,16 @@ The parser should perform the following actions:
   2. #### Trajectory Processing
 
 * The parser must iterate through the `prediction` array to identify the `ascent` and `descent` stages.  
-
 * For each stage, the entire `trajectory` array should be captured and stored.
 
   3. #### Burst Point Identification
 
 * The burst point is defined as the last data point in the `ascent` trajectory.  
-
 * The parser must extract and store the `altitude`, `datetime`, `latitude`, and `longitude` of this final ascent point.
 
   4. #### Landing Point Identification
 
 * The landing point is defined as the last data point in the `descent` trajectory.  
-
 * The parser must extract and store the `altitude`, `datetime`, `latitude`, and `longitude` of this final descent point.
 
   5. #### Error Response
@@ -1238,47 +1038,11 @@ For a balloon launched from a specific latitude and longitude, at a particular t
 
 6. ## Arduino (only as a reference, not to be used)
 
-BLEAdvertising \*pAdvertising \= BLEDevice::getAdvertising();
-    pAdvertising-\>addServiceUUID(SERVICE\_UUID);
-    pAdvertising-\>setScanResponse(true);
-    pAdvertising-\>setMinPreferred(0x06);
-    pAdvertising-\>setMinPreferred(0x12);
-    pAdvertising-\>setMinInterval(160);
-    pAdvertising-\>setMaxInterval(170);
+BLEAdvertising \*pAdvertising \= BLEDevice::getAdvertising();  
+    pAdvertising-\>addServiceUUID(SERVICE\_UUID);  
+    pAdvertising-\>setScanResponse(true);  
+    pAdvertising-\>setMinPreferred(0x06);  
+    pAdvertising-\>setMinPreferred(0x12);  
+    pAdvertising-\>setMinInterval(160);  
+    pAdvertising-\>setMaxInterval(170);  
     BLEDevice::startAdvertising();
-
----
-
-## Recent Updates (January 2025)
-
-*The following updates have been implemented to simplify and improve the BalloonHunter app:*
-
-### *Dual Location Service Architecture*
-*- **Background Mode**: 30-second GPS updates with standard accuracy (~10m) for battery efficiency during tracking*
-*- **Precision Mode**: 1-2 second GPS updates with best accuracy (~3-5m) activated only in heading mode*
-*- **Immediate switching**: No delays when toggling between tracking and heading modes*
-*- **Service coordination**: LocationService manages both modes, ServiceCoordinator handles mode switching*
-
-### *Transport Mode Persistence*
-*- **UserDefaults integration**: Car/bike preference automatically saved and restored across app sessions*
-*- **AppSettings management**: Centralized transport mode storage with automatic persistence*
-*- **Cross-session consistency**: Transport mode persists across app launches and system restarts*
-
-### *Apple Maps Integration Improvements*
-*- **Official cycling support**: Uses `MKLaunchOptionsDirectionsModeCycling` for bike mode (iOS 14+)*
-*- **Proper fallback**: Graceful degradation to walking mode for iOS < 14*
-*- **Transport mode sync**: Route calculation uses `MKDirectionsTransportType.cycling` matching Apple Maps launch mode*
-*- **Notification fixes**: Apple Maps opens with correct transport mode when tapped from notifications*
-
-### *Notification System Simplification*
-*- **Automatic notifications**: Landing point changes >100m trigger notifications without requiring manual Apple Maps activation*
-*- **Simplified UI**: Removed complex in-app alert overlays and custom notification actions*
-*- **Standard behavior**: Basic notifications that open Apple Maps when tapped*
-*- **Prediction visibility**: Removed toggle button - prediction path always shows when balloon is flying*
-
-### *User Interface Streamlining*
-*- **Button reduction**: Removed prediction visibility toggle to simplify control panel*
-*- **Cleaner layout**: Control panel now shows: Settings, Transport Mode, Show All/Point, Heading Mode, Buzzer Mute, Apple Maps*
-*- **Immediate feedback**: All mode changes take effect instantly without delays*
-
-*These updates maintain the core functionality while providing better battery life, more reliable Apple Maps integration, and a cleaner user experience.*

@@ -3,21 +3,15 @@ import MapKit
 import Combine
 import OSLog
 
+
 // MARK: - Distance Overlay Component
 struct DistanceOverlayView: View {
-    let userLocation: LocationData
-    let balloonPosition: CLLocationCoordinate2D
-
-    private var distance: Double {
-        let userCoord = CLLocationCoordinate2D(latitude: userLocation.latitude, longitude: userLocation.longitude)
-        return CLLocation(latitude: userCoord.latitude, longitude: userCoord.longitude)
-            .distance(from: CLLocation(latitude: balloonPosition.latitude, longitude: balloonPosition.longitude))
-    }
+    let distanceText: String
 
     var body: some View {
         VStack {
             Spacer()
-            Text(String(format: "%.0f m", distance))
+            Text(distanceText)
                 .font(.headline)
                 .foregroundColor(.white)
                 .padding(.horizontal, 12)
@@ -26,7 +20,7 @@ struct DistanceOverlayView: View {
                 .cornerRadius(20)
                 .padding(.bottom, 20)
         }
-        .animation(.easeInOut(duration: 0.3), value: distance) // Smooth distance changes
+        .animation(.easeInOut(duration: 0.3), value: distanceText) // Smooth distance changes when significant movement occurs
     }
 }
 
@@ -53,13 +47,17 @@ struct TrackingMapView: View {
         return serviceCoordinator.balloonTrackService.balloonPhase == .landed
     }
 
+    private var shouldShowRoute: Bool {
+        // Show route when flying OR when landed but more than 200m away
+        return isFlying || (isLanded && !isWithin200mOfLandedBalloon)
+    }
+
+    private var isWithin200mOfLandedBalloon: Bool {
+        return isLanded && serviceCoordinator.currentLocationService.isWithin200mOfBalloon
+    }
+
     private func logZoomChange(_ description: String, span: MKCoordinateSpan, center: CLLocationCoordinate2D? = nil) {
-        let zoomKm = Int(span.latitudeDelta * 111) // Approximate km conversion
-        if let center = center {
-            appLog("🔍 ZOOM: \(description) - \(zoomKm)km (\(String(format: "%.3f", span.latitudeDelta))°) at [\(String(format: "%.4f", center.latitude)), \(String(format: "%.4f", center.longitude))]", category: .general, level: .info)
-        } else {
-            appLog("🔍 ZOOM: \(description) - \(zoomKm)km (\(String(format: "%.3f", span.latitudeDelta))°)", category: .general, level: .info)
-        }
+        serviceCoordinator.logZoomChange(description, span: span, center: center)
     }
 
     var body: some View {
@@ -91,16 +89,6 @@ struct TrackingMapView: View {
                         .pickerStyle(.segmented)
                         .frame(width: 100)
 
-                        // Prediction visibility toggle
-                        Button {
-                            serviceCoordinator.isPredictionPathVisible.toggle()
-                        } label: {
-                            Image(systemName: serviceCoordinator.isPredictionPathVisible ? "eye.fill" : "eye.slash.fill")
-                                .imageScale(.large)
-                                .padding(8)
-                        }
-                        .background(.ultraThinMaterial)
-                        .cornerRadius(8)
 
                         // Show All or Point button
                         if serviceCoordinator.landingPoint != nil {
@@ -138,6 +126,19 @@ struct TrackingMapView: View {
                         }
                         .background(.ultraThinMaterial)
                         .cornerRadius(8)
+
+                        // Apple Maps navigation button (only show when landing point available)
+                        if serviceCoordinator.landingPoint != nil {
+                            Button {
+                                serviceCoordinator.openInAppleMaps()
+                            } label: {
+                                Image(systemName: "location.fill.viewfinder")
+                                    .imageScale(.large)
+                                    .padding(8)
+                            }
+                            .background(.ultraThinMaterial)
+                            .cornerRadius(8)
+                        }
                     }
                     .padding(.horizontal, 16)
                     .padding(.top, 16)
@@ -156,22 +157,20 @@ struct TrackingMapView: View {
                     
                     // 2. Balloon Predicted Path: Thick blue line (flying mode only)
                     if isFlying,
-                       serviceCoordinator.isPredictionPathVisible,
                        let predictionPath = serviceCoordinator.predictionPath {
                         MapPolyline(predictionPath)
                             .stroke(.blue, lineWidth: 4)
                     }
                     
-                    // 3. Planned Route: Green path from user to landing point (flying mode only)
-                    if isFlying,
+                    // 3. Planned Route: Green path from user to landing point (when needed for navigation)
+                    if shouldShowRoute,
                        let userRoute = serviceCoordinator.userRoute {
                         MapPolyline(userRoute)
                             .stroke(.green, lineWidth: 3)
                     }
                     
-                    // 4. User Position: Runner icon at user location (flying mode only)
-                    if isFlying,
-                       let userLocation = serviceCoordinator.userLocation {
+                    // 4. User Position: Runner icon at user location (always shown in tracking view)
+                    if let userLocation = serviceCoordinator.userLocation {
                         let userCoordinate = CLLocationCoordinate2D(
                             latitude: userLocation.latitude,
                             longitude: userLocation.longitude
@@ -284,21 +283,11 @@ struct TrackingMapView: View {
                     }
                 }
                 .onReceive(serviceCoordinator.$showAllAnnotations) { _ in /* deprecated path; coordinator computes region now */ }
-                .onReceive(serviceCoordinator.$transportMode) { _ in
-                    // Transport mode changed - trigger route recalculation
-                    Task {
-                        await serviceCoordinator.updateRoute()
-                    }
-                }
 
                     // Distance annotation overlay (landing mode only)
-                    if isLanded,
-                       let userLocation = serviceCoordinator.userLocation,
-                       let balloonPosition = serviceCoordinator.balloonDisplayPosition {
-
+                    if isLanded {
                         DistanceOverlayView(
-                            userLocation: userLocation,
-                            balloonPosition: balloonPosition
+                            distanceText: serviceCoordinator.currentLocationService.distanceOverlayText
                         )
                     }
                 }

@@ -7,6 +7,7 @@ import MapKit
 import OSLog
 import UIKit
 
+
 // MARK: - Landed Position Smoother
 // Handles adaptive position smoothing for landed balloon display
 
@@ -119,6 +120,7 @@ final class ServiceCoordinator: ObservableObject {
     // Additional data for DataPanelView
     @Published var predictionData: PredictionData? = nil
     @Published var routeData: RouteData? = nil
+    @Published var formattedRouteDistance: String = "--" // Formatted distance for UI display
     @Published var balloonTrackHistory: [TelemetryData] = []
     @Published var connectionStatus: ConnectionStatus = .disconnected
     @Published var smoothedDescentRate: Double? = nil
@@ -132,6 +134,11 @@ final class ServiceCoordinator: ObservableObject {
     
     // AFC tracking (moved from SettingsView for proper separation of concerns)
     @Published var afcFrequencies: [Int] = []
+    @Published var afcMovingAverage: Int = 0
+
+    // Apple Maps navigation tracking
+    private var hasStartedAppleMapsNavigation: Bool = false
+    private var lastAppleMapsDestination: CLLocationCoordinate2D?
     
     // Startup sequence state
     @Published var startupProgress: String = "Initializing services..."
@@ -141,9 +148,11 @@ final class ServiceCoordinator: ObservableObject {
     @Published var showTrackingMap: Bool = false
 
     // UI state
-    @Published var transportMode: TransportationMode = .car
-    @Published var isHeadingMode: Bool = false
-    @Published var isPredictionPathVisible: Bool = true
+    @Published var isHeadingMode: Bool = false {
+        didSet {
+            updateLocationServiceMode()
+        }
+    }
     @Published var isRouteVisible: Bool = true
     @Published var isBuzzerMuted: Bool = false
     @Published var showAllAnnotations: Bool = false
@@ -190,8 +199,29 @@ final class ServiceCoordinator: ObservableObject {
     // User settings reference (for external access)
     var userSettings = UserSettings()
 
+    // App settings reference (for transport mode and other app-level settings)
+    var appSettings: AppSettings?
+
+    // Transport mode computed property (delegates to AppSettings)
+    var transportMode: TransportationMode {
+        get { appSettings?.transportMode ?? .car }
+        set { appSettings?.transportMode = newValue }
+    }
+
     // Adaptive position smoothing for landed balloons
     private let landedPositionSmoother = LandedPositionSmoother()
+
+    // MARK: - Location Service Mode Management
+
+    private func updateLocationServiceMode() {
+        if isHeadingMode {
+            currentLocationService.enableHeadingMode()
+            appLog("ServiceCoordinator: Enabled precision location mode for heading view", category: .general, level: .info)
+        } else {
+            currentLocationService.disableHeadingMode()
+            appLog("ServiceCoordinator: Disabled precision location mode, using background mode", category: .general, level: .info)
+        }
+    }
 
     // Adjusted descent rate now computed by BalloonTrackService
 
@@ -203,6 +233,24 @@ final class ServiceCoordinator: ObservableObject {
 
     private var isLanded: Bool {
         return balloonTrackService.balloonPhase == .landed
+    }
+
+    private var shouldShowNavigation: Bool {
+        // Show navigation elements when flying OR when landed but more than 200m away
+        if !isLanded { return true } // Always show when flying
+
+        // When landed, check distance
+        guard let userLocation = userLocation,
+              let balloonPosition = balloonDisplayPosition ?? (balloonTelemetry != nil ?
+                  CLLocationCoordinate2D(latitude: balloonTelemetry!.latitude, longitude: balloonTelemetry!.longitude) : nil) else {
+            return false
+        }
+
+        let userCoord = CLLocationCoordinate2D(latitude: userLocation.latitude, longitude: userLocation.longitude)
+        let distance = CLLocation(latitude: userCoord.latitude, longitude: userCoord.longitude)
+            .distance(from: CLLocation(latitude: balloonPosition.latitude, longitude: balloonPosition.longitude))
+
+        return distance >= 200
     }
 
     // Phase 2: Telemetry counter for comparison logging
@@ -238,18 +286,36 @@ final class ServiceCoordinator: ObservableObject {
         // Start core services
         _ = currentLocationService
         _ = bleCommunicationService
-        
+
         // Initialize the services that create events and manage data
         _ = balloonPositionService
-        _ = balloonTrackService  
+        _ = balloonTrackService
         _ = routeCalculationService
-        
+
         // Phase 3: Start 60-second coordinator timer for predictions
         appLog("STARTUP: Coordinator owns 60-second prediction timer", category: .general, level: .info)
         startCoordinatorPredictionTimer()
-        
-        
+
+
         // Services initialized - startup sequence will be triggered by BalloonHunterApp
+    }
+
+    func setAppSettings(_ settings: AppSettings) {
+        appSettings = settings
+        setupTransportModeSubscription()
+        appLog("ServiceCoordinator: AppSettings reference set for transport mode persistence", category: .general, level: .debug)
+    }
+
+    private func setupTransportModeSubscription() {
+        // Subscribe to transport mode changes for route recalculation
+        NotificationCenter.default.publisher(for: .transportModeChanged)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    await self?.updateRoute()
+                }
+            }
+            .store(in: &cancellables)
     }
     
     // MARK: - Startup Sequence (moved to CoordinatorServices.swift)
@@ -341,6 +407,14 @@ final class ServiceCoordinator: ObservableObject {
             // Get telemetry data and process it
             if let telemetry = bleCommunicationService.latestTelemetry {
                 balloonTelemetry = telemetry
+
+                // Update balloon display position for flying balloons (landed balloons use position smoother)
+                if !balloonTrackService.isBalloonLanded {
+                    let telemetryPosition = CLLocationCoordinate2D(latitude: telemetry.latitude, longitude: telemetry.longitude)
+                    balloonDisplayPosition = telemetryPosition
+                    currentLocationService.updateBalloonDisplayPosition(telemetryPosition)
+                }
+
                 // Call balloon prediction service and routing service and wait for completion
                 await processBalloonTelemetry()
             }
@@ -535,6 +609,7 @@ final class ServiceCoordinator: ObservableObject {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] smoothedPos in
                 self?.balloonDisplayPosition = smoothedPos
+                self?.currentLocationService.updateBalloonDisplayPosition(smoothedPos)
             }
             .store(in: &cancellables)
 
@@ -550,6 +625,13 @@ final class ServiceCoordinator: ObservableObject {
     
     func triggerPrediction() {
         appLog("ServiceCoordinator: Manual prediction triggered from UI", category: .general, level: .info)
+
+        // Don't make prediction API calls when balloon is landed
+        guard !isLanded else {
+            appLog("ServiceCoordinator: Skipping prediction - balloon is landed", category: .general, level: .info)
+            return
+        }
+
         guard let telemetry = balloonTelemetry else {
             appLog("ServiceCoordinator: No telemetry available for prediction", category: .general, level: .error)
             return
@@ -621,8 +703,8 @@ final class ServiceCoordinator: ObservableObject {
         // Update map with balloon position and annotations
         updateMapWithBalloonPosition(telemetry)
         
-        // Startup trigger: first telemetry after launch -> immediate prediction once
-        if !hasTriggeredStartupPrediction {
+        // Startup trigger: first telemetry after launch -> immediate prediction once (but not if landed)
+        if !hasTriggeredStartupPrediction && !isLanded {
             hasTriggeredStartupPrediction = true
             Task {
                 await executePrediction(
@@ -684,11 +766,17 @@ final class ServiceCoordinator: ObservableObject {
     // Note: there is already a high-level triggerPrediction() earlier; keep single definition
     
     private func shouldRequestPrediction(_ telemetry: TelemetryData, force: Bool = false) -> Bool {
+        // Never make prediction API calls when balloon is landed
+        if isLanded {
+            appLog("ServiceCoordinator: shouldRequestPrediction? landed=YES -> NO", category: .general, level: .debug)
+            return false
+        }
+
         if force {
             appLog("ServiceCoordinator: Prediction forced", category: .general, level: .debug)
             return true
         }
-        
+
         // Time-based trigger with in-flight guard and attempt-based cooldown
         if isPredictionInFlight {
             appLog("ServiceCoordinator: shouldRequestPrediction? inFlight=YES -> NO", category: .general, level: .debug)
@@ -807,9 +895,9 @@ final class ServiceCoordinator: ObservableObject {
             type: .balloon
         )
         
-        // Update user annotation if available (flight mode only)
+        // Update user annotation if available (when navigation is needed)
         var annotations: [MapAnnotationItem] = [balloonAnnotation]
-        if isFlying, let userLocation = userLocation {
+        if shouldShowNavigation, let userLocation = userLocation {
             let userAnnotation = MapAnnotationItem(
                 coordinate: CLLocationCoordinate2D(latitude: userLocation.latitude, longitude: userLocation.longitude),
                 title: "You",
@@ -861,18 +949,24 @@ final class ServiceCoordinator: ObservableObject {
         // Update prediction path (flight mode only)
         if isFlying, let path = prediction.path, !path.isEmpty {
             predictionPath = MKPolyline(coordinates: path, count: path.count)
-            isPredictionPathVisible = true
         } else if isLanded {
             predictionPath = nil
-            isPredictionPathVisible = false
         }
         
         // Check if landing point moved significantly (trigger route update)
         let shouldUpdateRouteFromLandingChange = checkLandingPointMovement(newLandingPoint: prediction.landingPoint)
-        
+
+        // Check if Apple Maps navigation needs updating
+        let previousLandingPoint = landingPoint
+
         // Update landing and burst points
         landingPoint = prediction.landingPoint
         burstPoint = prediction.burstPoint
+
+        // Check for navigation update after setting new landing point
+        if let newLandingPoint = prediction.landingPoint {
+            checkForNavigationUpdate(previousLandingPoint: previousLandingPoint, newLandingPoint: newLandingPoint)
+        }
         
         // Phase 2: Mirror landing point in DomainModel
         // Landing point already updated in ServiceCoordinator state above
@@ -934,12 +1028,23 @@ final class ServiceCoordinator: ObservableObject {
     }
     
     func updateRoute() async {
-        // Only show routes during flight - user navigates to actual landed position when landed
-        guard isFlying else {
-            userRoute = nil
-            isRouteVisible = false
-            appLog("ServiceCoordinator: Route hidden - balloon is landed", category: .general, level: .debug)
-            return
+        // When landed, only hide route if user is very close (200m), otherwise continue showing route to landing position
+        if isLanded {
+            if let userLocation = userLocation,
+               let balloonPosition = balloonDisplayPosition ?? (balloonTelemetry != nil ? CLLocationCoordinate2D(latitude: balloonTelemetry!.latitude, longitude: balloonTelemetry!.longitude) : nil) {
+
+                let userCoord = CLLocationCoordinate2D(latitude: userLocation.latitude, longitude: userLocation.longitude)
+                let distance = CLLocation(latitude: userCoord.latitude, longitude: userCoord.longitude)
+                    .distance(from: CLLocation(latitude: balloonPosition.latitude, longitude: balloonPosition.longitude))
+
+                if distance < 200 {
+                    userRoute = nil
+                    isRouteVisible = false
+                    appLog("ServiceCoordinator: Route hidden - within 200m of landed balloon (\(Int(distance))m)", category: .general, level: .debug)
+                    return
+                }
+                appLog("ServiceCoordinator: Continuing route to landed balloon (\(Int(distance))m away)", category: .general, level: .debug)
+            }
         }
 
         guard let userLocation = userLocation,
@@ -948,27 +1053,9 @@ final class ServiceCoordinator: ObservableObject {
             return
         }
         
-        // Check distance gating (don't show route if balloon is too close to iPhone)
+        // Distance gating now handled above for landed balloons (200m threshold)
+        // For flying balloons, continue showing route regardless of distance
         let userCoord = CLLocationCoordinate2D(latitude: userLocation.latitude, longitude: userLocation.longitude)
-        
-        // Use balloon position if available, otherwise fall back to landing point
-        let referencePoint: CLLocationCoordinate2D
-        if let balloonTelemetry = balloonTelemetry {
-            referencePoint = CLLocationCoordinate2D(latitude: balloonTelemetry.latitude, longitude: balloonTelemetry.longitude)
-        } else {
-            referencePoint = landingPoint
-        }
-        
-        let distance = CLLocation(latitude: userCoord.latitude, longitude: userCoord.longitude)
-            .distance(from: CLLocation(latitude: referencePoint.latitude, longitude: referencePoint.longitude))
-        
-        if distance < 100 { // 100m rule - too close to balloon/landing point
-            userRoute = nil
-            isRouteVisible = false
-            let referenceType = balloonTelemetry != nil ? "balloon" : "landing point"
-            appLog("ServiceCoordinator: Route hidden - too close to \(referenceType) (\(Int(distance))m < 100m)", category: .general, level: .debug)
-            return
-        }
         
         // Generate cache key including transport mode (keep this valuable optimization)
         let routeKey = generateRouteCacheKey(userCoord, landingPoint, transportMode)
@@ -984,10 +1071,12 @@ final class ServiceCoordinator: ObservableObject {
                     userRoute = MKPolyline(coordinates: cachedRoute.coordinates, count: cachedRoute.coordinates.count)
                     isRouteVisible = true
                     routeData = cachedRoute  // Fix: Set route data for arrival time
+                    updateFormattedRouteDistance()
                 } else {
                     userRoute = nil
                     isRouteVisible = false
                     routeData = nil
+                    updateFormattedRouteDistance()
                 }
                 return
             }
@@ -1008,6 +1097,7 @@ final class ServiceCoordinator: ObservableObject {
                 userRoute = MKPolyline(coordinates: routeData.coordinates, count: routeData.coordinates.count)
                 isRouteVisible = true
                 self.routeData = routeData
+                updateFormattedRouteDistance()
                 
                 // Cache the route
                 await routingCache.set(key: routeKey, value: routeData)
@@ -1119,8 +1209,8 @@ final class ServiceCoordinator: ObservableObject {
     private func updateAnnotationsWithoutTelemetry() {
         var annotations: [MapAnnotationItem] = []
         
-        // Add user annotation if available (flight mode only)
-        if isFlying, let userLocation = userLocation {
+        // Add user annotation if available (when navigation is needed)
+        if shouldShowNavigation, let userLocation = userLocation {
             let userAnnotation = MapAnnotationItem(
                 coordinate: CLLocationCoordinate2D(latitude: userLocation.latitude, longitude: userLocation.longitude),
                 title: "You",
@@ -1179,11 +1269,14 @@ final class ServiceCoordinator: ObservableObject {
     private func updateAFCTracking(_ telemetry: TelemetryData) {
         let afc = telemetry.afcFrequency
         afcFrequencies.append(afc)
-        
+
         // Keep only the last 20 values for moving average
         if afcFrequencies.count > 20 {
             afcFrequencies.removeFirst()
         }
+
+        // Update moving average
+        afcMovingAverage = afcFrequencies.isEmpty ? 0 : afcFrequencies.reduce(0, +) / afcFrequencies.count
         
         // AFC tracking updated (log removed)
     }
@@ -1281,6 +1374,112 @@ final class ServiceCoordinator: ObservableObject {
         appLog("ServiceCoordinator: Invalid URL format", category: .service, level: .debug)
         appLog("ServiceCoordinator: ❌ Clipboard content could not be parsed as coordinates", category: .service, level: .debug)
         return nil
+    }
+
+    // MARK: - UI Support Methods
+
+    func openInAppleMaps() {
+        guard let landingPoint = landingPoint else {
+            appLog("ServiceCoordinator: Cannot open Apple Maps - no landing point available", category: .general, level: .error)
+            return
+        }
+
+        let placemark = MKPlacemark(coordinate: landingPoint)
+        let mapItem = MKMapItem(placemark: placemark)
+        mapItem.name = "Balloon Landing Site"
+
+        let directionsMode: String
+        switch transportMode {
+        case .car:
+            directionsMode = MKLaunchOptionsDirectionsModeDriving
+        case .bike:
+            if #available(iOS 14.0, *) {
+                directionsMode = MKLaunchOptionsDirectionsModeCycling
+            } else {
+                directionsMode = MKLaunchOptionsDirectionsModeWalking // Fallback for older iOS
+            }
+        }
+
+        let launchOptions = [
+            MKLaunchOptionsDirectionsModeKey: directionsMode
+        ]
+
+        mapItem.openInMaps(launchOptions: launchOptions)
+        appLog("ServiceCoordinator: Opened Apple Maps navigation to landing point", category: .general, level: .info)
+
+        // Track that navigation was started for update notifications
+        hasStartedAppleMapsNavigation = true
+        lastAppleMapsDestination = landingPoint
+    }
+
+    private func checkForNavigationUpdate(previousLandingPoint: CLLocationCoordinate2D?, newLandingPoint: CLLocationCoordinate2D) {
+        // Check if we have a previous landing point to compare against
+        guard let previousPoint = previousLandingPoint else {
+            // First landing point - no notification needed
+            return
+        }
+
+        // Calculate distance between old and new landing points
+        let oldLocation = CLLocation(latitude: previousPoint.latitude, longitude: previousPoint.longitude)
+        let newLocation = CLLocation(latitude: newLandingPoint.latitude, longitude: newLandingPoint.longitude)
+        let distanceChange = oldLocation.distance(from: newLocation)
+
+        // Trigger update notification if change is significant (>100m)
+        if distanceChange > 100 {
+            appLog("ServiceCoordinator: Landing point changed by \(Int(distanceChange))m - sending navigation update notification", category: .general, level: .info)
+            sendNavigationUpdateNotification(newDestination: newLandingPoint, distanceChange: distanceChange)
+        }
+    }
+
+    private func sendNavigationUpdateNotification(newDestination: CLLocationCoordinate2D, distanceChange: Double) {
+        // Simple notification for navigation update
+        let content = UNMutableNotificationContent()
+        content.title = "Landing Prediction Updated"
+        content.body = "Balloon moved \(Int(distanceChange))m. Tap to open Apple Maps with new location."
+        content.sound = .default
+
+        // Store destination for when user taps notification
+        content.userInfo = [
+            "latitude": newDestination.latitude,
+            "longitude": newDestination.longitude
+        ]
+
+        let request = UNNotificationRequest(
+            identifier: "navigation_update_\(Date().timeIntervalSince1970)",
+            content: content,
+            trigger: UNTimeIntervalNotificationTrigger(timeInterval: 1, repeats: false)
+        )
+
+        UNUserNotificationCenter.current().add(request) { error in
+            if let error = error {
+                appLog("ServiceCoordinator: Failed to send navigation notification: \(error)", category: .general, level: .error)
+            } else {
+                appLog("ServiceCoordinator: Sent navigation update notification", category: .general, level: .info)
+            }
+        }
+    }
+
+    func updateLastAppleMapsDestination(_ destination: CLLocationCoordinate2D) {
+        lastAppleMapsDestination = destination
+        appLog("ServiceCoordinator: Updated last Apple Maps destination", category: .general, level: .debug)
+    }
+
+    func logZoomChange(_ description: String, span: MKCoordinateSpan, center: CLLocationCoordinate2D? = nil) {
+        let zoomKm = Int(span.latitudeDelta * 111) // Approximate km conversion
+        if let center = center {
+            appLog("🔍 ZOOM: \(description) - \(zoomKm)km (\(String(format: "%.3f", span.latitudeDelta))°) at [\(String(format: "%.4f", center.latitude)), \(String(format: "%.4f", center.longitude))]", category: .general, level: .info)
+        } else {
+            appLog("🔍 ZOOM: \(description) - \(zoomKm)km (\(String(format: "%.3f", span.latitudeDelta))°)", category: .general, level: .info)
+        }
+    }
+
+    private func updateFormattedRouteDistance() {
+        if let distanceMeters = routeData?.distance {
+            let distanceKm = distanceMeters / 1000.0
+            formattedRouteDistance = String(format: "%.1f", distanceKm)
+        } else {
+            formattedRouteDistance = "--"
+        }
     }
 
     // MARK: - Prediction Logic Now Handled by Independent BalloonTrackPredictionService

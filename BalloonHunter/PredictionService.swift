@@ -11,30 +11,23 @@ private struct PredictionCacheEntry: Sendable {
     let version: Int
     let accessCount: Int
 
-    init(data: PredictionData, version: Int, timestamp: Date = Date(), accessCount: Int = 1) {
+    nonisolated init(data: PredictionData, version: Int, timestamp: Date = Date(), accessCount: Int = 1) {
         self.data = data
         self.timestamp = timestamp
         self.version = version
         self.accessCount = accessCount
     }
 
-    func accessed() -> PredictionCacheEntry {
+    nonisolated func accessed() -> PredictionCacheEntry {
         PredictionCacheEntry(data: data, version: version, timestamp: timestamp, accessCount: accessCount + 1)
     }
 }
 
 private struct PredictionCacheMetrics: Sendable {
-    var hits: Int
-    var misses: Int
-    var evictions: Int
-    var expirations: Int
-
-    init() {
-        self.hits = 0
-        self.misses = 0
-        self.evictions = 0
-        self.expirations = 0
-    }
+    var hits: Int = 0
+    var misses: Int = 0
+    var evictions: Int = 0
+    var expirations: Int = 0
 
     var hitRate: Double {
         let total = hits + misses
@@ -52,7 +45,7 @@ actor PredictionCache {
     init(ttl: TimeInterval = 300, capacity: Int = 100) {
         self.ttl = ttl
         self.capacity = capacity
-        self.metrics = PredictionCacheMetrics()
+        self.metrics = PredictionCacheMetrics(hits: 0, misses: 0, evictions: 0, expirations: 0)
     }
 
     func get(key: String) -> PredictionData? {
@@ -96,7 +89,12 @@ actor PredictionCache {
             }
         }
 
-        let entry = PredictionCacheEntry.init(data: value, version: version, timestamp: Date())
+        let entry = PredictionCacheEntry(
+            data: value,
+            version: version,
+            timestamp: Date(),
+            accessCount: 1
+        )
         cache[key] = entry
 
         // Update LRU

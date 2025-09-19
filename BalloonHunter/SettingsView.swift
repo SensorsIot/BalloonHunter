@@ -579,17 +579,15 @@ struct SettingsView: View {
     }
     
     var tuneTab: some View {
-        let afcMovingAverage = serviceCoordinator.afcFrequencies.isEmpty ? 0 : serviceCoordinator.afcFrequencies.reduce(0, +) / serviceCoordinator.afcFrequencies.count
-        
-        return Form {
+        Form {
             Section(header: Text("Live AFC Value")) {
                 VStack(spacing: 15) {
-                    Text("\(afcMovingAverage) Hz")
+                    Text("\(serviceCoordinator.afcMovingAverage) Hz")
                         .font(.system(size: 30, weight: .bold, design: .monospaced))
                         .padding(.vertical, 10)
 
                     Button("Transfer") {
-                        tempTuneFrequencyCorrection = afcMovingAverage
+                        tempTuneFrequencyCorrection = serviceCoordinator.afcMovingAverage
                     }
                     .buttonStyle(.borderedProminent)
                 }
