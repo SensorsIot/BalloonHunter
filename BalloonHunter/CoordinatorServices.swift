@@ -284,7 +284,7 @@ extension ServiceCoordinator {
         
         // Priority 4: Use persisted landing point
         if let telemetry = balloonTelemetry, !telemetry.sondeName.isEmpty {
-            if let persistedLanding = persistenceService.loadLandingPoint(sondeName: telemetry.sondeName) {
+            if let persistedLanding = landingPointTrackingService.lastLandingPrediction?.coordinate {
                 await MainActor.run {
                     landingPoint = persistedLanding
                 }

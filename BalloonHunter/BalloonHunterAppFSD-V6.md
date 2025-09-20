@@ -14,7 +14,7 @@ The balloon carries a sonde that transmits its position signal. This signal is r
 
 We want true separation of concerns with views handling only presentation logic and services managing all business  operations.
 
- The app shall use a centralized coordinator pattern. The ServiceCoordinator class is the heart of this architecture.
+ The app shall use a centralized coordinator pattern. The ServiceCoordinator class is the heart of this architecture. It should only be used when beneficial. Otherwise use direct calls
 
 ### File Structure
 
@@ -22,25 +22,23 @@ Do not open a new file without asking the user
 
 #### BalloonHunterApp.swift:
 
-The main entry point of the application. It initializes and injects the core services          (AppServices, ServiceCoordinator) into the SwiftUI environment and manages the startup UI flow.
+The main entry point of the application. It initializes the dependency container (`AppServices`), creates the `ServiceCoordinator`, injects both (plus shared services such as `LandingPointTrackingService`) into the SwiftUI environment, and manages scene lifecycle tasks like persistence saves and notification routing.
 
 ####  AppServices.swift:
 
-A dependency injection container that creates and holds instances of the core services  like PersistenceService, BLECommunicationService, and currentLocationService.
+A dependency injection container that wires up the core infrastructure: `PersistenceService`, `BLECommunicationService`, `CurrentLocationService`, `BalloonPositionService`, `BalloonTrackService`, `LandingPointTrackingService`, the caching actors, and other singletons used across the app.
 
 #### ServiceCoordinator.swift:
 
-The central architectural component that coordinates all services, manages  
-         application state, and handles the main business logic that was originally intended for the Policy layer in the FSD.
+The central architectural component that coordinates all services, manages application state, arbitrates telemetry between BLE and APRS providers, and contains the main business logic that was originally intended for the policy layer in the FSD.
 
 #### CoordinatorServices.swift:
 
-An extension to ServiceCoordinator that specifically contains the detailed 8-step  
-         startup sequence logic, keeping the main ServiceCoordinator file cleaner.
+An extension to ServiceCoordinator that specifically contains the detailed 8-step startup sequence logic, keeping the main ServiceCoordinator file cleaner.
 
 #### Services.swift:
 
-A large file containing the implementation for many of the application's services and data models, including CurrentLocationService, BalloonPositionService, BalloonTrackService, PredictionService, RouteCalculationService, and PersistenceService.
+A consolidated services implementation file. It defines shared models (`TelemetryData`, `LandingPredictionPoint`, etc.), the telemetry providers (BLE and APRS), `BalloonTrackService`, `LandingPointTrackingService`, routing helpers, persistence, and supporting utilities used throughout the app.
 
 #### BLEService.swift:
 
@@ -48,7 +46,7 @@ Contains the BLECommunicationService, which is responsible for all Bluetooth Low
 
 #### TrackingMapView.swift:
 
-The main view of the app. It renders the map, all overlays (balloon track, prediction, route), and the top row of control buttons.
+The main map view. It renders live overlays (balloon track, SondeHub landing history, prediction path, routes), reflects the user’s controls, and hosts the SondeHub serial confirmation popup when required.
 
 #### DataPanelView.swift:
 
@@ -58,6 +56,10 @@ A SwiftUI view that displays the two tables of telemetry and calculated data at 
 
 Contains the UI for all settings, including the main "Sonde Settings" and the tabbed "Device Settings" sheet.
 
+#### PredictionService.swift:
+
+Implements the SondeHub prediction workflow (manual and scheduled), including API orchestration, caching integration, and publishing `PredictionData` back to the coordinator and UI.
+
 #### PredictionCache.swift:
 
 An actor that provides a thread-safe, in-memory cache for prediction data to avoid redundant API calls.
@@ -65,6 +67,18 @@ An actor that provides a thread-safe, in-memory cache for prediction data to avo
 #### RoutingCache.swift:
 
 An actor that provides a thread-safe, in-memory cache for calculated routes to avoid redundant route calculations.
+
+#### DebugCSVLogger.swift:
+
+Utility that records incoming telemetry frames (excluding development sondes) to a CSV file in the app’s documents directory for offline analysis.
+
+#### NumericTextField.swift:
+
+A reusable SwiftUI control for constrained numeric entry, used in settings screens where keypad-free digit editing is required.
+
+#### Settings.swift:
+
+Defines `UserSettings`, `DeviceSettings`, and app-level configuration structures, plus helpers for persisting and observing user-selectable preferences (transport mode, prediction defaults, etc.).
 
 
 
@@ -182,6 +196,50 @@ Purpose: Manages Bluetooth communication with MySondyGo devices
 * All parsing errors or malformed packets will be skipped to maintain stability, and attempts will be made to process subsequent packets.
 
 
+### APRS Telemetry Service
+
+Purpose: Provide SondeHub-driven telemetry frames when BLE data is unavailable while presenting a unified interface to consumers.
+
+####   Input Triggers:
+
+- Poll ticks on the APRS scheduler (5 s when BLE is stale, 60 s otherwise)  
+- Notifications from the coordinator that BLE telemetry has resumed (stop polling)  
+- Active sonde name updates from the BLE pipeline (reconcile SondeHub serial)  
+- User confirmation events for serial remapping prompts
+
+####   Data it Consumes:
+
+1. SondeHub v2 REST API (`/sondes/<serial>/telemetry?limit=1`)  
+2. Current BLE-reported sonde name to determine the matching SondeHub serial  
+3. Coordinator-provided confirmation callback to resolve serial mismatches
+
+####   Data it Publishes:
+
+- `TelemetryFrame` objects tagged with `.aprs` source for downstream processing  
+- Service state (e.g., current SondeHub serial, polling cadence) for diagnostics
+
+####   Example Data:
+
+  TelemetryFrame(  
+      source: .aprs,  
+      sondeName: "T4630250",  
+      latitude: 47.1234,  
+      longitude: 7.5678,  
+      altitude: 1850.0,  
+      horizontalSpeed: 21.7,  
+      verticalSpeed: -4.2,  
+      timestamp: Date()  
+  )
+
+####   Behavior
+
+- Acts as a `TelemetryProvider`, allowing `BalloonTrackService` to consume APRS frames identically to BLE frames.  
+- On startup, probes SondeHub for the most recent telemetry using the BLE-provided sonde name; if SondeHub reports a different serial, the user is prompted: “Use SondeHub serial T4630250 changed to V4210123?”. Polling continues only after confirmation, and the mapping lasts for the current run.  
+- Poll cadence is 5 s when APRS data is actively needed (BLE stale) and 60 s as a lightweight health check when BLE is healthy.  
+- Automatically suspends polling as soon as fresh BLE telemetry resumes, resuming later if BLE becomes stale again.  
+- Does not perform flight-state decisions, smoothing, or plausibility checks; these remain centralized in `BalloonTrackService`.
+
+
 ### Current Location Service
 
 Purpose: Tracks iPhone's GPS location and heading
@@ -280,14 +338,14 @@ Purpose: Saves/loads data to UserDefaults. During development, and because user 
 
 ####   Input Triggers:
 
-- Telemetry samples emitted by `BalloonPositionService.$currentTelemetry`  
+- Telemetry frames emitted by any registered `TelemetryProvider` (BLE or APRS)  
 - Sonde identity changes embedded in telemetry (switching between balloons)  
 - Manual commands (`clearCurrentTrack()`, `setBalloonAsLanded(...)`)  
 - 1 Hz staleness timer evaluating telemetry freshness
 
 ####   Data it Consumes:
 
-1. `TelemetryData` stream (position, altitude, raw speeds, timestamps)  
+1. Unified `TelemetryFrame` stream from `BLETelemetryProvider` and `APRSTelemetryService`  
 2. `PersistenceService` for loading/saving tracks per sonde  
 3. `BalloonPositionService` for current telemetry snapshots during smoothing/staleness checks
 
@@ -323,8 +381,16 @@ Purpose: Saves/loads data to UserDefaults. During development, and because user 
 - The first sample for a sonde attempts to load its persisted track via `PersistenceService.loadTrackForCurrentSonde`.  
 - When telemetry announces a different sonde than the current one, previous track data is purged before loading the new sonde’s history; counters reset to start a fresh track when needed.
 
+####   Telemetry Providers & Arbitration
+
+- Subscribes to every registered `TelemetryProvider` (BLE and APRS) and maintains the freshest frame per source.  
+- Prefers BLE telemetry whenever the last BLE frame is ≤3 seconds old; otherwise, falls back to APRS.  
+- Switches immediately back to BLE once fresh frames return.  
+- Staleness detection drives the `isTelemetryStale` flag published to the UI.
+
 ####   Telemetry Processing Pipeline
 
+- Each incoming frame passes a plausibility check: the derived 3-D speed (using horizontal and vertical components) must be ≤700 km/h (~194.4 m/s); faster frames are dropped as outliers.  
 - Each telemetry sample is converted into a `BalloonTrackPoint`, recomputing horizontal speed via great-circle distance/T∆ and vertical speed via altitude delta/T∆ to ensure consistent metrics.  
 - The new point is appended, `currentEffectiveDescentRate` is recomputed using linear regression over the last 5 points, and `trackUpdated` notifies observers.  
 - Robust speed smoothing mirrors the FSD spec: Hampel filter (window 10, k=3), deadbands (|vᵥ| < 0.05 m/s, vₕ < 0.2 m/s), followed by EMA with τ=10 s, producing the published smoothed speeds.  
@@ -338,6 +404,7 @@ Purpose: Saves/loads data to UserDefaults. During development, and because user 
 - When latched, landing position is the averaged coordinate from the buffered samples (requires ≥50 points, otherwise last position).  
 - Hysteresis reuses the confidence score: if a latched landing later reports <40% confidence (or the sample window drops below 3 points) for 3 consecutive updates, the service treats it as a false positive, clears `isBalloonLanded`, wipes the provisional landing position, and resumes flight mode.  
 - `isBalloonFlying` is true whenever telemetry is recent and landing has not latched; `balloonPhase` is set to ascending/descending/landed based on smoothed vertical speed and altitude thresholds.  
+- When APRS continues to supply an identical position (e.g., after landing), the existing landing detection logic marks the balloon as landed; any new moving BLE frames re-evaluate the state.  
 - Manual override `setBalloonAsLanded` can force the landed state at an arbitrary coordinate for clipboard-driven workflows.
 
 ####   Persistence & Staleness Handling
@@ -377,9 +444,7 @@ Purpose: Maintain a per-sonde history of predicted landing coordinates, persist 
 ##### Data it Publishes:
 
 - `@Published var landingHistory: [LandingPredictionPoint]` — ordered landing predictions for the active sonde  
-- `@Published var landingHistoryPolyline: MKPolyline?` — cached purple polyline connecting stored landing points  
-- `@Published var lastLandingPrediction: LandingPredictionPoint?` — latest entry for panels and tooltips  
-- `let landingHistoryUpdated = PassthroughSubject<Void, Never>()` — notifications for map overlay refreshes
+- `@Published var lastLandingPrediction: LandingPredictionPoint?` — latest entry for panels and tooltips
 
 ##### Example Data:
 
@@ -392,11 +457,11 @@ Purpose: Maintain a per-sonde history of predicted landing coordinates, persist 
 
 ##### Behavior & Map Integration
 
-- Append new landing points when predictions arrive; deduplicate points closer than 25 m to reduce jitter before rebuilding the polyline.  
-- Persist the history every 5 additions and during lifecycle saves using the current sonde name as the key.  
+- Append new landing points when predictions arrive; deduplicate points closer than 25 m to reduce jitter before appending.  
+- Persist the history every few additions and during lifecycle saves using the current sonde name as the key.  
 - Clear in-memory and persisted history when the sonde name changes so each balloon starts fresh.  
-- Tracking map draws the polyline in purple (`Color.purple`) and may annotate the newest landing point for quick reference.  
-- ServiceCoordinator listens to `landingHistoryUpdated` to synchronize overlays with prediction events.
+- Tracking map reads the published history directly, rendering a purple polyline and dot markers for each stored landing estimate.  
+- `lastLandingPrediction` feeds clipboard/manual overrides and fallback landing selection.
 
 Adjusted descend rate: This value is calculated every time a new telemetry arrives.
 
@@ -543,6 +608,13 @@ Purpose: Central coordinator orchestrating all services
   // Smoothed descent rate (20-value average)  
   smoothedDescentRate: \-12.3 // m/s (negative \= descending)
 
+####   APRS Integration
+
+- Instantiates the BLE and APRS telemetry providers and injects them into `BalloonTrackService` so both data feeds share the same processing pipeline.  
+- Continuously forwards the current BLE sonde name to the APRS service, allowing it to reconcile and prompt for SondeHub serial changes before polling.  
+- Presents a centered confirmation popup (“Use SondeHub serial T4630250 changed to V4210123?”) whenever the SondeHub serial differs from the BLE telemetry name; APRS polling proceeds only after the user confirms.  
+- Suspends APRS polling the moment fresh BLE telemetry is available and restarts it automatically when BLE becomes stale again.
+
 ## Startup
 
 1. Service Initialization: Services are initialized and logo page presentation (logo has to be presented as early as possible).   
@@ -620,6 +692,10 @@ A new route calculation and presentation is triggered:
   * When the transport mode is changed
 
 It is not shown if the distance between the balloon and the iPhone is less than 100m.
+
+### SondeHub Serial Confirmation Popup
+
+A centered alert presented on the tracking map when SondeHub reports a serial different from the BLE telemetry name. The message reads “Use SondeHub serial T4630250 changed to V4210123?” with Confirm and Cancel buttons. Confirmation is required before APRS polling continues; the mapping is not persisted across app launches so the prompt reappears on the next run if needed.
 
 ### Data Panel
 

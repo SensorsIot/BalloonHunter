@@ -23,7 +23,8 @@ final class AppServices: ObservableObject {
     // MARK: - Specialized Services
     let balloonPositionService: BalloonPositionService
     let balloonTrackService: BalloonTrackService
-    // LandingPointService and RouteCalculationService moved to ServiceCoordinator (circular dependencies)
+    let landingPointTrackingService: LandingPointTrackingService
+    // RouteCalculationService moved to ServiceCoordinator (circular dependencies)
     
     // MARK: - Coordinators (moved to ServiceCoordinator)
     
@@ -46,6 +47,10 @@ final class AppServices: ObservableObject {
         self.balloonTrackService = BalloonTrackService(
             persistenceService: persistenceService, 
             balloonPositionService: balloonPositionService
+        )
+        self.landingPointTrackingService = LandingPointTrackingService(
+            persistenceService: persistenceService,
+            balloonTrackService: balloonTrackService
         )
         // LandingPointService and RouteCalculationService creation moved to ServiceCoordinator
         

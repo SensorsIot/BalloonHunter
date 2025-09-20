@@ -57,7 +57,8 @@ struct BalloonHunterApp: App {
             predictionCache: services.predictionCache,
             routingCache: services.routingCache,
             balloonPositionService: services.balloonPositionService,
-            balloonTrackService: services.balloonTrackService
+            balloonTrackService: services.balloonTrackService,
+            landingPointTrackingService: services.landingPointTrackingService
         ))
         _appSettings = StateObject(wrappedValue: AppSettings())
     }
@@ -76,6 +77,7 @@ struct BalloonHunterApp: App {
                         .environmentObject(serviceCoordinator)
                         .environmentObject(appServices.bleCommunicationService)
                         .environmentObject(appServices.balloonTrackService)
+                        .environmentObject(appServices.landingPointTrackingService)
                         .environmentObject(appServices.balloonPositionService)
                         .environmentObject(serviceCoordinator.predictionService)
                 } else {

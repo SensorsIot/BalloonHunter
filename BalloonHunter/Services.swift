@@ -160,6 +160,35 @@ struct PredictionData {
     let metadata: [String: Any]?
 }
 
+enum LandingPredictionSource: String, Codable {
+    case sondehub
+    case manual
+}
+
+struct LandingPredictionPoint: Codable, Equatable {
+    let latitude: Double
+    let longitude: Double
+    let predictedAt: Date
+    let landingEta: Date?
+    let source: LandingPredictionSource
+
+    init(coordinate: CLLocationCoordinate2D, predictedAt: Date, landingEta: Date?, source: LandingPredictionSource) {
+        self.latitude = coordinate.latitude
+        self.longitude = coordinate.longitude
+        self.predictedAt = predictedAt
+        self.landingEta = landingEta
+        self.source = source
+    }
+
+    var coordinate: CLLocationCoordinate2D {
+        CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
+    }
+
+    func distance(from other: LandingPredictionPoint) -> CLLocationDistance {
+        coordinate.distance(from: other.coordinate)
+    }
+}
+
 struct RouteData {
     let coordinates: [CLLocationCoordinate2D]
     let distance: CLLocationDistance
@@ -1149,6 +1178,78 @@ final class BalloonTrackService: ObservableObject {
     }
 }
 
+// MARK: - Landing Point Tracking Service
+
+@MainActor
+final class LandingPointTrackingService: ObservableObject {
+    @Published private(set) var landingHistory: [LandingPredictionPoint] = []
+    @Published private(set) var lastLandingPrediction: LandingPredictionPoint? = nil
+
+    private let persistenceService: PersistenceService
+    private let balloonTrackService: BalloonTrackService
+    private var cancellables = Set<AnyCancellable>()
+    private let deduplicationThreshold: CLLocationDistance = 25.0
+    private var currentSondeName: String?
+
+    init(persistenceService: PersistenceService, balloonTrackService: BalloonTrackService) {
+        self.persistenceService = persistenceService
+        self.balloonTrackService = balloonTrackService
+
+        balloonTrackService.$currentBalloonName
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] newName in
+                self?.handleSondeChange(newName: newName)
+            }
+            .store(in: &cancellables)
+    }
+
+    func recordLandingPrediction(coordinate: CLLocationCoordinate2D, predictedAt: Date, landingEta: Date?, source: LandingPredictionSource = .sondehub) {
+        guard let sondeName = balloonTrackService.currentBalloonName else {
+            appLog("LandingPointTrackingService: Ignoring landing prediction – missing sonde name", category: .service, level: .debug)
+            return
+        }
+
+        let newPoint = LandingPredictionPoint(coordinate: coordinate, predictedAt: predictedAt, landingEta: landingEta, source: source)
+
+        if let last = landingHistory.last, last.distance(from: newPoint) < deduplicationThreshold {
+            landingHistory[landingHistory.count - 1] = newPoint
+        } else {
+            landingHistory.append(newPoint)
+        }
+
+        lastLandingPrediction = newPoint
+
+        persistenceService.saveLandingHistory(sondeName: sondeName, history: landingHistory)
+    }
+
+    func persistCurrentHistory() {
+        guard let sondeName = currentSondeName else { return }
+        persistenceService.saveLandingHistory(sondeName: sondeName, history: landingHistory)
+    }
+
+    func resetHistory() {
+        landingHistory = []
+        lastLandingPrediction = nil
+    }
+
+    private func handleSondeChange(newName: String?) {
+        guard currentSondeName != newName else { return }
+
+        if let previous = currentSondeName, let newName, previous != newName {
+            persistenceService.removeLandingHistory(for: previous)
+        }
+
+        currentSondeName = newName
+
+        if let name = newName, let storedHistory = persistenceService.loadLandingHistory(sondeName: name) {
+            landingHistory = storedHistory
+            lastLandingPrediction = storedHistory.last
+        } else {
+            resetHistory()
+        }
+    }
+}
+
 // MARK: - Prediction Service (moved)
 /* PredictionService moved to BalloonHunter/PredictionService.swift */
 
@@ -1445,7 +1546,7 @@ final class PersistenceService: ObservableObject {
     @Published var userSettings: UserSettings
     @Published var deviceSettings: DeviceSettings?
     private var internalTracks: [String: [BalloonTrackPoint]] = [:]
-    private var internalLandingPoints: [String: CLLocationCoordinate2D] = [:]
+    private var internalLandingHistories: [String: [LandingPredictionPoint]] = [:]
     
     init() {
         // PersistenceService initializing (log removed for reduction)
@@ -1459,8 +1560,8 @@ final class PersistenceService: ObservableObject {
         // Load tracks
         self.internalTracks = Self.loadAllTracks()
         
-        // Load landing points
-        self.internalLandingPoints = Self.loadAllLandingPoints()
+        // Load landing point histories
+        self.internalLandingHistories = Self.loadAllLandingHistories()
         
         appLog("PersistenceService: Tracks loaded from UserDefaults. Total tracks: \(internalTracks.count)", category: .service, level: .info)
     }
@@ -1533,12 +1634,14 @@ final class PersistenceService: ObservableObject {
         appLog("PersistenceService: All balloon tracks purged.", category: .service, level: .debug)
     }
     
-    func saveOnAppClose(balloonTrackService: BalloonTrackService) {
+    func saveOnAppClose(balloonTrackService: BalloonTrackService,
+                        landingPointTrackingService: LandingPointTrackingService) {
         if let currentName = balloonTrackService.currentBalloonName {
             let track = balloonTrackService.getAllTrackPoints()
             saveBalloonTrack(sondeName: currentName, track: track)
             appLog("PersistenceService: Saved current balloon track for sonde '\(currentName)' on app close.", category: .service, level: .info)
         }
+        landingPointTrackingService.persistCurrentHistory()
     }
     
     private func saveAllTracks() {
@@ -1573,29 +1676,60 @@ final class PersistenceService: ObservableObject {
     
     // MARK: - Landing Points
     
-    func saveLandingPoint(sondeName: String, coordinate: CLLocationCoordinate2D) {
-        internalLandingPoints[sondeName] = coordinate
-        saveAllLandingPoints()
+    func saveLandingHistory(sondeName: String, history: [LandingPredictionPoint]) {
+        internalLandingHistories[sondeName] = history
+        saveAllLandingHistories()
     }
-    
-    func loadLandingPoint(sondeName: String) -> CLLocationCoordinate2D? {
-        return internalLandingPoints[sondeName]
+
+    func loadLandingHistory(sondeName: String) -> [LandingPredictionPoint]? {
+        internalLandingHistories[sondeName]
     }
-    
-    private func saveAllLandingPoints() {
-        let landingPointsData = internalLandingPoints.mapValues { coord in
-            ["latitude": coord.latitude, "longitude": coord.longitude]
+
+    func removeLandingHistory(for sondeName: String) {
+        internalLandingHistories.removeValue(forKey: sondeName)
+        saveAllLandingHistories()
+    }
+
+    func purgeAllLandingHistories() {
+        internalLandingHistories.removeAll()
+        userDefaults.removeObject(forKey: "LandingPointHistories")
+        removeFromDocumentsDirectory(filename: "LandingPointHistories.json")
+        appLog("PersistenceService: Purged all landing point histories", category: .service, level: .debug)
+    }
+
+    private func saveAllLandingHistories() {
+        let encoder = JSONEncoder()
+        guard let encoded = try? encoder.encode(internalLandingHistories) else { return }
+        userDefaults.set(encoded, forKey: "LandingPointHistories")
+        saveToDocumentsDirectory(data: encoded, filename: "LandingPointHistories.json")
+    }
+
+    private static func loadAllLandingHistories() -> [String: [LandingPredictionPoint]] {
+        let decoder = JSONDecoder()
+
+        if let data = loadFromDocumentsDirectory(filename: "LandingPointHistories.json"),
+           let histories = try? decoder.decode([String: [LandingPredictionPoint]].self, from: data) {
+            appLog("PersistenceService: Loaded landing histories from Documents directory", category: .service, level: .debug)
+            return histories
         }
-        userDefaults.set(landingPointsData, forKey: "LandingPoints")
-    }
-    
-    private static func loadAllLandingPoints() -> [String: CLLocationCoordinate2D] {
-        if let data = UserDefaults.standard.object(forKey: "LandingPoints") as? [String: [String: Double]] {
-            return data.compactMapValues { dict in
+
+        if let data = UserDefaults.standard.data(forKey: "LandingPointHistories"),
+           let histories = try? decoder.decode([String: [LandingPredictionPoint]].self, from: data) {
+            appLog("PersistenceService: Loaded landing histories from UserDefaults", category: .service, level: .debug)
+            return histories
+        }
+
+        // Legacy support for single landing point storage
+        if let legacy = UserDefaults.standard.object(forKey: "LandingPoints") as? [String: [String: Double]] {
+            let converted = legacy.compactMapValues { dict -> [LandingPredictionPoint]? in
                 guard let lat = dict["latitude"], let lon = dict["longitude"] else { return nil }
-                return CLLocationCoordinate2D(latitude: lat, longitude: lon)
+                let coordinate = CLLocationCoordinate2D(latitude: lat, longitude: lon)
+                let legacyPoint = LandingPredictionPoint(coordinate: coordinate, predictedAt: Date.distantPast, landingEta: nil, source: .sondehub)
+                return [legacyPoint]
             }
+            return converted
         }
+
         return [:]
     }
     
@@ -1612,6 +1746,18 @@ final class PersistenceService: ObservableObject {
         }
     }
     
+    private func removeFromDocumentsDirectory(filename: String) {
+        do {
+            let documentsURL = try FileManager.default.url(for: .documentDirectory, in: .userDomainMask, appropriateFor: nil, create: false)
+            let fileURL = documentsURL.appendingPathComponent(filename)
+            if FileManager.default.fileExists(atPath: fileURL.path) {
+                try FileManager.default.removeItem(at: fileURL)
+            }
+        } catch {
+            appLog("PersistenceService: Failed to remove \(filename) from Documents directory: \(error)", category: .service, level: .debug)
+        }
+    }
+
     private static func loadFromDocumentsDirectory(filename: String) -> Data? {
         do {
             let documentsURL = try FileManager.default.url(for: .documentDirectory, in: .userDomainMask, appropriateFor: nil, create: false)
@@ -1651,6 +1797,14 @@ enum PredictionError: Error, LocalizedError {
         case .decodingError(let description):
             return "JSON decoding failed: \(description)"
         }
+    }
+}
+
+extension CLLocationCoordinate2D {
+    func distance(from other: CLLocationCoordinate2D) -> CLLocationDistance {
+        let loc1 = CLLocation(latitude: latitude, longitude: longitude)
+        let loc2 = CLLocation(latitude: other.latitude, longitude: other.longitude)
+        return loc1.distance(from: loc2)
     }
 }
 

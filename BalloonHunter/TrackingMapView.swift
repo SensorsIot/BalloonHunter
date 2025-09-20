@@ -28,6 +28,8 @@ struct TrackingMapView: View {
     @EnvironmentObject var appServices: AppServices
     @EnvironmentObject var userSettings: UserSettings
     @EnvironmentObject var serviceCoordinator: ServiceCoordinator
+    @EnvironmentObject var balloonTrackService: BalloonTrackService
+    @EnvironmentObject var landingPointTrackingService: LandingPointTrackingService
 
     @State private var showSettings = false
     @State private var position: MapCameraPosition = .automatic
@@ -150,8 +152,11 @@ struct TrackingMapView: View {
                     Map(position: $position, interactionModes: serviceCoordinator.isHeadingMode ? .zoom : .all) {
                     
                     // 1. Balloon Track: Historic track as thin red line
-                    if let balloonTrackPath = serviceCoordinator.balloonTrackPath {
-                        MapPolyline(balloonTrackPath)
+                    let trackPoints = balloonTrackService.currentBalloonTrack
+                    if trackPoints.count >= 2 {
+                        let coordinates = trackPoints.map { CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude) }
+                        let trackPolyline = MKPolyline(coordinates: coordinates, count: coordinates.count)
+                        MapPolyline(trackPolyline)
                             .stroke(.red, lineWidth: 2)
                     }
                     
@@ -168,8 +173,28 @@ struct TrackingMapView: View {
                         MapPolyline(userRoute)
                             .stroke(.green, lineWidth: 3)
                     }
-                    
-                    // 4. User Position: Runner icon at user location (always shown in tracking view)
+
+                    // 4. Landing prediction history: Purple polyline connecting Sondehub landing estimates
+                    let landingHistory = landingPointTrackingService.landingHistory
+                    if landingHistory.count >= 2 {
+                        let landingCoordinates = landingHistory.map { $0.coordinate }
+                        let landingPolyline = MKPolyline(coordinates: landingCoordinates, count: landingCoordinates.count)
+                        MapPolyline(landingPolyline)
+                            .stroke(.purple, lineWidth: 2)
+                    }
+
+                    if !landingHistory.isEmpty {
+                        ForEach(Array(landingHistory.enumerated()), id: \.offset) { _, point in
+                            Annotation("", coordinate: point.coordinate) {
+                                Circle()
+                                    .fill(Color.purple)
+                                    .frame(width: 8, height: 8)
+                                    .overlay(Circle().stroke(Color.white.opacity(0.8), lineWidth: 1))
+                            }
+                        }
+                    }
+
+                    // 5. User Position: Runner icon at user location (always shown in tracking view)
                     if !serviceCoordinator.isHeadingMode,
                        let userLocation = serviceCoordinator.userLocation {
                         let userCoordinate = CLLocationCoordinate2D(
@@ -184,7 +209,7 @@ struct TrackingMapView: View {
                         }
                     }
                     
-                    // 5. Balloon Live Position: Color based on flight phase
+                    // 6. Balloon Live Position: Color based on flight phase
                     if let balloonTelemetry = serviceCoordinator.balloonTelemetry {
                         // Use smoothed display position when available (for landed balloons), otherwise use raw telemetry
                         let balloonCoordinate = serviceCoordinator.balloonDisplayPosition ?? CLLocationCoordinate2D(
@@ -212,7 +237,7 @@ struct TrackingMapView: View {
                         }
                     }
                     
-                    // 6. Burst Point: Only visible when balloon is ascending
+                    // 7. Burst Point: Only visible when balloon is ascending
                     if let burstPoint = serviceCoordinator.burstPoint,
                        serviceCoordinator.balloonTrackService.balloonPhase == .ascending {
                         Annotation("Burst", coordinate: burstPoint) {
@@ -222,7 +247,7 @@ struct TrackingMapView: View {
                         }
                     }
                     
-                    // 7. Landing Point: Always visible if available
+                    // 8. Landing Point: Always visible if available
                     if let landingPoint = serviceCoordinator.landingPoint {
                         Annotation("", coordinate: landingPoint) {
                             Image(systemName: "target")
@@ -369,11 +394,14 @@ struct TrackingMapView: View {
         predictionCache: mockAppServices.predictionCache,
         routingCache: mockAppServices.routingCache,
         balloonPositionService: mockAppServices.balloonPositionService,
-        balloonTrackService: mockAppServices.balloonTrackService
+        balloonTrackService: mockAppServices.balloonTrackService,
+        landingPointTrackingService: mockAppServices.landingPointTrackingService
     )
     
     TrackingMapView()
         .environmentObject(mockAppServices)
         .environmentObject(mockAppServices.userSettings)
         .environmentObject(mockServiceCoordinator)
+        .environmentObject(mockAppServices.balloonTrackService)
+        .environmentObject(mockAppServices.landingPointTrackingService)
 }

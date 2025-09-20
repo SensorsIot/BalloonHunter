@@ -104,7 +104,6 @@ final class ServiceCoordinator: ObservableObject {
     
     // Map visual elements
     @Published var annotations: [MapAnnotationItem] = []
-    @Published var balloonTrackPath: MKPolyline? = nil
     @Published var predictionPath: MKPolyline? = nil
     @Published var userRoute: MKPolyline? = nil
     @Published var region: MKCoordinateRegion? = nil
@@ -176,6 +175,7 @@ final class ServiceCoordinator: ObservableObject {
     // REQUIRED: Services that generate the events and manage data (injected from AppServices)
     let balloonPositionService: BalloonPositionService
     let balloonTrackService: BalloonTrackService
+    let landingPointTrackingService: LandingPointTrackingService
     lazy var routeCalculationService = RouteCalculationService(currentLocationService: self.currentLocationService)
     
         // REPLACE: With direct service communication
@@ -263,7 +263,8 @@ final class ServiceCoordinator: ObservableObject {
         predictionCache: PredictionCache,
         routingCache: RoutingCache,
         balloonPositionService: BalloonPositionService,
-        balloonTrackService: BalloonTrackService
+        balloonTrackService: BalloonTrackService,
+        landingPointTrackingService: LandingPointTrackingService
     ) {
         appLog("ServiceCoordinator: Initializing simplified architecture with injected services", category: .general, level: .info)
         
@@ -275,9 +276,21 @@ final class ServiceCoordinator: ObservableObject {
         self.routingCache = routingCache
         self.balloonPositionService = balloonPositionService
         self.balloonTrackService = balloonTrackService
-        
+        self.landingPointTrackingService = landingPointTrackingService
+
         setupDirectSubscriptions()
-        
+
+        landingPointTrackingService.$lastLandingPrediction
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] prediction in
+                guard let self = self, let prediction = prediction else { return }
+                if self.isBalloonLanded && prediction.source != .manual {
+                    return
+                }
+                self.landingPoint = prediction.coordinate
+            }
+            .store(in: &cancellables)
+
         appLog("ServiceCoordinator: Simplified architecture initialized", category: .general, level: .info)
     }
     
@@ -290,6 +303,7 @@ final class ServiceCoordinator: ObservableObject {
         // Initialize the services that create events and manage data
         _ = balloonPositionService
         _ = balloonTrackService
+        _ = landingPointTrackingService
         _ = routeCalculationService
 
         // Phase 3: Start 60-second coordinator timer for predictions
@@ -672,7 +686,8 @@ final class ServiceCoordinator: ObservableObject {
     
     func saveDataOnAppClose() {
         appLog("ServiceCoordinator: Saving data on app close", category: .general, level: .info)
-        persistenceService.saveOnAppClose(balloonTrackService: balloonTrackService)
+        persistenceService.saveOnAppClose(balloonTrackService: balloonTrackService,
+                                         landingPointTrackingService: landingPointTrackingService)
     }
     
     
@@ -921,20 +936,8 @@ final class ServiceCoordinator: ObservableObject {
             annotations.append(burstAnnotation)
         }
         
-        // Update balloon track using the track service
-        let trackPoints = balloonTrackService.getAllTrackPoints()
-        var balloonTrackPolyline: MKPolyline? = nil
-        if !trackPoints.isEmpty {
-            let coordinates = trackPoints.map { point in
-                CLLocationCoordinate2D(latitude: point.latitude, longitude: point.longitude)
-            }
-            balloonTrackPolyline = MKPolyline(coordinates: coordinates, count: coordinates.count)
-            balloonTrackPolyline?.title = "balloonTrack"
-        }
-        
         // Direct map state update (no versioning complexity)
         self.annotations = annotations
-        balloonTrackPath = balloonTrackPolyline
         balloonTelemetry = telemetry
         
         // Updated map annotations (log removed)
@@ -962,6 +965,14 @@ final class ServiceCoordinator: ObservableObject {
         // Update landing and burst points
         landingPoint = prediction.landingPoint
         burstPoint = prediction.burstPoint
+
+        if let landingCoordinate = prediction.landingPoint {
+            landingPointTrackingService.recordLandingPrediction(
+                coordinate: landingCoordinate,
+                predictedAt: Date(),
+                landingEta: prediction.landingTime
+            )
+        }
 
         // Check for navigation update after setting new landing point
         if let newLandingPoint = prediction.landingPoint {
@@ -1186,15 +1197,6 @@ final class ServiceCoordinator: ObservableObject {
         // 2. Historic track data - load and add to current track if sonde matches
         // Note: This will be handled by BalloonTrackService when first telemetry arrives
         
-        // 3. Landing point (if available) - load for current sonde if available
-        if let savedLandingPoint = persistenceService.loadLandingPoint(sondeName: "current") {
-            landingPoint = savedLandingPoint
-            appLog("ServiceCoordinator: Loaded saved landing point: \(savedLandingPoint)", category: .general, level: .debug)
-            
-            // Phase 2: Mirror in DomainModel
-            // Landing point already set in ServiceCoordinator state above
-        }
-        
         // 4. Clipboard parsing removed from startup - now handled in determineLandingPoint() per FSD priority
         // Priority 3 (clipboard) only runs if Priority 1 (telemetry) and Priority 2 (prediction) fail
         
@@ -1289,11 +1291,13 @@ final class ServiceCoordinator: ObservableObject {
         if let clipboardLanding = parseClipboardForLandingPoint() {
             landingPoint = clipboardLanding
             
-            // Persist the landing point
-            if let sondeName = balloonTrackService.currentBalloonName {
-                persistenceService.saveLandingPoint(sondeName: sondeName, coordinate: clipboardLanding)
-                appLog("ServiceCoordinator: Successfully set and persisted landing point from clipboard", category: .service, level: .info)
-            }
+            landingPointTrackingService.recordLandingPrediction(
+                coordinate: clipboardLanding,
+                predictedAt: Date(),
+                landingEta: nil,
+                source: .manual
+            )
+            appLog("ServiceCoordinator: Successfully set landing point from clipboard and recorded in history", category: .service, level: .info)
 
             // Set balloon as landed since we have a manual landing point from clipboard
             balloonTrackService.setBalloonAsLanded(at: clipboardLanding)
