@@ -596,23 +596,6 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
         switch messageType {
         case "0":
             // Device Basic Info and Status
-            let type0FieldLabels = [
-                "messageType",
-                "probeType",
-                "frequencyMHz",
-                "rssiDbm",
-                "batPercentage",
-                "batVoltageMillivolts",
-                "buzmute",
-                "softwareVersion",
-                "packetTerminator"
-            ]
-            let type0DebugLine = components.enumerated().map { index, value -> String in
-                let label = index < type0FieldLabels.count ? type0FieldLabels[index] : "field\(index)"
-                let displayValue = label == "rssiDbm" ? displayRssi(from: value) : value
-                return "\(label)=\(displayValue)"
-            }.joined(separator: " ")
-            appLog("🔍 BLE DBG (Type 0): \(type0DebugLine)", category: .ble, level: .debug)
             if let status = parseType0Message(components) {
                 // Show all available packet data for Type 0 messages
                 let packetInfo = components.enumerated().map { (index, value) in

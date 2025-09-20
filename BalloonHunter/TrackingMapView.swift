@@ -170,7 +170,8 @@ struct TrackingMapView: View {
                     }
                     
                     // 4. User Position: Runner icon at user location (always shown in tracking view)
-                    if let userLocation = serviceCoordinator.userLocation {
+                    if !serviceCoordinator.isHeadingMode,
+                       let userLocation = serviceCoordinator.userLocation {
                         let userCoordinate = CLLocationCoordinate2D(
                             latitude: userLocation.latitude,
                             longitude: userLocation.longitude

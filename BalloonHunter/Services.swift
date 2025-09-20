@@ -645,6 +645,9 @@ final class BalloonTrackService: ObservableObject {
     private let verticalSpeedBufferSize = 20
     private let horizontalSpeedBufferSize = 20
     private let landingPositionBufferSize = 100
+    private let landingConfidenceClearThreshold = 0.40
+    private let landingConfidenceClearSamplesRequired = 3
+    private var landingConfidenceFalsePositiveCount = 0
 
     // Adjusted descent rate smoothing buffer (FSD: 20 values)
     private var adjustedDescentHistory: [Double] = []
@@ -1000,15 +1003,14 @@ final class BalloonTrackService: ObservableObject {
         appLog(String(format: "🎯 LANDING: points=%d altSpread=%.1fm radius=%.1fm speed=%.1fkm/h confidence=%.1f%% → landed=%@",
                       window30.count, altSpread30, radius30, smoothedHorizontalSpeedKmh, landingConfidence * 100, isLandedNow ? "YES" : "NO"),
                category: .general, level: .info)
-        
-        // Update balloon flying/landed state
+
         let wasPreviouslyFlying = isBalloonFlying
-        isBalloonFlying = hasRecentTelemetry && !isLandedNow
-        
+
         if !isBalloonLanded && isLandedNow {
             // Balloon just landed
             isBalloonLanded = true
-            
+            landingConfidenceFalsePositiveCount = 0
+
             // Use smoothed (100) position for landing point
             if landingPositionBuffer.count >= 50 { // Use at least 50 points for reasonable smoothing
                 let avgLat = landingPositionBuffer.map { $0.latitude }.reduce(0, +) / Double(landingPositionBuffer.count)
@@ -1017,10 +1019,35 @@ final class BalloonTrackService: ObservableObject {
             } else {
                 landingPosition = currentPosition
             }
-            
+
             appLog("BalloonTrackService: Balloon LANDED — altSpread30=\(String(format: "%.2f", altSpread30))m, radius30=\(String(format: "%.1f", radius30))m", category: .service, level: .info)
-            
-        } else if wasPreviouslyFlying && isBalloonFlying {
+
+        } else if isBalloonLanded {
+            let belowSampleThreshold = window30.count < 3
+            if belowSampleThreshold || landingConfidence < landingConfidenceClearThreshold {
+                landingConfidenceFalsePositiveCount += 1
+            } else {
+                landingConfidenceFalsePositiveCount = 0
+            }
+
+            if landingConfidenceFalsePositiveCount >= landingConfidenceClearSamplesRequired {
+                isBalloonLanded = false
+                landingPosition = nil
+                landingConfidenceFalsePositiveCount = 0
+                appLog(
+                    "BalloonTrackService: Landing CLEARED — confidence=\(String(format: "%.1f", landingConfidence * 100))%%, points=\(window30.count)",
+                    category: .service,
+                    level: .info
+                )
+            }
+        } else {
+            landingConfidenceFalsePositiveCount = 0
+        }
+
+        // Update balloon flying state after landing evaluation
+        isBalloonFlying = hasRecentTelemetry && !isBalloonLanded
+
+        if wasPreviouslyFlying && isBalloonFlying {
             let instH = telemetryData.horizontalSpeed * 3.6
             let instV = telemetryData.verticalSpeed
             let avgV = smoothedVerticalSpeed
@@ -1034,16 +1061,6 @@ final class BalloonTrackService: ObservableObject {
                 category: .service,
                 level: .debug
             )
-        }
-
-        // Hysteresis to clear landed: if recent movement is clear in last 10s
-        if isBalloonLanded {
-            let altSpread10 = altSpread(window10)
-            let radius10 = p95Radius(window10)
-            if altSpread10 > 5.0 || radius10 > 20.0 || smoothedHorizontalSpeedKmh > 6.0 {
-                isBalloonLanded = false
-                appLog("BalloonTrackService: Landed CLEARED — altSpread10=\(String(format: "%.2f", altSpread10))m, radius10=\(String(format: "%.1f", radius10))m, hSpeed(avg)=\(String(format: "%.2f", smoothedHorizontalSpeedKmh)) km/h", category: .service, level: .info)
-            }
         }
         
         // Periodic debug metrics while not landed (compile-time gated)

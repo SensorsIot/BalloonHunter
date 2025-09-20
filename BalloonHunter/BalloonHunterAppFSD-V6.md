@@ -2,8 +2,6 @@
 
 
 
-KU7T2A-RJ4BUC-ZCFU8E-YNBSU8
-
 # Functional Specifications Document (FSD) for the Balloon Hunter App
 
 ## Intro
@@ -12,91 +10,88 @@ This document outlines requirements for an iOS application designed to assist a 
 
 The balloon carries a sonde that transmits its position signal. This signal is received by a device, called “MySondyGo”. This device transmits the received telemetry data via BLE to our app. So, sonde and balloon are used interchangeable.
 
-# Arcitecture
-
-## File Structure
-
-### BalloonHunterApp.swift:
-
-The main entry point of the application. It initializes and injects the core services          (AppServices, ServiceCoordinator) into the SwiftUI environment and manages the startup UI flow.
-
-###  AppServices.swift:
-
-A dependency injection container that creates and holds instances of the core services  like PersistenceService, BLECommunicationService, and currentLocationService.
-
-### ServiceCoordinator.swift:
-
-The central architectural component that coordinates all services, manages  
-         application state, and handles the main business logic that was originally intended for the Policy layer in the FSD.
-
-### CoordinatorServices.swift:
-
-An extension to ServiceCoordinator that specifically contains the detailed 8-step  
-         startup sequence logic, keeping the main ServiceCoordinator file cleaner.
-
-### Services.swift:
-
-A large file containing the implementation for many of the application's services and data models, including CurrentLocationService, BalloonPositionService, BalloonTrackService, PredictionService, RouteCalculationService, and PersistenceService.
-
-### BLEService.swift:
-
-Contains the BLECommunicationService, which is responsible for all Bluetooth Low Energy  communication, including device scanning, connection, and parsing incoming data packets from the MySondyGo device.
-
-### TrackingMapView.swift:
-
-The main view of the app. It renders the map, all overlays (balloon track, prediction, route), and the top row of control buttons.
-
-### DataPanelView.swift:
-
-A SwiftUI view that displays the two tables of telemetry and calculated data at the bottom of the main screen.
-
-### SettingsView.swift:
-
-Contains the UI for all settings, including the main "Sonde Settings" and the tabbed "Device Settings" sheet.
-
-### PredictionCache.swift:
-
-An actor that provides a thread-safe, in-memory cache for prediction data to avoid redundant API calls.
-
-### RoutingCache.swift:
-
-An actor that provides a thread-safe, in-memory cache for calculated routes to avoid redundant route calculations.
-
-## Architecture 
+## Arcitecture
 
 We want true separation of concerns with views handling only presentation logic and services managing all business  operations.
 
  The app shall use a centralized coordinator pattern. The ServiceCoordinator class is the heart of this architecture.
 
+### File Structure
+
+Do not open a new file without asking the user
+
+#### BalloonHunterApp.swift:
+
+The main entry point of the application. It initializes and injects the core services          (AppServices, ServiceCoordinator) into the SwiftUI environment and manages the startup UI flow.
+
+####  AppServices.swift:
+
+A dependency injection container that creates and holds instances of the core services  like PersistenceService, BLECommunicationService, and currentLocationService.
+
+#### ServiceCoordinator.swift:
+
+The central architectural component that coordinates all services, manages  
+         application state, and handles the main business logic that was originally intended for the Policy layer in the FSD.
+
+#### CoordinatorServices.swift:
+
+An extension to ServiceCoordinator that specifically contains the detailed 8-step  
+         startup sequence logic, keeping the main ServiceCoordinator file cleaner.
+
+#### Services.swift:
+
+A large file containing the implementation for many of the application's services and data models, including CurrentLocationService, BalloonPositionService, BalloonTrackService, PredictionService, RouteCalculationService, and PersistenceService.
+
+#### BLEService.swift:
+
+Contains the BLECommunicationService, which is responsible for all Bluetooth Low Energy  communication, including device scanning, connection, and parsing incoming data packets from the MySondyGo device.
+
+#### TrackingMapView.swift:
+
+The main view of the app. It renders the map, all overlays (balloon track, prediction, route), and the top row of control buttons.
+
+#### DataPanelView.swift:
+
+A SwiftUI view that displays the two tables of telemetry and calculated data at the bottom of the main screen.
+
+#### SettingsView.swift:
+
+Contains the UI for all settings, including the main "Sonde Settings" and the tabbed "Device Settings" sheet.
+
+#### PredictionCache.swift:
+
+An actor that provides a thread-safe, in-memory cache for prediction data to avoid redundant API calls.
+
+#### RoutingCache.swift:
+
+An actor that provides a thread-safe, in-memory cache for calculated routes to avoid redundant route calculations.
+
+
+
 
 ### Key components and roles:
 
-####    \`AppServices\` (Dependency Container):
+####    AppServices (Dependency Container):
 
 This class acts as a simple dependency injection (DI) container. It is  responsible for creating and owning the instances of the foundational services when the app starts.
 
-## Service Coordinator\` (The Central Hub):
+#### Service Coordinator (The Central Hub):
 
-This is the most critical component in the architecture. It serves two  
-      primary functions:  
-State Manager: It acts as the single source of truth for the application's state. It holds all the data needed for the UI in its @Published properties (e.g., balloonTelemetry, annotations, userRoute).  
-Orchestrator: It contains the business logic that subscribes to events from the various services and decides what to do. For example, it listens for new telemetry data and decides whether to trigger a new prediction or route calculation.
+This is the most critical component in the architecture. It serves two  primary functions:  
+**State Manager:** It acts as the single source of truth for the application's state. It holds all the data needed for the UI in its @Published properties (e.g., balloonTelemetry, annotations, userRoute).  
+**Orchestrator**: It contains the business logic that subscribes to events from the various services and decides what to do. For example, it listens for new telemetry data and decides whether to trigger a new prediction or route calculation.
 
 ####    Services (Data Producers and Workers):
 
 Each service has a distinct responsibility:
 
 * BLE CommunicationService: Manages all aspects of Bluetooth communication.  
-
 * CurrentLocationService: Provides the user's GPS location.  
-
 * BalloonTrackService: Manages the history of the balloon's flight path.  
-
 * PredictionService & RouteCalculationService: Perform on-demand calculations then called by the ServiceCoordinator.  
-
 * PersistenceService: Handles saving and loading data.
 
-  ####    Views (UI Layer):
+#### Views (UI Layer):
 
 The SwiftUI views (like TrackingMapView and DataPanelView) are the presentation layer. They are designed to be "dumb" consumers of data. They use @EnvironmentObject to observe the ServiceCoordinator and automatically update whenever its @Published properties change. User interactions (like button taps) are forwarded as simple method calls to the ServiceCoordinator.
 
@@ -112,35 +107,38 @@ The SwiftUI views (like TrackingMapView and DataPanelView) are the presentation 
 
 4. UI Update: Because the SwiftUI views are observing the ServiceCoordinator, they automatically re-render to display the new state.
 
-   2. ## Services
 
-      1. ### BLE Communication Service
+## Services
+
+### BLE Communication Service
 
 Purpose: Manages Bluetooth communication with MySondyGo devices
 
 ####   Input Triggers:
 
-  \- Bluetooth state changes (powered on/off)  
-  \- Device discovery events  
-  \- Incoming BLE data packets  
-  \- User commands (get parameters, set frequency, etc.)
+- Bluetooth state changes (powered on/off)  
+- Device discovery events  
+- Incoming BLE data packets  
+- User commands (get parameters, set frequency, etc.)
 
 ####   Data it Consumes:
 
-  \- Raw BLE message strings (Type 0,1,2,3 packets)  
-  \- User command requests  
-  \- Bluetooth peripheral data
+1. Raw BLE message strings (Type 0,1,2,3 packets)  
+
+2. User command requests  
+3. Bluetooth peripheral data
 
 ####   Data it Publishes:
 
-  \- @Published var telemetryAvailabilityState: Bool \- Whether telemetry is available  
-  \- @Published var latestTelemetry: TelemetryData? \- Latest parsed telemetry  
-  \- @Published var deviceSettings: DeviceSettings \- MySondyGo device configuration  
-  \- @Published var connectionStatus: ConnectionStatus \- .connected, .disconnected, .connecting  
-  \- @Published var lastMessageType: String? \- "0", "1", "2", "3"  
-  \- PassthroughSubject\<TelemetryData, Never\>() \- Real-time telemetry stream  
-  \- @Published var lastTelemetryUpdateTime: Date? \- Last update timestamp  
-  \- @Published var isReadyForCommands: Bool \- Can send commands to device
+-  @Published var telemetryAvailabilityState: Bool \- Whether telemetry is available  
+
+-  @Published var latestTelemetry: TelemetryData? \- Latest parsed telemetry  
+-  @Published var deviceSettings: DeviceSettings \- MySondyGo device configuration  
+-  @Published var connectionStatus: ConnectionStatus \- .connected, .disconnected, .connecting  
+-  @Published var lastMessageType: String? \- "0", "1", "2", "3"  
+-  PassthroughSubject\<TelemetryData, Never\>() \- Real-time telemetry stream  
+-  @Published var lastTelemetryUpdateTime: Date? \- Last update timestamp  
+-  @Published var isReadyForCommands: Bool \- Can send commands to device
 
 ####   Example Data:
 
@@ -155,18 +153,19 @@ Purpose: Manages Bluetooth communication with MySondyGo devices
       horizontalSpeed: 25.3, // km/h  
       signalStrength: \-90 // dBm
 
-1. Device Discovery and Connection  
-   * The service actively scans for nearby Bluetooth Low Energy (BLE) devices.  
-   * It will only attempt to connect to devices whose name includes “MySondyGo”.  
-   * At any time, the service will maintain a connection to at most one “MySondyGo” device. If a connection is lost, it will attempt to reconnect automatically.  
-   * UART\_SERVICE\_UUID \= "53797269-614D-6972-6B6F-44616C6D6F6E"  
-   * UART\_RX\_CHARACTERISTIC\_UUID \= "53797267-614D-6972-6B6F-44616C6D6F8E"  
-   * UART\_TX\_CHARACTERISTIC\_UUID \= "53797268-614D-6972-6B6F-44616C6D6F7E"
+#### Device Discovery and Connection  
+
+* The service actively scans for nearby Bluetooth Low Energy (BLE) devices.  
+* It will only attempt to connect to devices whose name includes “MySondyGo”.  
+* At any time, the service will maintain a connection to at most one “MySondyGo” device. If a connection is lost, it will attempt to reconnect automatically.  
+* UART\_SERVICE\_UUID \= "53797269-614D-6972-6B6F-44616C6D6F6E"  
+* UART\_RX\_CHARACTERISTIC\_UUID \= "53797267-614D-6972-6B6F-44616C6D6F8E"  
+* UART\_TX\_CHARACTERISTIC\_UUID \= "53797268-614D-6972-6B6F-44616C6D6F7E"
 
 2. Receiving Data from the Balloon  
 
-* When a connection to a device is established, the device begins transmitting data packets using the Serial BLE protocol as described in the Appendix.  
-* The service is responsible for receiving, buffering, and assembling these packets as they arrive.
+- When a connection to a device is established, the device begins transmitting data packets using the Serial BLE protocol as described in the Appendix.  
+- The service is responsible for receiving, buffering, and assembling these packets as they arrive.
 
 3. Packet Parsing and Data Extraction  
 
@@ -182,9 +181,10 @@ Purpose: Manages Bluetooth communication with MySondyGo devices
 
 * All parsing errors or malformed packets will be skipped to maintain stability, and attempts will be made to process subsequent packets.
 
-  2. ### Current Location Service
 
-  Purpose: Tracks iPhone's GPS location and heading
+### Current Location Service
+
+Purpose: Tracks iPhone's GPS location and heading
 
 ####   Input Triggers:
 
@@ -226,17 +226,18 @@ Two-Mode GPS Configuration
   \- distanceFilter \= 5.0 \- Only update on 5+ meter movement  
   \- No additional time filtering needed
 
-3. ### Persistence Service
+### Persistence Service
 
 Purpose: Saves/loads data to UserDefaults. During development, and because user defaults are cleared when a new version is compiled, persistence uses the file system for storage. Ihis part has ot be encapsulated that it can easily be changed after develoment
 
 ####   Input Triggers:
 
-  \- App startup (load data)  
-  \- App backgrounding (save data)  
-  \- Settings changes  
-  \- Track updates  
-  \- Device setting updates
+1. App startup (load data)  
+
+2. App backgrounding (save data)  
+3. Settings changes  
+4. Track updates  
+5. Device setting updates
 
 ####   Data it Consumes:
 
@@ -247,9 +248,10 @@ Purpose: Saves/loads data to UserDefaults. During development, and because user 
 
 ####   Data it Publishes:
 
-  \- @Published var userSettings: UserSettings \- Prediction parameters  
-  \- @Published var deviceSettings: DeviceSettings? \- MySondyGo config  
-  \- Persistence completion events
+1. @Published var userSettings: UserSettings \- Prediction parameters  
+
+2. @Published var deviceSettings: DeviceSettings? \- MySondyGo config  
+3. Persistence completion events
 
 ####   Example Data:
 
@@ -266,7 +268,7 @@ Purpose: Saves/loads data to UserDefaults. During development, and because user 
       spreadingFactor: 7  
   )
 
-The service handles these types of data:
+#### Types of data:
 
 * Forecast Settings: It stores specific forecast parameters— burstAltitude (the altitude where the balloon is expected to burst), ascentRate (the rate at which the balloon rises), and descentRate (the rate at which the sonde falls back to Earth). These settings are kept so users don't have to re-enter them each time they open the app. They are stored in a simple key-value store.  
 * Landing Point: Coordinates of the landing point are persisted together with the sonde name. It always persists if  the landing point is updated.  
@@ -274,28 +276,35 @@ The service handles these types of data:
 
 ### Balloon Track Service
 
-    Purpose: Maintains historical balloon flight path
+    Purpose: Maintain telemetry-derived flight history, smoothed motion metrics, landing state, and persistence for the active sonde.
 
 ####   Input Triggers:
 
-  \- New telemetry data arrival  
-  \- Sonde name changes (new balloon)  
-  \- App lifecycle events (save/load)
+- Telemetry samples emitted by `BalloonPositionService.$currentTelemetry`  
+- Sonde identity changes embedded in telemetry (switching between balloons)  
+- Manual commands (`clearCurrentTrack()`, `setBalloonAsLanded(...)`)  
+- 1 Hz staleness timer evaluating telemetry freshness
 
 ####   Data it Consumes:
 
-  \- TelemetryData for track points  
-  \- Persistence service for historical tracks
+1. `TelemetryData` stream (position, altitude, raw speeds, timestamps)  
+2. `PersistenceService` for loading/saving tracks per sonde  
+3. `BalloonPositionService` for current telemetry snapshots during smoothing/staleness checks
 
 ####   Data it Publishes:
 
-  \- @Published var currentBalloonTrack: \[BalloonTrackPoint\] \- Flight path history  
-  \- @Published var currentBalloonName: String? \- Active sonde identifier  
-  \- @Published var currentEffectiveDescentRate: Double? \- Calculated m/s  
-  \- PassthroughSubject\<Void, Never\>() \- Track update notifications  
-  \- @Published var isBalloonFlying: Bool \- Flight status  
-  \- @Published var isBalloonLanded: Bool \- Landing detection  
-  \- @Published var landingPosition: CLLocationCoordinate2D? \- Landing coordinates
+- `@Published var currentBalloonTrack: [BalloonTrackPoint]` — per-sample history with derived speeds  
+- `@Published var currentBalloonName: String?` — active sonde identifier  
+- `@Published var currentEffectiveDescentRate: Double?` — regression-based descent (m/s) from last 5 points  
+- `let trackUpdated = PassthroughSubject<Void, Never>()` — notifications for observers that the track changed  
+- `@Published var isBalloonFlying: Bool` — true when recent telemetry indicates flight  
+- `@Published var isBalloonLanded: Bool` — landing latch driven by statistical detector  
+- `@Published var landingPosition: CLLocationCoordinate2D?` — smoothed landing coordinate when available  
+- `@Published var balloonPhase: BalloonPhase` — `.unknown`, `.ascending`, `.descendingAbove10k`, `.descendingBelow10k`, `.landed`  
+- `@Published var smoothedHorizontalSpeed: Double` — Hampel-filtered + EMA result in m/s  
+- `@Published var smoothedVerticalSpeed: Double` — Hampel-filtered + EMA result in m/s  
+- `@Published var adjustedDescentRate: Double?` — 60 s robust median blended into 20-sample moving average  
+- `@Published var isTelemetryStale: Bool` — true if the latest telemetry is older than 3 s
 
 ####   Example Data:
 
@@ -303,55 +312,104 @@ The service handles these types of data:
       latitude: 46.9043,  
       longitude: 7.3100,  
       altitude: 1151.0, // meters  
-      verticalSpeed: 153.0, // m/s  
-      horizontalSpeed: 25.3, // km/h  
+      verticalSpeed: -3.2, // m/s (derived)  
+      horizontalSpeed: 7.1, // m/s (derived)  
       timestamp: Date()  
   )
 
-At startup, it shall read the persisted historic track data from persistence service (including sonde name) and store it in the current track
+####   Startup & Sonde Switching
 
- Telemetry data is cleaned and prepared for presentation and decision:
+- On initialization, logs readiness and waits for the first telemetry sample to determine the sonde.  
+- The first sample for a sonde attempts to load its persisted track via `PersistenceService.loadTrackForCurrentSonde`.  
+- When telemetry announces a different sonde than the current one, previous track data is purged before loading the new sonde’s history; counters reset to start a fresh track when needed.
 
-* Derived speeds: “Compute horizontal speed via Haversine/Δt and vertical speed via Δalt/Δt from track points; use these for all smoothing, detection, and descent calculations.”  
+####   Telemetry Processing Pipeline
 
-* Prefilter \+ smoothing: “Apply Hampel filter (window 10, k=3) per stream and deadbands (v\_h \< 0.2 m/s, |v\_v| \< 0.05 m/s), then EMA with τ=10s for both horizontal and vertical speeds. Publish smoothed values.”  
+- Each telemetry sample is converted into a `BalloonTrackPoint`, recomputing horizontal speed via great-circle distance/T∆ and vertical speed via altitude delta/T∆ to ensure consistent metrics.  
+- The new point is appended, `currentEffectiveDescentRate` is recomputed using linear regression over the last 5 points, and `trackUpdated` notifies observers.  
+- Robust speed smoothing mirrors the FSD spec: Hampel filter (window 10, k=3), deadbands (|vᵥ| < 0.05 m/s, vₕ < 0.2 m/s), followed by EMA with τ=10 s, producing the published smoothed speeds.  
+- `adjustedDescentRate` derives from the last 60 s of track samples (median interval rate) blended into a 20-sample rolling average.  
+- CSV diagnostics for every telemetry sample are forwarded to `DebugCSVLogger` for offline analysis.
 
-* Adjusted descent rate: “Per-update: 60 s robust estimate using the median of interval vertical speeds; maintain a 20-value moving average and publish adjustedDescentRate.”  
+####   Landing Detection & Phase Updates
 
-* Landed detection: *"GPS accuracy-aware statistical confidence-based detection with 75% confidence threshold requiring minimum 3 data points. Accounts for poor GPS altitude accuracy (±10-15m) with 12m tolerance vs 3-5m horizontal accuracy. Confidence weighting: 40% horizontal position, 20% altitude, 30% speed stability, 10% sample size. Uses average speeds instead of maximum for more stable detection. Hysteresis clearing thresholds: altitude spread (10s) > 5.0m, radius95 (10s) > 20.0m, or smoothed horizontal speed > 6.0 km/h."*  
+- Maintains sliding buffers (10/30 samples plus 100-position landing buffer) to evaluate stability.  
+- Calculates landing confidence by weighting altitude spread (20%), horizontal radius (40%), speed stability (30%), and sample count (10%); 75% confidence or higher latches `isBalloonLanded = true`.  
+- When latched, landing position is the averaged coordinate from the buffered samples (requires ≥50 points, otherwise last position).  
+- Hysteresis reuses the confidence score: if a latched landing later reports <40% confidence (or the sample window drops below 3 points) for 3 consecutive updates, the service treats it as a false positive, clears `isBalloonLanded`, wipes the provisional landing position, and resumes flight mode.  
+- `isBalloonFlying` is true whenever telemetry is recent and landing has not latched; `balloonPhase` is set to ascending/descending/landed based on smoothed vertical speed and altitude thresholds.  
+- Manual override `setBalloonAsLanded` can force the landed state at an arbitrary coordinate for clipboard-driven workflows.
 
-* Persistence: “Append new track points, fire updates, and persist every 10 samples.”
+####   Persistence & Staleness Handling
 
-  \- Under ServiceCoordinator:  
-      \- “Consumes BalloonTrackService’s adjustedDescentRate, smoothed speeds, and isBalloonLanded; decides when to trigger predictions and to recalc  
-  routes; no motion calculations here.”
+- Tracks are persisted via `PersistenceService.saveBalloonTrack` every 10 telemetry points while a sonde name is known.  
+- `clearCurrentTrack()` removes in-memory history and notifies observers without touching persistence.  
+- A repeating 1 s timer calls `checkTelemetryStaleness()`; if the latest telemetry timestamp is >3 s old, `isTelemetryStale` flips to true.  
+- Timer is invalidated on deinit to prevent leaks.
 
-When the balloon position changes, the current track shall be extended with a new position. As soon as a new sonde Name is received, the entire current track and all persisted data are deleted, and a new track starts.
+GPS accuracy-aware statistical confidence-based landing detection: The system accounts for real-world GPS limitations where altitude accuracy (±10-15m) is 2-3x worse than horizontal accuracy (±3-5m). The weighted confidence calculation combines:
 
-Before the app closes, or every 10 new telemetry points, the current track data shall be persisted (including the current sonde name).
+* Altitude stability (20% weight) - Standard deviation with 12m tolerance for GPS altitude noise
+* Position stability (40% weight) - Maximum drift distance, prioritized due to superior horizontal GPS accuracy
+* Speed stability (30% weight) - Average (not maximum) speeds for more stable detection*
+* Sample size confidence (10% weight) - More data points increase confidence*
 
-This service provides a “balloon flying” and a “balloon landed” signal (or a flight status signal) to other applications.
+Landing decision requires 75% confidence threshold and minimum 3 data points, enabling immediate detection when persistent track data is available while maintaining accuracy through proper statistical analysis that accounts for GPS technology limitations.
 
-*GPS accuracy-aware statistical confidence-based landing detection has replaced the simple fixed-threshold approach. The system accounts for real-world GPS limitations where altitude accuracy (±10-15m) is 2-3x worse than horizontal accuracy (±3-5m). The weighted confidence calculation combines:*
-*- Altitude stability (20% weight) - Standard deviation with 12m tolerance for GPS altitude noise*
-*- Position stability (40% weight) - Maximum drift distance, prioritized due to superior horizontal GPS accuracy*
-*- Speed stability (30% weight) - Average (not maximum) speeds for more stable detection*
-*- Sample size confidence (10% weight) - More data points increase confidence*
+False-positive guard: once the landing latch is set, the same confidence score must remain ≥40% (with ≥3 samples). Dropping below that floor for three consecutive updates automatically clears the landed state and resets the provisional landing position.
 
-*Landing decision requires 75% confidence threshold (reduced from 80% for better responsiveness) and minimum 3 data points, enabling immediate detection when persistent track data is available while maintaining accuracy through proper statistical analysis that accounts for GPS technology limitations.*
+#### Landing Point Tracking Service
+
+Purpose: Maintain a per-sonde history of predicted landing coordinates, persist the data alongside other telemetry artifacts, and present the path on the tracking map as a purple overlay.
+
+##### Input Triggers:
+
+- New Sondehub prediction results containing a landing position  
+- Sonde name changes reported by telemetry (reset state)  
+- App lifecycle events that trigger persistence (background, termination)
+
+##### Data it Consumes:
+
+- `PredictionService.latestPrediction` for landing coordinate/ETA metadata  
+- `PersistenceService` for loading/saving histories keyed by sonde name  
+- `BalloonTrackService.currentBalloonName` to scope histories to the active balloon
+
+##### Data it Publishes:
+
+- `@Published var landingHistory: [LandingPredictionPoint]` — ordered landing predictions for the active sonde  
+- `@Published var landingHistoryPolyline: MKPolyline?` — cached purple polyline connecting stored landing points  
+- `@Published var lastLandingPrediction: LandingPredictionPoint?` — latest entry for panels and tooltips  
+- `let landingHistoryUpdated = PassthroughSubject<Void, Never>()` — notifications for map overlay refreshes
+
+##### Example Data:
+
+  LandingPredictionPoint(  
+      coordinate: CLLocationCoordinate2D(latitude: 46.91234, longitude: 7.31567),  
+      predictedAt: Date(),  
+      landingEta: Date().addingTimeInterval(3600),  
+      source: .sondehub  
+  )
+
+##### Behavior & Map Integration
+
+- Append new landing points when predictions arrive; deduplicate points closer than 25 m to reduce jitter before rebuilding the polyline.  
+- Persist the history every 5 additions and during lifecycle saves using the current sonde name as the key.  
+- Clear in-memory and persisted history when the sonde name changes so each balloon starts fresh.  
+- Tracking map draws the polyline in purple (`Color.purple`) and may annotate the newest landing point for quick reference.  
+- ServiceCoordinator listens to `landingHistoryUpdated` to synchronize overlays with prediction events.
 
 Adjusted descend rate: This value is calculated every time a new telemetry arrives.
 
-Descent Rate Calculation:  
+#### Descent Rate Calculation:  
+
   \- Takes current telemetry (altitude \+ timestamp) as "now"  
   \- Finds reference point from \~60 seconds ago in track history  
   \- Calculates: descent\_rate \= (current\_altitude \- historical\_altitude) / actual\_time\_difference  
-    
   Then 20-Value Smoothing:  
   \- Each of these precisely-calculated descent rates goes into a buffer  
   \- Average the last 20 such calculations for the final adjusted descent rate. If less than 20 values are available, it uses the available number.
 
-4. ### Prediction Service
+### Prediction Service
 
 Purpose: Single service handling both Sondehub API calls AND automatic prediction scheduling
 
@@ -370,7 +428,7 @@ Purpose: Single service handling both Sondehub API calls AND automatic predictio
   \- Cache keys for deduplication  
   \- ServiceCoordinator state for smoothed descent rates
 
-####   Data it Publishes:
+#####   Data it Publishes:
 
   \- @Published var isRunning: Bool \- Automatic prediction status  
   \- @Published var hasValidPrediction: Bool \- Prediction available  
@@ -392,7 +450,7 @@ The API call has to be non-blocking with a timeout and provide a flag for a vali
 
 It parses the JSON file and extracts the path, the burst point, and the landing point and time.
 
-1. #### Key parameters for the prediction API call:
+##### Key parameters for the prediction API call:
 
 The api expects a date-time in the future, the burst altitude,  and the current altitude (launch altitude).
 
@@ -404,9 +462,10 @@ The api expects a date-time in the future, the burst altitude,  and the current 
 
 * Time: the actual time+1 minute
 
-  ### Route Calculation Service
 
-  Purpose: Calculates driving/cycling routes to landing point
+### Route Calculation Service
+
+Purpose: Calculates driving/cycling routes to landing point
 
 ####   Input Triggers:
 
@@ -443,10 +502,6 @@ A Transport Mode selector (car or bicycle) decides how to plan the route. If a n
 
 Use request.transportType \= .cycling for the transport mode “ bicycle”. Reduce the calculated travel time by 30% for the bicycle.
 
-Publishes 
-
-#### 
-
 #### Read landing point from clipboard
 
 If the user is too far from the balloon, the landing point information comes from [Radiosondy.info](http://Radiosondy.info). The user copies an openstreetmap link into the clipboard. The app can read it from there with a button press. A new landing position can be parsed from a URL in the clipboard.
@@ -457,7 +512,7 @@ This landing point is (lat: [47.4987, lon: 7.667](https://www.openstreetmap.org/
 
 ###  Service Coordinator
 
-  Purpose: Central coordinator orchestrating all services
+Purpose: Central coordinator orchestrating all services
 
 ####   Input Triggers:
 
@@ -488,8 +543,6 @@ This landing point is (lat: [47.4987, lon: 7.667](https://www.openstreetmap.org/
   // Smoothed descent rate (20-value average)  
   smoothedDescentRate: \-12.3 // m/s (negative \= descending)
 
-## 
-
 ## Startup
 
 1. Service Initialization: Services are initialized and logo page presentation (logo has to be presented as early as possible).   
@@ -517,11 +570,11 @@ If no landing point is available: The map  shows the user's position (from locat
 
 9: End of Setup:
 
-# Tracking View
+## Tracking View
 
 No calculations or business logic in views. Search for an appropriate service to place and publish them.
 
-1. ### Buttons Row
+### Buttons Row
 
 A row for Buttons is placed above the map. It is fixed and covers the entire width of the screen. It contains (in the sequence of appearance):
 
@@ -542,11 +595,12 @@ A row for Buttons is placed above the map. It is fixed and covers the entire wid
 
 * Buzzer mute: Buzzer mute: On a button press, the buzzer shall be muted or unmuted by the mute BLE command (o{mute=setMute}o). The buzzer button shall indicate the current mute state.
 
-  2. #### Map
+
+### Map
 
 The map starts below the button row, and occupying approximately 70% of the vertical space.
 
-4. ## Map Overlays
+### Map Overlays
 
 No calculations or business logic in views. Search for an appropriate service to place and publish them.
 
@@ -567,7 +621,7 @@ A new route calculation and presentation is triggered:
 
 It is not shown if the distance between the balloon and the iPhone is less than 100m.
 
-1. #### Data Panel
+### Data Panel
 
 No calculations or business logic in views. Search for an appropriate service to place and publish them.
 
@@ -618,13 +672,13 @@ Text in Columns: left aligned
 
 Temporarily add a row below in table 2 and include the calculated descent rate
 
-2. # Settings
+## Settings
 
-   1. ## Settings Views
+### Settings Views
 
 No calculations or business logic in views. Search for an appropriate service to place and publish them.
 
-1. ### Sonde Settings Window (SondeSettings)
+### Sonde Settings Window
 
 In long range state, triggered by a swipe-up in the data panel. In final approach state, triggered by a swipe-up in the map.. 
 
@@ -646,7 +700,7 @@ It should expose a button to call the “tune” function and a button to select
 
 The human readable text (e.g. RS41) should be used in the display. However, the single number (e.g. 1\) has to be transferred in the command
 
-2. ### Device Settings (DeviceSettings)
+### Device Settings
 
 Triggered by a button in the button row.
 
@@ -668,11 +722,12 @@ We use a key-value store. The process shall be as follows:
 
 * When a settings view is left, a BLE command with the changed parameters is then sent to the MySondyGo device to update it.
 
-  3. ### Tab Structure & Contents in Settings
+
+### Tab Structure & Contents in Settings
 
 Each tab contains logically grouped settings:
 
-1. #### Pins Tab
+#### Pins Tab
 
 * oled\_sda (oledSDA)  
 
@@ -686,7 +741,8 @@ Each tab contains logically grouped settings:
 
 * lcd (lcdType)
 
-  2. #### Battery Tab
+
+#### Battery Tab
 
 * battery (batPin)  
 
@@ -700,7 +756,8 @@ Each tab contains logically grouped settings:
     1: Sigmoidal  
     2: Asigmoidal
 
-    3. #### Radio Tab
+
+#### Radio Tab
 
 * myCall (callSign)  
 
@@ -726,7 +783,8 @@ Each tab contains logically grouped settings:
 
 * aprsName (aprsName / nameType)
 
-  5. #### Prediction Tab
+
+#### Prediction Tab
 
 (These values are stored permanently on the iPhone via PersistenceService and are never transmitted to the device)
 
@@ -736,11 +794,12 @@ Each tab contains logically grouped settings:
 
 * descentRate
 
-  4. ### Tune Function
+
+### Tune Function
 
 The "TUNE" function in MySondyGo is a calibration process designed to compensate for frequency shifts of the receiver. These shifts can be several kilohertz (KHz) and impact reception quality. The tune view shows a smoothened (20)  AFC value (freqofs). If we press the “Transfer” button (which is located right to the live updated field), the actual average value is copied to the input field. A “Save” button placed right to the input field stores the actual value of the input field is stored using the setFreqCorrection command. The view stays open to check the effect.
 
-3. # Debugging
+## Debugging
 
 Debugging should be according the services. It should contain
 
@@ -748,183 +807,72 @@ Debugging should be according the services. It should contain
 * What was executed (one line)   
 * What was delivered (one line per structure)
 
-4. # Appendix: 
+# Appendix: 
 
-   1. ## Messages from RadioSondyGo
+## Messages from RadioSondyGo
 
-      1. ### Type 0 (No probe received)
+### Type 0 (No probe received)
 
 * Format: 0/probeType/frequency/RSSI/batPercentage/batVoltage/buzmute/softwareVersion/o  
-
 * Example: 0/RS41/403.500/117.5/100/4274/0/3.10/o  
-
 * Field Count: 7 fields  
 
-* Values:  
-
-  * probeType: e.g., RS41  
-
-  * frequency: e.g., 403.500 (MHz)  
-
-  * RSSI: e.g., \-90 (dBm)  
-
-  * batPercentage: e.g., 100 (%)  
-
-  * batVoltage: e.g., 4000 (mV)  
-
-  * buzmute: e.g., 0 (0 \= off, 1 \= on)  
-
-  * softwareVersion: e.g., 3.10
-
-    2. ### Type 1 (Probe telemetry)
-
-* Format: 1/probeType/frequency/sondeName/latitude/longitude/altitude/HorizontalSpeed/verticalSpeed/RSSI/batPercentage/afcFrequency/burstKillerEnabled/burstKillerTime/batVoltage/buzmute/reserved1/reserved2/reserved3/softwareVersion/o  
-
-* Example: 1/RS41/403.500/V4210150/47.38/8.54/500/10/2/117.5/100/0/0/0/4274/0/0/0/0/3.10/o (Example values for dynamic fields added for clarity)  
-
-* Field Count: 20 fields  
-
-* Variable names:  
-
-  * probeType: e.g., RS41  
-
-  * frequency: e.g., 403.500 (MHz)  
-
-  * sondeName: e.g., V4210150  
-
-  * latitude: (dynamic) e.g., 47.38 (degrees)  
-
-  * longitude: (dynamic) e.g., 8.54 (degrees)  
-
-  * altitude: (dynamic) e.g., 500 (meters)  
-
-  * horizontalSpeed: (dynamic) e.g., 10 (m/s)  
-
-  * verticalSpeed: (dynamic) e.g., 2 (m/s)  
-
-  * RSSI: e.g., \-90 (dBm)  
-
-  * batPercentage: e.g., 100 (%)  
-
-  * afcFrequency: e.g., 0  
-
-  * burstKillerEnabled: e.g., 0 (0 \= disabled, 1 \= enabled)  
-
-  * burstKillerTime: e.g., 0 (seconds)  
-
-  * batVoltage: e.g., 4000 (mV)  
-
-  * buzmute: e.g., 0 (0 \= off, 1 \= on)  
-
-  * reserved1: e.g., 0  
-
-  * reserved2: e.g., 0  
-
-  * reserved3: e.g., 0  
-
-  * softwareVersion: e.g., 3.10
-
-    3. ### Type 2 (Name only, coordinates are not available)
-
-* Corrected Format: 2/probeType/frequency/sondeName/RSSI/batPercentage/afcFrequency/batVoltage/buzmute/softwareVersion/o  
-
-* Example: 2/RS41/403.500/V4210150/117.5/100/0/4274/0/3.10/o  
-
-* Field Count: 10 fields  
-
-* Variable names:  
-
-  * probeType: e.g., RS41  
-
-  * frequency: e.g., 403.500 (MHz)  
-
-  * sondeName: e.g., V4210150  
-
-  * RSSI: e.g., \-90 (dBm)  
-
-  * batPercentage: e.g., 100 (%)  
-
-  * afcFrequency: e.g., 0  
-
-  * batVoltage: e.g., 4000 (mV)  
-
-  * buzmute: e.g., 0 (0 \= off, 1 \= on)  
-
-  * softwareVersion: e.g., 3.10
-
-    4. ### Type 3 (Configuration)
-
-* Format: 3/probeType/frequency/oledSDA/oledSCL/oledRST/ledPin/RS41Bandwidth/M20Bandwidth/M10Bandwidth/PILOTBandwidth/DFMBandwidth/callSign/frequencyCorrection/batPin/batMin/batMax/batType/lcdType/nameType/buzPin/softwareVersion/o  
-
-* Example: 3/RS41/404.600/21/22/16/25/1/7/7/7/6/MYCALL/0/35/2950/4180/1/0/0/0/3.10/o  
-
-* Field Count: 21 fields  
-
-* Variable names:  
-
-  * probeType: e.g., RS41  
-
-  * frequency: e.g., 404.600 (MHz)  
-
-  * oledSDA: e.g., 21 (GPIO pin number)  
-
-  * oledSCL: e.g., 22 (GPIO pin number)  
-
-  * oledRST: e.g., 16 (GPIO pin number)  
-
-  * ledPin: e.g., 25 (GPIO pin number)  
-
-  * RS41Bandwidth: e.g., 1 (kHz)  
-
-  * M20Bandwidth: e.g., 7 (kHz)  
-
-  * M10Bandwidth: e.g., 7 (kHz)  
-
-  * PILOTBandwidth: e.g., 7 (kHz)  
-
-  * DFMBandwidth: e.g., 6 (kHz)  
-
-  * callSign: e.g., MYCALL  
-
-  * frequencyCorrection: e.g., 0 (Hz)  
-
-  * batPin: e.g., 35 (GPIO pin number)  
-
-  * batMin: e.g., 2950 (mV)  
-
-  * batMax: e.g., 4180 (mV)  
-
-  * batType: e.g., 1 (0:Linear, 1:Sigmoidal, 2:Asigmoidal)  
-
-  * lcdType: e.g., 0 (0:SSD1306\_128X64, 1:SH1106\_128X64)  
-
-  * nameType: e.g., 0  
-
-  * buzPin: e.g., 0 (GPIO pin number)  
-
-  * softwareVersion: e.g., 3.10
-
-    5. ### Data Types for messages
-
-       1. #### Type 0 message: Device Basic Info and Status
+#### Field types
 
 * 0: packet type (String) \- "0"  
-
 * 1: probeType (String)  
-
 * 2: frequency (Double)  
-
 * 3: RSSI (Double)  
-
 * 4: batPercentage (Int)  
-
 * 5: batVoltage (Int)  
-
 * 6: buzmute (Bool, 0 \= off, 1 \= on)  
-
 * 7: softwareVersion (String)
 
-  2. #### Type 1 message: Probe Telemetry
+#### Values:  
+
+* probeType: e.g., RS41  
+
+* frequency: e.g., 403.500 (MHz)  
+
+* RSSI: e.g., \-90 (dBm)  
+
+* batPercentage: e.g., 100 (%)  
+
+* batVoltage: e.g., 4000 (mV)  
+
+* buzmute: e.g., 0 (0 \= off, 1 \= on)  
+
+* softwareVersion: e.g., 3.10
+
+
+### Type 1 (Probe telemetry)
+
+* Format: 1/probeType/frequency/sondeName/latitude/longitude/altitude/HorizontalSpeed/verticalSpeed/RSSI/batPercentage/afcFrequency/burstKillerEnabled/burstKillerTime/batVoltage/buzmute/reserved1/reserved2/reserved3/softwareVersion/o  
+* Example: 1/RS41/403.500/V4210150/47.38/8.54/500/10/2/117.5/100/0/0/0/4274/0/0/0/0/3.10/o (Example values for dynamic fields added for clarity)  
+* Field Count: 20 fields  
+* Variable names:  
+
+  * probeType: e.g., RS41  
+  * frequency: e.g., 403.500 (MHz)  
+  * sondeName: e.g., V4210150  
+  * latitude: (dynamic) e.g., 47.38 (degrees)  
+  * longitude: (dynamic) e.g., 8.54 (degrees)  
+  * altitude: (dynamic) e.g., 500 (meters)  
+  * horizontalSpeed: (dynamic) e.g., 10 (m/s)  
+  * verticalSpeed: (dynamic) e.g., 2 (m/s)  
+  * RSSI: e.g., \-90 (dBm)  
+  * batPercentage: e.g., 100 (%)  
+  * afcFrequency: e.g., 0  
+  * burstKillerEnabled: e.g., 0 (0 \= disabled, 1 \= enabled)  
+  * burstKillerTime: e.g., 0 (seconds)  
+  * batVoltage: e.g., 4000 (mV)  
+  * buzmute: e.g., 0 (0 \= off, 1 \= on)  
+  * reserved1: e.g., 0  
+  * reserved2: e.g., 0  
+  * reserved3: e.g., 0  
+  * softwareVersion: e.g., 3.10
+
+#### Field Types
 
 * 0: packet type (Int) \- "1"  
 
@@ -966,7 +914,25 @@ Debugging should be according the services. It should contain
 
 * 19: softwareVersion (String)
 
-  3. #### Type 2 message: Name Only
+### Type 2 (Name only, coordinates are not available)
+
+* Corrected Format: 2/probeType/frequency/sondeName/RSSI/batPercentage/afcFrequency/batVoltage/buzmute/softwareVersion/o  
+* Example: 2/RS41/403.500/V4210150/117.5/100/0/4274/0/3.10/o  
+* Field Count: 10 fields  
+
+#### Variable names:  
+
+* probeType: e.g., RS41  
+* frequency: e.g., 403.500 (MHz)  
+* sondeName: e.g., V4210150  
+* RSSI: e.g., \-90 (dBm)  
+* batPercentage: e.g., 100 (%)  
+* afcFrequency: e.g., 0  
+* batVoltage: e.g., 4000 (mV)  
+* buzmute: e.g., 0 (0 \= off, 1 \= on)  
+* softwareVersion: e.g., 3.10
+
+#### Field Types
 
 * 0: packet type (Int) \- "2"  
 
@@ -988,7 +954,58 @@ Debugging should be according the services. It should contain
 
 * 9: softwareVersion (String)
 
-  4. #### Type 3 message: Configuration
+### Type 3 (Configuration)
+
+* Format: 3/probeType/frequency/oledSDA/oledSCL/oledRST/ledPin/RS41Bandwidth/M20Bandwidth/M10Bandwidth/PILOTBandwidth/DFMBandwidth/callSign/frequencyCorrection/batPin/batMin/batMax/batType/lcdType/nameType/buzPin/softwareVersion/o  
+* Example: 3/RS41/404.600/21/22/16/25/1/7/7/7/6/MYCALL/0/35/2950/4180/1/0/0/0/3.10/o  
+* Field Count: 21 fields  
+
+#### Variable names:  
+
+* probeType: e.g., RS41  
+
+* frequency: e.g., 404.600 (MHz)  
+
+* oledSDA: e.g., 21 (GPIO pin number)  
+
+* oledSCL: e.g., 22 (GPIO pin number)  
+
+* oledRST: e.g., 16 (GPIO pin number)  
+
+* ledPin: e.g., 25 (GPIO pin number)  
+
+* RS41Bandwidth: e.g., 1 (kHz)  
+
+* M20Bandwidth: e.g., 7 (kHz)  
+
+* M10Bandwidth: e.g., 7 (kHz)  
+
+* PILOTBandwidth: e.g., 7 (kHz)  
+
+* DFMBandwidth: e.g., 6 (kHz)  
+
+* callSign: e.g., MYCALL  
+
+* frequencyCorrection: e.g., 0 (Hz)  
+
+* batPin: e.g., 35 (GPIO pin number)  
+
+* batMin: e.g., 2950 (mV)  
+
+* batMax: e.g., 4180 (mV)  
+
+* batType: e.g., 1 (0:Linear, 1:Sigmoidal, 2:Asigmoidal)  
+
+* lcdType: e.g., 0 (0:SSD1306\_128X64, 1:SH1106\_128X64)  
+
+* nameType: e.g., 0  
+
+* buzPin: e.g., 0 (GPIO pin number)  
+
+* softwareVersion: e.g., 3.10
+
+
+#### Field Types
 
 * 0: packet type (Int) \- "3"  
 
@@ -1034,11 +1051,13 @@ Debugging should be according the services. It should contain
 
 * 21: softwareVersion (String)
 
-  2. ## RadioSondyGo Commands
+  
+
+## RadioSondyGo Commands
 
 All commands sent to the RadioSondyGo device must be enclosed within o{...}o delimiters. You can send multiple settings in one command string, separated by /, or send them individually.
 
-1. ### Settings Command
+### Settings Command
 
 This command is used to configure various aspects of the RadioSondyGo device. All settings are stored for future use.
 
@@ -1075,7 +1094,7 @@ Available Settings:
 | vBatMax       | Sets the battery full value (in mV).                         | 4180          | No              |
 | vBatType      | Sets the battery discharge type: 0 for Linear, 1 for Sigmoidal, 2 for Asigmoidal. | 1             | No              |
 
-2. ### Frequency Command (sent separately)
+### Frequency Command (sent separately)
 
 This command sets the receiving frequency and the type of radiosonde probe to listen for.
 
@@ -1094,7 +1113,8 @@ Available Sonde Types (enum):
 
 * 5: DFM
 
-  3. ### Mute Command
+
+### Mute Command
 
 This command controls the device's buzzer.
 
@@ -1106,13 +1126,15 @@ This command controls the device's buzzer.
 
 * Example: o{mute=0}o (Turns the buzzer off)
 
-  4. ### Request Status Command
+
+### Request Status Command
 
 This command requests the current status and configuration of the RadioSondyGo device.
 
 * Syntax: o{?}o
 
-  3. ## Bandwidth Table (enum):
+
+### Bandwidth Table (enum):
 
 | Value | Bandwidth (kHz) |
 | :---- | :-------------- |
@@ -1137,13 +1159,13 @@ This command requests the current status and configuration of the RadioSondyGo d
 | 18    | 166.7           |
 | 19    | 200.0           |
 
-  4. ## Sample Response of the Sondehub API
+## Sample Response of the Sondehub API
 
 {"metadata":{"complete\_datetime":"2025-08-26T22:03:03.430276Z","start\_datetime":"2025-08-26T22:03:03.307369Z"},"prediction":\[{"stage":"ascent","trajectory":\[{"altitude":847.0,"datetime":"2025-08-26T19:17:53Z","latitude":46.9046,"longitude":7.3112},{"altitude":1147.0,"datetime":"2025-08-26T19:18:53Z","latitude":46.90578839571984,"longitude":7.31464191069996},{"altitude":1447.0,"datetime":"2025-08-26T19:19:53Z","latitude":46.90738178436716,"longitude":7.31981095948984}{"altitude":10788.959899190435,"datetime":"2025-08-26T21:31:43.15625Z","latitude":47.02026733468673,"longitude":8.263008170483552},{"altitude":10256.937248646722,"datetime":"2025-08-26T21:32:43.15625Z","latitude":47.021786505448404,"longitude":8.28923951226291},{"altitude":9741.995036947832,"datetime":"2025-08-26T21:33:43.15625Z","latitude":47.02396145555836,"longitude":8.307239397517654},{"altitude":9242.839596842607,"datetime":"2025-08-26T21:34:43.15625Z","latitude":47.02613722448047,"longitude":8.322760393386368},{"altitude":8758.326844518546,"datetime":"2025-08-26T21:35:43.15625Z","latitude":47.028111647104396,"longitude":8.337707401779058},{"altitude":8287.43950854397,"datetime":"2025-08-26T21:36:43.15625Z","latitude":47.02974696093491,"longitude":8.352131412681159},{"altitude":7829.268592765354,"datetime":"2025-08-26T21:37:43.15625Z","latitude":47.0311409286152,"longitude":8.366009058541602},{"altitude":7382.998154071957,"datetime":"2025-08-26T21:38:43.15625Z","latitude":47.03235907618386,"longitude":8.379331881008719},{"altitude":6947.892701971685,"datetime":"2025-08-26T21:39:43.15625Z","latitude":47.03359996475082,"longitude":8.392157697045668},{"altitude":6523.28669130534,"datetime":"2025-08-26T21:40:43.15625Z","latitude":47.03520896935295,"longitude":8.404651470370947},{"altitude":6108.575700515145,"datetime":"2025-08-26T21:41:43.15625Z","latitude":47.037258694172024,"longitude":8.41695136310459},{"altitude":5703.208978139213,"datetime":"2025-08-26T21:42:43.15625Z","latitude":47.03928925553843,"longitude":8.428578406952507},{"altitude":5306.683108216105,"datetime":"2025-08-26T21:43:43.15625Z","latitude":47.04106403634041,"longitude":8.438958391369948},{"altitude":4918.53659705615,"datetime":"2025-08-26T21:44:43.15625Z","latitude":47.042834816940626,"longitude":8.447836532591719},{"altitude":4538.345223619866,"datetime":"2025-08-26T21:45:43.15625Z","latitude":47.04492666691228,"longitude":8.45520179874688},{"altitude":4165.7180265847755,"datetime":"2025-08-26T21:46:43.15625Z","latitude":47.04787297223529,"longitude":8.461030067123232},{"altitude":3800.2938252874983,"datetime":"2025-08-26T21:47:43.15625Z","latitude":47.05161301867342,"longitude":8.46540917482723},{"altitude":3441.7381907151316,"datetime":"2025-08-26T21:48:43.15625Z","latitude":47.0550365019147,"longitude":8.468771619167265},{"altitude":3089.7407977836633,"datetime":"2025-08-26T21:49:43.15625Z","latitude":47.05752477756667,"longitude":8.471863409068922},{"altitude":2744.0131021741126,"datetime":"2025-08-26T21:50:43.15625Z","latitude":47.059177735790925,"longitude":8.475280034829108},{"altitude":2404.286294670708,"datetime":"2025-08-26T21:51:43.15625Z","latitude":47.06015824553558,"longitude":8.479056798727747},{"altitude":2070.309493769621,"datetime":"2025-08-26T21:52:43.15625Z","latitude":47.06067439933653,"longitude":8.483039337670583},{"altitude":1741.8481436915101,"datetime":"2025-08-26T21:53:43.15625Z","latitude":47.06084732342465,"longitude":8.48702038862245},{"altitude":1418.6825901367554,"datetime":"2025-08-26T21:54:43.15625Z","latitude":47.06087288110848,"longitude":8.490506330028142},{"altitude":1113.0316455477905,"datetime":"2025-08-26T21:55:40.8125Z","latitude":47.06098256896306,"longitude":8.492911202660144}\]}\],"request":{"ascent\_rate":5.0,"burst\_altitude":35000.0,"dataset":"2025-08-26T12:00:00Z","descent\_rate":5.0,"format":"json","launch\_altitude":847.0,"launch\_datetime":"2025-08-26T19:17:53Z","launch\_latitude":46.9046,"launch\_longitude":7.3112,"profile":"standard\_profile","version":1},"warnings":{}}
 
-5. ## Prediction Service API (Sondehub)
+## Prediction Service API (Sondehub)
 
-   1. ### API structure
+### API structure
 
 * Endpoint: The single endpoint for all requests is   
 * [https://api.v2.sondehub.org/tawhiri](https://api.v2.sondehub.org/tawhiri)  
@@ -1151,11 +1173,11 @@ This command requests the current status and configuration of the RadioSondyGo d
 
 ---
 
-2. ### Request Parameters
+### Request Parameters
 
 All requests to the API for the Standard Profile must include the following parameters in the query string.
 
-1. #### General Parameters
+#### General Parameters
 
 | Parameter          | Required | Default Value                | Description                                                  |
 | :----------------- | :------- | :--------------------------- | :----------------------------------------------------------- |
@@ -1165,7 +1187,7 @@ All requests to the API for the Standard Profile must include the following para
 | `launch_datetime`  | required | \-                           | Time and date of launch, formatted as a RFC3339 timestamp.   |
 | `launch_altitude`  | optional | Elevation at launch location | Elevation of the launch location in meters above sea level.  |
 
-Standard Profile Specific Parameters
+#### Standard Profile Specific Parameters
 
 | Parameter        | Required | Default Value | Description                                                  |
 | :--------------- | :------- | :------------ | :----------------------------------------------------------- |
@@ -1173,7 +1195,7 @@ Standard Profile Specific Parameters
 | `burst_altitude` | required | \-            | The altitude at which the balloon is expected to burst, in meters above sea level. Must be greater than `launch_altitude`. |
 | `descent_rate`   | required | \-            | The descent rate of the payload under a parachute, in meters per second. Must be greater than 0.0. |
 
-3. ###  Input Data Structure
+###  Input Data Structure
 
 The parser must be designed to accept a single JSON object with the following top-level keys and data types:
 
@@ -1192,35 +1214,37 @@ The most critical data is within the `prediction` array. Each element of this ar
 
 * `longitude`: Number (degrees)
 
-  ---
 
-  4. ### Parsing Logic and Extraction
+### Parsing Logic and Extraction
 
 The parser should perform the following actions:
 
-1. #### General Information Extraction
+#### General Information Extraction
 
 * Launch Details: Extract the `launch_latitude`, `launch_longitude`, `launch_datetime`, `ascent_rate`, and `descent_rate` directly from the top-level `request` object.
 
-  2. #### Trajectory Processing
+
+#### Trajectory Processing
 
 * The parser must iterate through the `prediction` array to identify the `ascent` and `descent` stages.  
 
 * For each stage, the entire `trajectory` array should be captured and stored.
 
-  3. #### Burst Point Identification
+
+#### Burst Point Identification
 
 * The burst point is defined as the last data point in the `ascent` trajectory.  
 
 * The parser must extract and store the `altitude`, `datetime`, `latitude`, and `longitude` of this final ascent point.
 
-  4. #### Landing Point Identification
+
+#### Landing Point Identification
 
 * The landing point is defined as the last data point in the `descent` trajectory.  
-
 * The parser must extract and store the `altitude`, `datetime`, `latitude`, and `longitude` of this final descent point.
 
-  5. #### Error Response
+
+#### Error Response
 
 Error responses contain two fragments: `error` and `metadata`. The `error` fragment includes a `type` and a `description`. The API can return the following error types:
 
@@ -1236,7 +1260,7 @@ For a balloon launched from a specific latitude and longitude, at a particular t
 
 `https://api.v2.sondehub.org/tawhiri/?launch_latitude=46.9046&launch_longitude=7.3112&launch_datetime=2025-08-26T19:17:53Z&ascent_rate=5.0&burst_altitude=35000.0&descent_rate=5.0&launch_altitude=847.0`
 
-6. ## Arduino (only as a reference, not to be used)
+## Arduino (only as a reference, not to be used)
 
 BLEAdvertising \*pAdvertising \= BLEDevice::getAdvertising();
     pAdvertising-\>addServiceUUID(SERVICE\_UUID);
@@ -1246,39 +1270,3 @@ BLEAdvertising \*pAdvertising \= BLEDevice::getAdvertising();
     pAdvertising-\>setMinInterval(160);
     pAdvertising-\>setMaxInterval(170);
     BLEDevice::startAdvertising();
-
----
-
-## Recent Updates (January 2025)
-
-*The following updates have been implemented to simplify and improve the BalloonHunter app:*
-
-### *Dual Location Service Architecture*
-*- **Background Mode**: 30-second GPS updates with standard accuracy (~10m) for battery efficiency during tracking*
-*- **Precision Mode**: 1-2 second GPS updates with best accuracy (~3-5m) activated only in heading mode*
-*- **Immediate switching**: No delays when toggling between tracking and heading modes*
-*- **Service coordination**: LocationService manages both modes, ServiceCoordinator handles mode switching*
-
-### *Transport Mode Persistence*
-*- **UserDefaults integration**: Car/bike preference automatically saved and restored across app sessions*
-*- **AppSettings management**: Centralized transport mode storage with automatic persistence*
-*- **Cross-session consistency**: Transport mode persists across app launches and system restarts*
-
-### *Apple Maps Integration Improvements*
-*- **Official cycling support**: Uses `MKLaunchOptionsDirectionsModeCycling` for bike mode (iOS 14+)*
-*- **Proper fallback**: Graceful degradation to walking mode for iOS < 14*
-*- **Transport mode sync**: Route calculation uses `MKDirectionsTransportType.cycling` matching Apple Maps launch mode*
-*- **Notification fixes**: Apple Maps opens with correct transport mode when tapped from notifications*
-
-### *Notification System Simplification*
-*- **Automatic notifications**: Landing point changes >100m trigger notifications without requiring manual Apple Maps activation*
-*- **Simplified UI**: Removed complex in-app alert overlays and custom notification actions*
-*- **Standard behavior**: Basic notifications that open Apple Maps when tapped*
-*- **Prediction visibility**: Removed toggle button - prediction path always shows when balloon is flying*
-
-### *User Interface Streamlining*
-*- **Button reduction**: Removed prediction visibility toggle to simplify control panel*
-*- **Cleaner layout**: Control panel now shows: Settings, Transport Mode, Show All/Point, Heading Mode, Buzzer Mute, Apple Maps*
-*- **Immediate feedback**: All mode changes take effect instantly without delays*
-
-*These updates maintain the core functionality while providing better battery life, more reliable Apple Maps integration, and a cleaner user experience.*
