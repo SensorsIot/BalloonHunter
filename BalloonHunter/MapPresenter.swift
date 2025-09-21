@@ -361,12 +361,14 @@ final class MapPresenter: ObservableObject {
         }
 
         let coordinates = cameraCoordinates()
+        appLog("MapPresenter: Camera fit with \(coordinates.count) coordinates: annotations=\(annotations.count), user=\(userCoordinate != nil), prediction=\(predictionPath != nil), route=\(userRoute != nil)", category: .general, level: .info)
+
         guard !coordinates.isEmpty,
               let minLat = coordinates.map({ $0.latitude }).min(),
               let maxLat = coordinates.map({ $0.latitude }).max(),
               let minLon = coordinates.map({ $0.longitude }).min(),
               let maxLon = coordinates.map({ $0.longitude }).max() else {
-            appLog("MapPresenter: No coordinates available for camera fit", category: .general, level: .debug)
+            appLog("MapPresenter: No coordinates available for camera fit - need at least user location or landing point", category: .general, level: .info)
             return
         }
 

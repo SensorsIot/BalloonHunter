@@ -131,6 +131,9 @@ extension ServiceCoordinator {
             showTrackingMap = true
         }
 
+        // Brief delay to ensure map is ready before triggering zoom
+        try? await Task.sleep(nanoseconds: 300_000_000) // 0.3 seconds
+
         // Trigger final map zoom to show all overlays
         triggerStartupMapZoom()
 
