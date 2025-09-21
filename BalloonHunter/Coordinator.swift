@@ -210,9 +210,8 @@ final class ServiceCoordinator: ObservableObject {
         _ = landingPointTrackingService
         _ = routeCalculationService
 
-        // Phase 3: Start 60-second coordinator timer for predictions
-        appLog("STARTUP: Coordinator owns 60-second prediction timer", category: .general, level: .info)
-        startCoordinatorPredictionTimer()
+        // Phase 3: Prediction timer will be controlled by state machine
+        appLog("STARTUP: Prediction timer will be controlled by state machine", category: .general, level: .info)
 
 
         // Services initialized - startup sequence will be triggered by BalloonHunterApp
@@ -437,13 +436,13 @@ final class ServiceCoordinator: ObservableObject {
             }
             .store(in: &cancellables)
 
-        // Scenario 2: APRS data arrives when RadioSondyGo already connected - sync immediately
-        balloonPositionService.$aprsTelemetryIsAvailable
+        // APRS frequency sync now handled by state machine transitions
+
+        // Subscribe to state machine prediction control
+        balloonPositionService.$shouldEnablePredictions
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] isAvailable in
-                if isAvailable {
-                    self?.handleAPRSDataAvailable()
-                }
+            .sink { [weak self] shouldEnable in
+                self?.updatePredictionTimer(enabled: shouldEnable)
             }
             .store(in: &cancellables)
 
@@ -465,18 +464,7 @@ final class ServiceCoordinator: ObservableObject {
         syncFrequencyFromAPRS(aprsTelemetry: telemetry)
     }
 
-    private func handleAPRSDataAvailable() {
-        // Scenario 2: APRS data arrives when RadioSondyGo is already connected
-        guard bleCommunicationService.isReadyForCommands,
-              let telemetry = balloonPositionService.currentTelemetry,
-              telemetry.softwareVersion == "APRS" else {
-            appLog("ServiceCoordinator: APRS data available but not ready for frequency sync", category: .general, level: .debug)
-            return
-        }
-
-        appLog("ServiceCoordinator: APRS data available with RadioSondyGo connected - syncing frequency", category: .general, level: .info)
-        syncFrequencyFromAPRS(aprsTelemetry: telemetry)
-    }
+    // handleAPRSDataAvailable removed - state machine now manages APRS coordination
 
     private func syncFrequencyFromAPRS(aprsTelemetry: TelemetryData) {
         let aprsFreq = aprsTelemetry.frequency
@@ -628,9 +616,21 @@ final class ServiceCoordinator: ObservableObject {
         return shouldTrigger
     }
 
+    private func updatePredictionTimer(enabled: Bool) {
+        if enabled {
+            startCoordinatorPredictionTimer()
+        } else {
+            stopCoordinatorPredictionTimer()
+        }
+    }
+
     private func startCoordinatorPredictionTimer() {
-        // Ensure only one timer
-        predictionTimer?.invalidate()
+        // Only start if not already running
+        guard predictionTimer == nil else {
+            appLog("ServiceCoordinator: Prediction timer already running", category: .general, level: .debug)
+            return
+        }
+
         predictionTimer = Timer.scheduledTimer(withTimeInterval: predictionInterval, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
                 guard let self = self else { return }
@@ -644,6 +644,13 @@ final class ServiceCoordinator: ObservableObject {
                 }
             }
         }
+        appLog("ServiceCoordinator: Prediction timer started (state machine enabled)", category: .general, level: .info)
+    }
+
+    private func stopCoordinatorPredictionTimer() {
+        predictionTimer?.invalidate()
+        predictionTimer = nil
+        appLog("ServiceCoordinator: Prediction timer stopped (state machine disabled)", category: .general, level: .info)
     }
     
     private func executePrediction(telemetry: TelemetryData, measuredDescentRate: Double?, force: Bool) async {
@@ -971,6 +978,17 @@ final class ServiceCoordinator: ObservableObject {
     
 
     // MARK: - UI Support Methods
+
+    /// Trigger map zoom to show all overlays (startup final step)
+    func triggerStartupMapZoom() {
+        showAllAnnotations = true
+        appLog("ServiceCoordinator: Triggered startup map zoom to show all overlays", category: .general, level: .info)
+
+        // Reset flag after brief delay to allow for future triggers
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            self?.showAllAnnotations = false
+        }
+    }
 
     func openInAppleMaps() {
         guard let landingPoint = landingPoint else {
