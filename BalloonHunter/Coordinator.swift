@@ -494,8 +494,7 @@ final class ServiceCoordinator: ObservableObject {
             let probeType = BLECommunicationService.ProbeType.from(string: aprsTelemetry.probeType ?? "RS41") ?? .rs41
             bleCommunicationService.setFrequency(aprsFreq, probeType: probeType)
 
-            // Update current telemetry in BalloonPositionService to reflect synced frequency
-            balloonPositionService.updateCurrentTelemetryFrequency(aprsFreq, probeType: probeType.name)
+            // Note: Display will update when RadioSondyGo confirms the new frequency via BLE device settings
         } else {
             appLog("ServiceCoordinator: Frequencies match - no sync needed (\(String(format: "%.2f", aprsFreq)) MHz)", category: .general, level: .debug)
         }
@@ -1147,8 +1146,7 @@ final class ServiceCoordinator: ObservableObject {
         let probeType = BLECommunicationService.ProbeType.from(string: proposal.probeType) ?? .rs41
         bleCommunicationService.setFrequency(proposal.frequency, probeType: probeType)
 
-        // Update current telemetry to reflect synced frequency for consistent display
-        balloonPositionService.updateCurrentTelemetryFrequency(proposal.frequency, probeType: proposal.probeType)
+        // Note: Display will update when RadioSondyGo confirms the new frequency via BLE device settings
 
         lastAprsSyncCommandTime = Date()
         pendingFrequencySync = nil

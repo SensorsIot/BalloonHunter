@@ -572,23 +572,9 @@ final class BalloonPositionService: ObservableObject {
         let probeType = BLECommunicationService.ProbeType.from(string: telemetry.probeType ?? "RS41") ?? .rs41
         bleService.setFrequency(aprsFreq, probeType: probeType)
 
-        // Update current telemetry to reflect the synced frequency for consistent display
-        if var updatedTelemetry = currentTelemetry {
-            updatedTelemetry.frequency = aprsFreq
-            updatedTelemetry.probeType = probeType.name
-            currentTelemetry = updatedTelemetry
-        }
+        // Note: Display will update when RadioSondyGo confirms the new frequency via BLE device settings
 
         appLog("BalloonPositionService: Startup frequency sync complete", category: .service, level: .info)
-    }
-
-    /// Update current telemetry frequency for consistent display after frequency sync
-    func updateCurrentTelemetryFrequency(_ frequency: Double, probeType: String) {
-        guard var telemetry = currentTelemetry else { return }
-        telemetry.frequency = frequency
-        telemetry.probeType = probeType
-        currentTelemetry = telemetry
-        appLog("BalloonPositionService: Updated current telemetry frequency to \(String(format: "%.2f", frequency)) MHz", category: .service, level: .info)
     }
 }
 
