@@ -426,12 +426,12 @@ final class ServiceCoordinator: ObservableObject {
         // Subscribe to APRS sonde names for display
 
         // Frequency sync scenarios per FSD requirements
-        // Scenario 1: RadioSondyGo connects after startup with APRS data - sync on first BLE packet
+        // Scenario 2: RadioSondyGo connects when APRS data already available - sync immediately
         bleCommunicationService.$isReadyForCommands
             .receive(on: DispatchQueue.main)
             .sink { [weak self] isReady in
                 if isReady {
-                    self?.handleFirstBLEConnection()
+                    self?.handleBLEConnectionWithAPRSSync()
                 }
             }
             .store(in: &cancellables)
@@ -451,8 +451,8 @@ final class ServiceCoordinator: ObservableObject {
 
     // MARK: - Frequency Sync Handlers
 
-    private func handleFirstBLEConnection() {
-        // Scenario 1: RadioSondyGo connects after APRS data is available
+    private func handleBLEConnectionWithAPRSSync() {
+        // Scenario 2: RadioSondyGo connects when APRS data already available
         guard aprsTelemetryIsAvailable,
               let telemetry = balloonPositionService.currentTelemetry,
               telemetry.softwareVersion == "APRS" else {
@@ -460,8 +460,25 @@ final class ServiceCoordinator: ObservableObject {
             return
         }
 
-        appLog("ServiceCoordinator: RadioSondyGo connected with APRS data - syncing frequency", category: .general, level: .info)
-        syncFrequencyFromAPRS(aprsTelemetry: telemetry)
+        // Check if frequency sync is needed
+        let aprsFreq = telemetry.frequency
+        let bleFreq = bleCommunicationService.deviceSettings.frequency
+        let freqMismatch = abs(aprsFreq - bleFreq) > 0.01 // 0.01 MHz tolerance
+
+        guard freqMismatch, aprsFreq > 0 else {
+            appLog("ServiceCoordinator: RadioSondyGo connected - frequencies already match", category: .general, level: .info)
+            return
+        }
+
+        if isStartupComplete {
+            // After startup: prompt user for frequency sync
+            appLog("ServiceCoordinator: RadioSondyGo connected with APRS data - scheduling frequency sync prompt", category: .general, level: .info)
+            scheduleFrequencySyncIfNeeded()
+        } else {
+            // During startup: automatic sync without prompt
+            appLog("ServiceCoordinator: RadioSondyGo connected with APRS data during startup - syncing frequency automatically", category: .general, level: .info)
+            syncFrequencyFromAPRS(aprsTelemetry: telemetry)
+        }
     }
 
     // handleAPRSDataAvailable removed - state machine now manages APRS coordination
