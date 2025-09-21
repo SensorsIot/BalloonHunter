@@ -493,6 +493,9 @@ final class ServiceCoordinator: ObservableObject {
 
             let probeType = BLECommunicationService.ProbeType.from(string: aprsTelemetry.probeType ?? "RS41") ?? .rs41
             bleCommunicationService.setFrequency(aprsFreq, probeType: probeType)
+
+            // Update current telemetry in BalloonPositionService to reflect synced frequency
+            balloonPositionService.updateCurrentTelemetryFrequency(aprsFreq, probeType: probeType.name)
         } else {
             appLog("ServiceCoordinator: Frequencies match - no sync needed (\(String(format: "%.2f", aprsFreq)) MHz)", category: .general, level: .debug)
         }
@@ -1143,6 +1146,10 @@ final class ServiceCoordinator: ObservableObject {
         appLog("ServiceCoordinator: Applying APRS frequency sync (freq=\(String(format: "%.2f", proposal.frequency)) MHz, type=\(proposal.probeType))", category: .general, level: .info)
         let probeType = BLECommunicationService.ProbeType.from(string: proposal.probeType) ?? .rs41
         bleCommunicationService.setFrequency(proposal.frequency, probeType: probeType)
+
+        // Update current telemetry to reflect synced frequency for consistent display
+        balloonPositionService.updateCurrentTelemetryFrequency(proposal.frequency, probeType: proposal.probeType)
+
         lastAprsSyncCommandTime = Date()
         pendingFrequencySync = nil
     }
