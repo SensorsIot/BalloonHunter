@@ -123,19 +123,19 @@ extension ServiceCoordinator {
         await setupInitialMapDisplay()
         appLog("STARTUP: Step 6 - Final map display complete", category: .general, level: .info)
 
-        // Mark startup as complete
+        // Complete telemetry state machine startup with all parameters populated
+        balloonPositionService.completeStartup()
+
+        // Step 7: Automatic frequency sync if both BLE and APRS data available
+        await performStartupFrequencySync()
+
+        // Mark startup as complete AFTER automatic frequency sync
         let totalTime = Date().timeIntervalSince(startTime)
         await MainActor.run {
             isStartupComplete = true
             showLogo = false
             showTrackingMap = true
         }
-
-        // Complete telemetry state machine startup with all parameters populated
-        balloonPositionService.completeStartup()
-
-        // Step 7: Automatic frequency sync if both BLE and APRS data available
-        await performStartupFrequencySync()
 
         // Trigger final map zoom to show all overlays
         triggerStartupMapZoom()
