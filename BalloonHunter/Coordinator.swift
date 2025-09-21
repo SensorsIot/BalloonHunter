@@ -48,7 +48,7 @@ final class ServiceCoordinator: ObservableObject {
     @Published var afcMovingAverage: Int = 0
     @Published var bleTelemetryIsAvailable: Bool = false
     @Published var aprsTelemetryIsAvailable: Bool = false
-    @Published var pendingFrequencySync: FrequencySyncProposal?
+    // Frequency sync prompt removed - automatic sync handles everything
 
     // Startup sequence state
     @Published var startupProgress: String = "Initializing services..."
@@ -363,15 +363,7 @@ final class ServiceCoordinator: ObservableObject {
             }
             .store(in: &cancellables)
 
-        balloonPositionService.$lastTelemetrySource
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] source in
-                guard let self = self else { return }
-                if source == .aprs {
-                    self.scheduleFrequencySyncIfNeeded()
-                }
-            }
-            .store(in: &cancellables)
+        // Automatic frequency sync now handled during startup - no user prompts needed
 
         balloonPositionService.$isTelemetryStale
             .receive(on: DispatchQueue.main)
@@ -470,15 +462,9 @@ final class ServiceCoordinator: ObservableObject {
             return
         }
 
-        if isStartupComplete {
-            // After startup: prompt user for frequency sync
-            appLog("ServiceCoordinator: RadioSondyGo connected with APRS data - scheduling frequency sync prompt", category: .general, level: .info)
-            scheduleFrequencySyncIfNeeded()
-        } else {
-            // During startup: automatic sync without prompt
-            appLog("ServiceCoordinator: RadioSondyGo connected with APRS data during startup - syncing frequency automatically", category: .general, level: .info)
-            syncFrequencyFromAPRS(aprsTelemetry: telemetry)
-        }
+        // Always automatic sync - no user prompts needed
+        appLog("ServiceCoordinator: RadioSondyGo connected with APRS data - syncing frequency automatically", category: .general, level: .info)
+        syncFrequencyFromAPRS(aprsTelemetry: telemetry)
     }
 
     // handleAPRSDataAvailable removed - state machine now manages APRS coordination
