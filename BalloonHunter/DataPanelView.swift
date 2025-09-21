@@ -222,15 +222,8 @@ struct DataPanelView: View {
     }
 
     private var frequencyString: String {
-        // Display frequency sent to RadioSondyGo (if connected) or from live telemetry
-
-        if serviceCoordinator.bleTelemetryIsAvailable,
-           let telemetry = balloonPositionService.currentTelemetry,
-           telemetry.softwareVersion != "APRS" {
-            // BLE telemetry available - show frequency from live sonde telemetry
-            return String(format: "%.2f MHz", telemetry.frequency)
-        } else if bleService.connectionStatus == .connected {
-            // BLE connected - show frequency sent to RadioSondyGo
+        // Display only the frequency programmed into RadioSondyGo
+        if bleService.connectionStatus == .connected {
             let frequency = bleService.deviceSettings.frequency
             return String(format: "%.2f MHz", frequency)
         }
