@@ -82,10 +82,10 @@ extension ServiceCoordinator {
             startupProgress = "Step 2: BLE & APRS"
         }
         async let bleResult = startBLEConnectionWithTimeout()
-        async let aprsResult = primeAPRSStartupData()
+        async let aprsTask: Void = primeAPRSStartupData()
 
         let _ = await bleResult
-        let _ = await aprsResult
+        await aprsTask
         appLog("STARTUP: Step 2 - BLE connection and APRS priming complete", category: .general, level: .info)
 
         // Step 3: First Telemetry Package
@@ -126,6 +126,12 @@ extension ServiceCoordinator {
             showLogo = false
             showTrackingMap = true
         }
+
+        // Complete telemetry state machine startup with all parameters populated
+        balloonPositionService.completeStartup()
+
+        // Trigger final map zoom to show all overlays
+        triggerStartupMapZoom()
 
         appLog("STARTUP: Complete ✅ Ready for tracking (\(String(format: "%.1f", totalTime))s total)", category: .general, level: .info)
     }
@@ -237,6 +243,9 @@ extension ServiceCoordinator {
 
         // Access APRS service through BalloonPositionService
         await balloonPositionService.aprsService.primeStartupData()
+
+        // Trigger state evaluation after priming to enable APRS fallback if needed
+        balloonPositionService.triggerStateEvaluation()
 
         appLog("STARTUP: Step 2 - APRS startup priming complete", category: .general, level: .info)
     }
