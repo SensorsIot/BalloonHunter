@@ -3,6 +3,11 @@ import Combine
 import CoreLocation
 import OSLog
 
+struct BurstKillerRecord: Codable {
+    let seconds: Int
+    let referenceDate: Date
+}
+
 // MARK: - Persistence Service
 
 @MainActor
@@ -14,6 +19,7 @@ final class PersistenceService: ObservableObject {
     @Published var deviceSettings: DeviceSettings?
     private var internalTracks: [String: [BalloonTrackPoint]] = [:]
     private var internalLandingHistories: [String: [LandingPredictionPoint]] = [:]
+    private var burstKillerRecords: [String: BurstKillerRecord] = [:]
     
     init() {
         // PersistenceService initializing (log removed for reduction)
@@ -30,6 +36,9 @@ final class PersistenceService: ObservableObject {
         // Load landing point histories
         self.internalLandingHistories = Self.loadAllLandingHistories()
         
+        // Load burst killer cache
+        self.burstKillerRecords = Self.loadBurstKillerRecords()
+
         appLog("PersistenceService: Tracks loaded from UserDefaults. Total tracks: \(internalTracks.count)", category: .service, level: .info)
     }
     
@@ -152,6 +161,20 @@ final class PersistenceService: ObservableObject {
         internalLandingHistories[sondeName]
     }
 
+    func updateBurstKillerTime(for sondeName: String, time: Int, referenceDate: Date) {
+        guard !sondeName.isEmpty, time > 0 else { return }
+        burstKillerRecords[sondeName] = BurstKillerRecord(seconds: time, referenceDate: referenceDate)
+        
+        let encoder = JSONEncoder()
+        if let encoded = try? encoder.encode(burstKillerRecords) {
+            userDefaults.set(encoded, forKey: "BurstKillerTimes")
+        }
+    }
+    
+    func loadBurstKillerRecord(for sondeName: String) -> BurstKillerRecord? {
+        burstKillerRecords[sondeName]
+    }
+
     func removeLandingHistory(for sondeName: String) {
         internalLandingHistories.removeValue(forKey: sondeName)
         saveAllLandingHistories()
@@ -186,17 +209,20 @@ final class PersistenceService: ObservableObject {
             return histories
         }
 
-        // Legacy support for single landing point storage
-        if let legacy = UserDefaults.standard.object(forKey: "LandingPoints") as? [String: [String: Double]] {
-            let converted = legacy.compactMapValues { dict -> [LandingPredictionPoint]? in
-                guard let lat = dict["latitude"], let lon = dict["longitude"] else { return nil }
-                let coordinate = CLLocationCoordinate2D(latitude: lat, longitude: lon)
-                let legacyPoint = LandingPredictionPoint(coordinate: coordinate, predictedAt: Date.distantPast, landingEta: nil, source: .sondehub)
-                return [legacyPoint]
-            }
-            return converted
-        }
+        return [:]
+    }
 
+    private static func loadBurstKillerRecords() -> [String: BurstKillerRecord] {
+        let decoder = JSONDecoder()
+        if let data = UserDefaults.standard.data(forKey: "BurstKillerTimes") {
+            if let records = try? decoder.decode([String: BurstKillerRecord].self, from: data) {
+                return records
+            }
+            if let legacy = try? decoder.decode([String: Int].self, from: data) {
+                let now = Date()
+                return legacy.mapValues { BurstKillerRecord(seconds: $0, referenceDate: now) }
+            }
+        }
         return [:]
     }
     

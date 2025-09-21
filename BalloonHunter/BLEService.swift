@@ -127,7 +127,8 @@ struct DeviceSettings: Codable {
                     appLog("DeviceSettings: Invalid probeType string '\(probeTypeComponent)' - setting to empty", category: .ble, level: .debug)
                 }
             }
-            frequency = Double(components[2]) ?? 434.0
+            let rawFrequency = Double(components[2]) ?? 434.0
+            frequency = (rawFrequency * 100).rounded() / 100.0
             oledSDA = Int(components[3]) ?? 21
             oledSCL = Int(components[4]) ?? 22
             oledRST = Int(components[5]) ?? 16
@@ -233,13 +234,13 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
     private var incomingBLEBuffer: Data = Data()
     private var lastBLEMessageTime: Date = Date.distantPast
 
-    @Published var telemetryAvailabilityState: Bool = false
+    var isBLETelemetryStale: Bool = false
     @Published var latestTelemetry: TelemetryData? = nil
     @Published var deviceSettings: DeviceSettings = .default
     @Published var connectionStatus: ConnectionStatus = .disconnected
-    @Published var lastMessageType: String? = nil
+    var lastMessageType: String? = nil
     @Published var telemetryData = PassthroughSubject<TelemetryData, Never>()
-    @Published var lastTelemetryUpdateTime: Date? = nil
+    var lastTelemetryUpdateTime: Date? = nil
     @Published var isReadyForCommands = false
     let centralManagerPoweredOn = PassthroughSubject<Void, Never>()
 
@@ -256,7 +257,7 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
 
         Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
-                await self?.updateTelemetryAvailabilityState()
+                await self?.updateBLEStaleState()
             }
         }
         
@@ -271,11 +272,10 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
         publishHealthEvent(.healthy, message: "BLE service initialized")
     }
 
-    private func updateTelemetryAvailabilityState() async {
-        let _ = telemetryAvailabilityState  // wasAvailable
+    private func updateBLEStaleState() async {
         let isAvailable: Bool
         let reason: String
-        
+
         if let lastUpdate = lastTelemetryUpdateTime {
             let interval = Date().timeIntervalSince(lastUpdate)
             isAvailable = interval <= 3.0
@@ -284,19 +284,15 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
             isAvailable = false
             reason = "No telemetry ever received"
         }
-        
-        // Update state and publish event if changed
-        if telemetryAvailabilityState != isAvailable {
-            telemetryAvailabilityState = isAvailable
-            
-            // Publish telemetry availability event
-            appLog("BLECommunicationService: Telemetry availability - \(isAvailable) (\(reason))", category: .service, level: .info)
-            
-            if isAvailable {
-                appLog("BLECommunicationService: Telemetry GAINED: \(reason)", category: .ble, level: .info)
-            } else {
-                appLog("BLECommunicationService: Telemetry LOST: \(reason)", category: .ble, level: .info)
-            }
+
+        // Log telemetry availability changes
+        // Note: Actual state management moved to BalloonPositionService
+        appLog("BLECommunicationService: Telemetry availability - \(isAvailable) (\(reason))", category: .service, level: .info)
+
+        if isAvailable {
+            appLog("BLECommunicationService: Telemetry GAINED: \(reason)", category: .ble, level: .info)
+        } else {
+            appLog("BLECommunicationService: Telemetry LOST: \(reason)", category: .ble, level: .info)
         }
     }
 
@@ -499,8 +495,9 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
             appLog("🟢 BLE: TX characteristic configured - waiting for first BLE packet", category: .ble, level: .info)
             publishHealthEvent(.healthy, message: "BLE characteristics configured")
             
-            // Don't automatically request settings - wait for first BLE packet
-            // Settings will be requested only when user opens settings panel
+            // Startup optimization: No automatic o{?}o command during startup
+            // Device settings (frequency/probe type) are available in telemetry packets
+            // Settings are only fetched on-demand when SettingsView is opened
         } else {
             appLog("🔴 BLE: Not ready for commands - TX characteristic not found", category: .ble, level: .error)
         }
@@ -584,13 +581,9 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
             
             // First packet processed
             
-            // Per FSD: After receiving and decoding the first BLE package, issue settings command
-            if !hasSentReadSettingsCommand {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-                    self?.getParameters()
-                    self?.hasSentReadSettingsCommand = true
-                }
-            }
+            // Startup optimization: Skip device settings command during startup
+            // Settings are fetched on-demand by SettingsView when needed
+            // Frequency and probe type are available in telemetry packets
         }
         
         switch messageType {
@@ -816,9 +809,13 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
                 appLog("🔴 BLE MSG (Type 3): Invalid field count=\(components.count)", category: .ble, level: .error)
             }
             if let settings = parseType3Message(components) {
-                appLog("⚙️ BLE PARSED (Type 3): Device config - callSign=\(settings.callSign) freq=\(String(format: "%.1f", settings.frequency))MHz probeType=\(settings.probeType)", category: .ble, level: .info)
+                appLog("⚙️ BLE PARSED (Type 3): Device config - callSign=\(settings.callSign) freq=\(String(format: "%.2f", settings.frequency))MHz probeType=\(settings.probeType)", category: .ble, level: .info)
                 DispatchQueue.main.async {
+                    let previousSettings = self.deviceSettings
                     self.deviceSettings = settings
+                    if abs(previousSettings.frequency - settings.frequency) > 0.005 || previousSettings.probeType != settings.probeType {
+                        appLog("BLE: Device settings updated -> freq=\(String(format: "%.2f", settings.frequency))MHz (prev=\(String(format: "%.2f", previousSettings.frequency))) type=\(settings.probeType)", category: .ble, level: .info)
+                    }
                     self.persistenceService.save(deviceSettings: settings)
                     
                     // Update current telemetry data with device configuration
@@ -874,8 +871,9 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
         }
         guard components.count >= 20 else { return nil }
         
-        let probeType = components[1]
-        let frequency = Double(components[2]) ?? 0.0
+        let probeTypeRaw = components[1].trimmingCharacters(in: .whitespacesAndNewlines)
+        let rawFrequency = Double(components[2]) ?? 0.0
+        let frequency = (rawFrequency * 100).rounded() / 100.0
         let sondeName = components[3]
         let latitude = Double(components[4]) ?? 0.0
         let longitude = Double(components[5]) ?? 0.0
@@ -887,25 +885,34 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
         let batteryVoltage = Double(components[14]) ?? 0.0
         let buzmute = components[15] == "1"
 
-        return TelemetryData(
-            sondeName: sondeName,
-            probeType: probeType,
-            frequency: frequency,
-            latitude: latitude,
-            longitude: longitude,
-            altitude: altitude,
-            verticalSpeed: verticalSpeed,
-            horizontalSpeed: horizontalSpeed,
-            heading: 0.0, // Not provided in this message
-            temperature: 0.0, // Not provided in this message
-            humidity: 0.0, // Not provided in this message
-            pressure: 0.0, // Not provided in this message
-            batteryVoltage: batteryVoltage,
-            batteryPercentage: batteryPercentage,
-            signalStrength: Int(rssi),
-            timestamp: Date(),
-            buzmute: buzmute
-        )
+        // Validate essential fields (frequency, probe type, coordinates)
+        let isValidCoordinate = latitude.isFinite && longitude.isFinite && abs(latitude) <= 90 && abs(longitude) <= 180 && !(latitude == 0 && longitude == 0)
+        guard frequency > 0,
+              !probeTypeRaw.isEmpty,
+              isValidCoordinate else {
+            appLog("BLE: Discarding telemetry with invalid essentials (freq=\(frequency), probe='\(probeTypeRaw)', lat=\(latitude), lon=\(longitude))", category: .ble, level: .info)
+            return nil
+        }
+
+        var telemetry = TelemetryData()
+        telemetry.sondeName = sondeName
+        telemetry.probeType = probeTypeRaw
+        telemetry.frequency = frequency
+        telemetry.latitude = latitude
+        telemetry.longitude = longitude
+        telemetry.altitude = altitude
+        telemetry.horizontalSpeed = horizontalSpeed
+        telemetry.verticalSpeed = verticalSpeed
+        telemetry.signalStrength = Int(rssi)
+        telemetry.batteryPercentage = batteryPercentage
+        telemetry.afcFrequency = Int(components[11]) ?? 0
+        telemetry.burstKillerEnabled = components[12] == "1"
+        telemetry.burstKillerTime = Int(components[13]) ?? 0
+        telemetry.batteryVoltage = batteryVoltage
+        telemetry.buzmute = buzmute
+        telemetry.softwareVersion = components[19]
+        telemetry.timestamp = Date()
+        return telemetry
     }
     
     // Type 2: Name Only
@@ -1079,15 +1086,31 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
         sendCommand(command: "o{?}o")
     }
     
-    /// Set frequency and probe type
-    func sendProbeData(frequency: Double, probeType: Int) {
-        let command = "o{f=\(frequency)/tipo=\(probeType)}o"
+    /// Propagate a frequency change to the device and local caches.
+    func setFrequency(_ frequency: Double, probeType: ProbeType) {
+        let roundedFrequency = (frequency * 100).rounded() / 100.0
+        let formattedFrequency = String(format: "%.2f", roundedFrequency)
+        appLog("BLE: Applying frequency change (freq=\(formattedFrequency) type=\(probeType.name))", category: .ble, level: .info)
+
+        let command = "o{f=\(formattedFrequency)/tipo=\(probeType.commandValue)}o"
         sendCommand(command: command)
-    }
-    
-    /// Set frequency and probe type (using ProbeType enum)
-    func sendProbeData(frequency: Double, probeType: ProbeType) {
-        sendProbeData(frequency: frequency, probeType: probeType.commandValue)
+
+        DispatchQueue.main.async {
+            var updatedSettings = self.deviceSettings
+            if abs(updatedSettings.frequency - roundedFrequency) > 0.005 || updatedSettings.probeType != probeType.name {
+                updatedSettings.frequency = roundedFrequency
+                updatedSettings.probeType = probeType.name
+                self.deviceSettings = updatedSettings
+                appLog("BLE: Updated cached device settings after frequency change (freq=\(formattedFrequency) type=\(probeType.name))", category: .ble, level: .debug)
+                self.persistenceService.save(deviceSettings: updatedSettings)
+            }
+
+            if var telemetry = self.latestTelemetry {
+                telemetry.frequency = roundedFrequency
+                telemetry.probeType = probeType.name
+                self.latestTelemetry = telemetry
+            }
+        }
     }
     
     /// Control buzzer mute
@@ -1165,9 +1188,9 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
         }
     }
     
-    /// Set APRS name type (0=Serial, 1=APRS NAME)
-    func setAPRSNameType(_ type: Int) {
-        sendSettingsCommand(["aprsName": type])
+    /// Apply arbitrary key/value settings to the device.
+    func setSettings(_ settings: [String: Any]) {
+        sendSettingsCommand(settings)
     }
     
     /// Set frequency correction
@@ -1190,7 +1213,7 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
     
     /// Convenience method for common device configuration using type-safe enums
     func configureDevice(frequency: Double, probeType: ProbeType, callSign: String, muted: Bool = false) {
-        sendProbeData(frequency: frequency, probeType: probeType.rawValue)
+        setFrequency(frequency, probeType: probeType)
         setCallSign(callSign)
         setMute(muted)
     }

@@ -464,11 +464,9 @@ struct SettingsView: View {
         // Update frequency from digits using service layer
         tempDeviceSettings.updateFrequencyFromDigits(freqDigits)
         
-        // Delegate command generation and sending to ServiceCoordinator
-        serviceCoordinator.sendFrequencyAndTypeToDevice(
-            frequency: tempDeviceSettings.frequency,
-            probeType: tempDeviceSettings.probeType
-        )
+        // Delegate command generation directly to BLE service
+        let probeType = BLECommunicationService.ProbeType.from(string: tempDeviceSettings.probeType) ?? .rs41
+        bleService.setFrequency(tempDeviceSettings.frequency, probeType: probeType)
         
         // Save to persistence
         persistenceService.save(deviceSettings: tempDeviceSettings)

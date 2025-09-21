@@ -1,6 +1,8 @@
 import Foundation
 import Combine
 import MapKit
+import CoreLocation
+import OSLog
 
 @MainActor
 final class MapPresenter: ObservableObject {
@@ -14,6 +16,8 @@ final class MapPresenter: ObservableObject {
     @Published private(set) var balloonDisplayPosition: CLLocationCoordinate2D?
     @Published private(set) var landingPoint: CLLocationCoordinate2D?
     @Published private(set) var burstPoint: CLLocationCoordinate2D?
+    @Published private(set) var predictionData: PredictionData?
+    @Published private(set) var annotations: [MapAnnotationItem] = []
     @Published private(set) var isHeadingMode: Bool = false
     @Published private(set) var transportMode: TransportationMode = .car
     @Published private(set) var isRouteVisible: Bool = true
@@ -23,10 +27,12 @@ final class MapPresenter: ObservableObject {
     @Published private(set) var userLocation: LocationData?
     @Published private(set) var balloonPhase: BalloonPhase = .unknown
     @Published private(set) var region: MKCoordinateRegion?
+    @Published private(set) var cameraUpdatesSuspended: Bool = false
 
     // APRS sonde name display (for persistent field in tracking view)
     @Published private(set) var bleSerialName: String = ""
     @Published private(set) var aprsSerialName: String = ""
+    @Published private(set) var frequencySyncProposal: FrequencySyncProposal? = nil
 
     // MARK: - Dependencies
 
@@ -34,23 +40,29 @@ final class MapPresenter: ObservableObject {
     private let balloonTrackService: BalloonTrackService
     private let landingPointTrackingService: LandingPointTrackingService
     private let currentLocationService: CurrentLocationService
+    private let aprsTelemetryService: APRSTelemetryService
+
+    private var cancellables = Set<AnyCancellable>()
 
     init(
         coordinator: ServiceCoordinator,
         balloonTrackService: BalloonTrackService,
         landingPointTrackingService: LandingPointTrackingService,
-        currentLocationService: CurrentLocationService
+        currentLocationService: CurrentLocationService,
+        aprsTelemetryService: APRSTelemetryService
     ) {
         self.coordinator = coordinator
         self.balloonTrackService = balloonTrackService
         self.landingPointTrackingService = landingPointTrackingService
         self.currentLocationService = currentLocationService
+        self.aprsTelemetryService = aprsTelemetryService
 
         transportMode = coordinator.transportMode
         distanceToBalloon = currentLocationService.distanceToBalloon
         isWithin200mOfBalloon = currentLocationService.isWithin200mOfBalloon
 
         bindServices()
+        refreshAnnotations()
     }
 
     // MARK: - Derived Flags
@@ -79,15 +91,18 @@ final class MapPresenter: ObservableObject {
     }
 
     func requestDeviceParameters() {
-        coordinator.requestDeviceParameters()
+        coordinator.bleCommunicationService.getParameters()
     }
 
     func setMuteState(_ muted: Bool) {
-        coordinator.setMuteState(muted)
+        coordinator.isBuzzerMuted = muted
+        isBuzzerMuted = muted
+        appLog("MapPresenter: Setting mute state to \(muted)", category: .general, level: .info)
+        coordinator.bleCommunicationService.setMute(muted)
     }
 
     func triggerShowAllAnnotations() {
-        coordinator.triggerShowAllAnnotations()
+        updateCameraToShowAllAnnotations()
     }
 
     func openInAppleMaps() {
@@ -99,11 +114,12 @@ final class MapPresenter: ObservableObject {
     }
 
     func updateCameraToShowAllAnnotations() {
-        coordinator.updateCameraToShowAllAnnotations()
+        performCameraFit()
     }
 
     func setCameraUpdatesSuspended(_ suspended: Bool) {
         coordinator.suspendCameraUpdates = suspended
+        cameraUpdatesSuspended = suspended
     }
 
     var bleService: BLECommunicationService { coordinator.bleCommunicationService }
@@ -118,61 +134,295 @@ final class MapPresenter: ObservableObject {
 
     private func bindServices() {
         coordinator.$predictionPath
-            .assign(to: &$predictionPath)
+            .sink { [weak self] path in
+                self?.predictionPath = path
+            }
+            .store(in: &cancellables)
 
         coordinator.$userRoute
-            .assign(to: &$userRoute)
+            .sink { [weak self] route in
+                self?.userRoute = route
+            }
+            .store(in: &cancellables)
+
+        coordinator.$predictionData
+            .sink { [weak self] data in
+                self?.predictionData = data
+            }
+            .store(in: &cancellables)
 
         coordinator.$balloonTelemetry
-            .assign(to: &$balloonTelemetry)
+            .sink { [weak self] telemetry in
+                self?.balloonTelemetry = telemetry
+                self?.refreshAnnotations()
+            }
+            .store(in: &cancellables)
 
         coordinator.$balloonDisplayPosition
-            .assign(to: &$balloonDisplayPosition)
+            .sink { [weak self] coordinate in
+                self?.balloonDisplayPosition = coordinate
+                self?.refreshAnnotations()
+            }
+            .store(in: &cancellables)
 
         coordinator.$landingPoint
-            .assign(to: &$landingPoint)
+            .sink { [weak self] point in
+                self?.landingPoint = point
+                self?.refreshAnnotations()
+            }
+            .store(in: &cancellables)
 
         coordinator.$burstPoint
-            .assign(to: &$burstPoint)
+            .sink { [weak self] point in
+                self?.burstPoint = point
+                self?.refreshAnnotations()
+            }
+            .store(in: &cancellables)
 
         coordinator.$isHeadingMode
-            .assign(to: &$isHeadingMode)
+            .sink { [weak self] headingMode in
+                self?.isHeadingMode = headingMode
+            }
+            .store(in: &cancellables)
 
         coordinator.$isRouteVisible
-            .assign(to: &$isRouteVisible)
+            .sink { [weak self] visible in
+                self?.isRouteVisible = visible
+            }
+            .store(in: &cancellables)
 
         coordinator.$isBuzzerMuted
-            .assign(to: &$isBuzzerMuted)
-
-        currentLocationService.$distanceToBalloon
-            .assign(to: &$distanceToBalloon)
-
-        currentLocationService.$isWithin200mOfBalloon
-            .assign(to: &$isWithin200mOfBalloon)
-
-        balloonTrackService.$currentBalloonTrack
-            .assign(to: &$trackPoints)
-
-        balloonTrackService.$balloonPhase
-            .assign(to: &$balloonPhase)
-
-        landingPointTrackingService.$landingHistory
-            .assign(to: &$landingHistory)
+            .sink { [weak self] muted in
+                self?.isBuzzerMuted = muted
+            }
+            .store(in: &cancellables)
 
         coordinator.$transportMode
-            .assign(to: &$transportMode)
+            .sink { [weak self] mode in
+                self?.transportMode = mode
+            }
+            .store(in: &cancellables)
 
         coordinator.$userLocation
-            .assign(to: &$userLocation)
+            .sink { [weak self] location in
+                self?.userLocation = location
+                self?.refreshAnnotations()
+            }
+            .store(in: &cancellables)
 
-        coordinator.$region
-            .assign(to: &$region)
+        coordinator.$suspendCameraUpdates
+            .sink { [weak self] suspended in
+                self?.cameraUpdatesSuspended = suspended
+            }
+            .store(in: &cancellables)
 
-        // APRS sonde name display
-        coordinator.$bleSerialName
+        coordinator.$pendingFrequencySync
+            .assign(to: &$frequencySyncProposal)
+
+        currentLocationService.$distanceToBalloon
+            .sink { [weak self] distance in
+                self?.distanceToBalloon = distance
+            }
+            .store(in: &cancellables)
+
+        currentLocationService.$isWithin200mOfBalloon
+            .sink { [weak self] isWithin in
+                self?.isWithin200mOfBalloon = isWithin
+            }
+            .store(in: &cancellables)
+
+        balloonTrackService.$currentBalloonTrack
+            .sink { [weak self] points in
+                self?.trackPoints = points
+            }
+            .store(in: &cancellables)
+
+        balloonTrackService.$balloonPhase
+            .sink { [weak self] phase in
+                self?.balloonPhase = phase
+                self?.refreshAnnotations()
+            }
+            .store(in: &cancellables)
+
+        landingPointTrackingService.$landingHistory
+            .sink { [weak self] history in
+                self?.landingHistory = history
+            }
+            .store(in: &cancellables)
+
+        aprsTelemetryService.$bleSerialName
+            .map { $0 ?? "" }
             .assign(to: &$bleSerialName)
 
-        coordinator.$aprsSerialName
+        aprsTelemetryService.$aprsSerialName
+            .map { $0 ?? "" }
             .assign(to: &$aprsSerialName)
+    }
+
+    func confirmFrequencySync() {
+        guard let proposal = frequencySyncProposal else {
+            appLog("MapPresenter: confirmFrequencySync called with no proposal", category: .ui, level: .error)
+            return
+        }
+        appLog("MapPresenter: Confirming frequency sync (freq=\(String(format: "%.2f", proposal.frequency)) type=\(proposal.probeType))", category: .ui, level: .info)
+        coordinator.applyPendingFrequencySync()
+    }
+
+    func cancelFrequencySync() {
+        if let proposal = frequencySyncProposal {
+            appLog("MapPresenter: Cancelling frequency sync (freq=\(String(format: "%.2f", proposal.frequency)) type=\(proposal.probeType))", category: .ui, level: .info)
+            coordinator.dismissPendingFrequencySync()
+        }
+    }
+
+    // MARK: - Annotation & Camera Helpers
+
+    private func refreshAnnotations() {
+        var updatedAnnotations: [MapAnnotationItem] = []
+
+        if let balloonCoordinate = currentBalloonCoordinate {
+            updatedAnnotations.append(
+                MapAnnotationItem(
+                    coordinate: balloonCoordinate,
+                    title: "Balloon",
+                    type: .balloon
+                )
+            )
+        }
+
+        if shouldShowUserAnnotation, let userCoordinate = userCoordinate {
+            updatedAnnotations.append(
+                MapAnnotationItem(
+                    coordinate: userCoordinate,
+                    title: "You",
+                    type: .user
+                )
+            )
+        }
+
+        if let landingCoordinate = landingPoint {
+            updatedAnnotations.append(
+                MapAnnotationItem(
+                    coordinate: landingCoordinate,
+                    title: "Landing",
+                    type: .landing
+                )
+            )
+        }
+
+        if let burstCoordinate = burstPoint,
+           balloonPhase == .ascending {
+            updatedAnnotations.append(
+                MapAnnotationItem(
+                    coordinate: burstCoordinate,
+                    title: "Burst",
+                    type: .burst
+                )
+            )
+        }
+
+        annotations = updatedAnnotations
+    }
+
+    private var currentBalloonCoordinate: CLLocationCoordinate2D? {
+        if let displayPosition = balloonDisplayPosition {
+            return displayPosition
+        }
+
+        if let telemetry = balloonTelemetry {
+            return CLLocationCoordinate2D(latitude: telemetry.latitude, longitude: telemetry.longitude)
+        }
+
+        return nil
+    }
+
+    private var userCoordinate: CLLocationCoordinate2D? {
+        guard let userLocation else { return nil }
+        return CLLocationCoordinate2D(latitude: userLocation.latitude, longitude: userLocation.longitude)
+    }
+
+    private var shouldShowUserAnnotation: Bool {
+        guard let userCoordinate, let balloonCoordinate = currentBalloonCoordinate else {
+            return false
+        }
+
+        if !isLanded {
+            return true
+        }
+
+        let userLocation = CLLocation(latitude: userCoordinate.latitude, longitude: userCoordinate.longitude)
+        let balloonLocation = CLLocation(latitude: balloonCoordinate.latitude, longitude: balloonCoordinate.longitude)
+        let distance = userLocation.distance(from: balloonLocation)
+        return distance >= 200
+    }
+
+    private func performCameraFit() {
+        if cameraUpdatesSuspended {
+            appLog("MapPresenter: Camera update suspended (settings open)", category: .general, level: .debug)
+            return
+        }
+
+        if isHeadingMode {
+            appLog("MapPresenter: Skipping camera fit - heading mode active", category: .general, level: .debug)
+            return
+        }
+
+        let coordinates = cameraCoordinates()
+        guard !coordinates.isEmpty,
+              let minLat = coordinates.map({ $0.latitude }).min(),
+              let maxLat = coordinates.map({ $0.latitude }).max(),
+              let minLon = coordinates.map({ $0.longitude }).min(),
+              let maxLon = coordinates.map({ $0.longitude }).max() else {
+            appLog("MapPresenter: No coordinates available for camera fit", category: .general, level: .debug)
+            return
+        }
+
+        let center = CLLocationCoordinate2D(
+            latitude: (minLat + maxLat) / 2,
+            longitude: (minLon + maxLon) / 2
+        )
+
+        let latSpan = max((maxLat - minLat) * 1.4, 0.1)
+        let lonSpan = max((maxLon - minLon) * 1.4, 0.1)
+        let span = MKCoordinateSpan(latitudeDelta: latSpan, longitudeDelta: lonSpan)
+
+        region = MKCoordinateRegion(center: center, span: span)
+        coordinator.logZoomChange("MapPresenter updateCameraToShowAllAnnotations", span: span, center: center)
+    }
+
+    private func cameraCoordinates() -> [CLLocationCoordinate2D] {
+        var allCoordinates = annotations.map { $0.coordinate }
+
+        if let userCoordinate {
+            allCoordinates.append(userCoordinate)
+        }
+
+        if let balloonPath = predictionData?.path, !balloonPath.isEmpty {
+            allCoordinates.append(contentsOf: balloonPath)
+        }
+
+        if let predictionPolyline = predictionPath {
+            allCoordinates.append(contentsOf: coordinates(from: predictionPolyline))
+        }
+
+        if let routePolyline = userRoute {
+            allCoordinates.append(contentsOf: coordinates(from: routePolyline))
+        }
+
+        if !trackPoints.isEmpty {
+            allCoordinates.append(contentsOf: trackPoints.map { CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude) })
+        }
+
+        if !landingHistory.isEmpty {
+            allCoordinates.append(contentsOf: landingHistory.map { $0.coordinate })
+        }
+
+        return allCoordinates
+    }
+
+    private func coordinates(from polyline: MKPolyline) -> [CLLocationCoordinate2D] {
+        var coords = [CLLocationCoordinate2D](repeating: kCLLocationCoordinate2DInvalid, count: polyline.pointCount)
+        polyline.getCoordinates(&coords, range: NSRange(location: 0, length: polyline.pointCount))
+        return coords.filter { CLLocationCoordinate2DIsValid($0) }
     }
 }

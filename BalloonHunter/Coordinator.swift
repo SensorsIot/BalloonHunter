@@ -7,91 +7,8 @@ import MapKit
 import OSLog
 import UIKit
 
-
-// MARK: - Landed Position Smoother
-// Handles adaptive position smoothing for landed balloon display
-
-@MainActor
-class LandedPositionSmoother: ObservableObject {
-    private var landedPositionBuffer: [CLLocationCoordinate2D] = []
-    private let maxBufferSize = 60 // 60 seconds of data
-    private let minSmoothingPoints = 5 // Minimum points for smoothing
-
-    @Published var displayPosition: CLLocationCoordinate2D?
-    @Published var smoothedPosition: CLLocationCoordinate2D?
-
-    func updateLandedPosition(newPosition: CLLocationCoordinate2D, isLanded: Bool) {
-        if isLanded {
-            // Add to smoothing buffer
-            landedPositionBuffer.append(newPosition)
-            if landedPositionBuffer.count > maxBufferSize {
-                landedPositionBuffer.removeFirst()
-            }
-
-            // Immediate display (no delay)
-            if displayPosition == nil {
-                displayPosition = newPosition
-            }
-
-            // Progressive smoothing
-            updateSmoothedPosition()
-
-        } else {
-            // Not landed - clear buffer and use real-time position
-            landedPositionBuffer.removeAll()
-            displayPosition = newPosition
-            smoothedPosition = nil
-        }
-    }
-
-    private func updateSmoothedPosition() {
-        guard landedPositionBuffer.count >= minSmoothingPoints else {
-            // Not enough points yet - use weighted average of available data
-            displayPosition = weightedAverage()
-            return
-        }
-
-        // Full smoothing with available data
-        let smoothed = calculateSmoothedPosition()
-        smoothedPosition = smoothed
-
-        // Gradually transition display position toward smoothed position
-        displayPosition = interpolatePosition(
-            from: displayPosition ?? smoothed,
-            to: smoothed,
-            factor: 0.1 // 10% step toward smoothed position each update
-        )
-    }
-
-    private func weightedAverage() -> CLLocationCoordinate2D {
-        let recent = landedPositionBuffer.suffix(min(landedPositionBuffer.count, 10))
-        let lat = recent.map { $0.latitude }.reduce(0, +) / Double(recent.count)
-        let lon = recent.map { $0.longitude }.reduce(0, +) / Double(recent.count)
-        return CLLocationCoordinate2D(latitude: lat, longitude: lon)
-    }
-
-    private func calculateSmoothedPosition() -> CLLocationCoordinate2D {
-        // Use all available data (up to 60 points)
-        let lat = landedPositionBuffer.map { $0.latitude }.reduce(0, +) / Double(landedPositionBuffer.count)
-        let lon = landedPositionBuffer.map { $0.longitude }.reduce(0, +) / Double(landedPositionBuffer.count)
-        return CLLocationCoordinate2D(latitude: lat, longitude: lon)
-    }
-
-    private func interpolatePosition(from: CLLocationCoordinate2D, to: CLLocationCoordinate2D, factor: Double) -> CLLocationCoordinate2D {
-        let lat = from.latitude + (to.latitude - from.latitude) * factor
-        let lon = from.longitude + (to.longitude - from.longitude) * factor
-        return CLLocationCoordinate2D(latitude: lat, longitude: lon)
-    }
-
-    func reset() {
-        landedPositionBuffer.removeAll()
-        displayPosition = nil
-        smoothedPosition = nil
-    }
-}
-
 // MARK: - Coordinator
-// Transitional class for service coordination and dependency injection
+// Central coordinator that wires services together and exposes app-facing intents
 
 @MainActor
 final class ServiceCoordinator: ObservableObject {
@@ -103,18 +20,15 @@ final class ServiceCoordinator: ObservableObject {
     // MARK: - Published Properties (moved from MapState)
     
     // Map visual elements
-    @Published var annotations: [MapAnnotationItem] = []
     @Published var predictionPath: MKPolyline? = nil
     @Published var userRoute: MKPolyline? = nil
-    @Published var region: MKCoordinateRegion? = nil
     
     // Data state
     @Published var balloonTelemetry: TelemetryData? = nil
     @Published var userLocation: LocationData? = nil
     @Published var landingPoint: CLLocationCoordinate2D? = nil
-    @Published var isBalloonLanded: Bool = false
     @Published var burstPoint: CLLocationCoordinate2D? = nil
-    @Published var balloonDisplayPosition: CLLocationCoordinate2D? = nil // Smoothed position for display
+    @Published var balloonDisplayPosition: CLLocationCoordinate2D? = nil
     
     // Additional data for DataPanelView
     @Published var predictionData: PredictionData? = nil
@@ -122,6 +36,7 @@ final class ServiceCoordinator: ObservableObject {
     @Published var balloonTrackHistory: [TelemetryData] = []
     @Published var connectionStatus: ConnectionStatus = .disconnected
     @Published var smoothedDescentRate: Double? = nil
+    @Published var predictionUsesSmoothedDescent: Bool = false
     @Published var smoothedVerticalSpeed: Double = 0.0
     @Published var smoothedHorizontalSpeed: Double = 0.0
     @Published var isTelemetryStale: Bool = false
@@ -131,11 +46,10 @@ final class ServiceCoordinator: ObservableObject {
     // AFC tracking (moved from SettingsView for proper separation of concerns)
     @Published var afcFrequencies: [Int] = []
     @Published var afcMovingAverage: Int = 0
+    @Published var bleTelemetryIsAvailable: Bool = false
+    @Published var aprsTelemetryIsAvailable: Bool = false
+    @Published var pendingFrequencySync: FrequencySyncProposal?
 
-    // Apple Maps navigation tracking
-    private var hasStartedAppleMapsNavigation: Bool = false
-    private var lastAppleMapsDestination: CLLocationCoordinate2D?
-    
     // Startup sequence state
     @Published var startupProgress: String = "Initializing services..."
     @Published var currentStartupStep: Int = 0
@@ -154,10 +68,6 @@ final class ServiceCoordinator: ObservableObject {
     @Published var showAllAnnotations: Bool = false
     @Published var suspendCameraUpdates: Bool = false
 
-    // APRS sonde name mismatch display
-    @Published var bleSerialName: String = ""
-    @Published var aprsSerialName: String = ""
-    
     // Core services (initialized in init for MapState dependencies)
     let currentLocationService: CurrentLocationService
     let bleCommunicationService: BLECommunicationService
@@ -191,7 +101,9 @@ final class ServiceCoordinator: ObservableObject {
     private var lastUserLocation: CLLocationCoordinate2D?
     private var lastLandingPoint: CLLocationCoordinate2D?
     private var lastUserLocationUpdateTime = Date.distantPast
-    
+    private var lastAprsSyncCommandTime: Date?
+    private var lastAprsSyncPromptTime: Date?
+
     // Simple timing constants (replace complex mode machine)
     private let routeUpdateInterval: TimeInterval = 60  // Always 60 seconds
     private let predictionInterval: TimeInterval = 60  // Every 60 seconds per requirements
@@ -211,9 +123,6 @@ final class ServiceCoordinator: ObservableObject {
             }
         }
     }
-
-    // Adaptive position smoothing for landed balloons
-    private let landedPositionSmoother = LandedPositionSmoother()
 
     // MARK: - Location Service Mode Management
 
@@ -284,16 +193,7 @@ final class ServiceCoordinator: ObservableObject {
 
         setupDirectSubscriptions()
 
-        landingPointTrackingService.$lastLandingPrediction
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] prediction in
-                guard let self = self, let prediction = prediction else { return }
-                if self.isBalloonLanded && prediction.source != .manual {
-                    return
-                }
-                self.landingPoint = prediction.coordinate
-            }
-            .store(in: &cancellables)
+        // Removed: lastLandingPrediction subscription - no longer using persisted landing points as fallback
 
         appLog("ServiceCoordinator: Simplified architecture initialized", category: .general, level: .info)
     }
@@ -412,102 +312,6 @@ final class ServiceCoordinator: ObservableObject {
     
     // Settings response handling removed from startup; BLE will fetch opportunistically
     
-    // loadAllPersistenceData moved to CoordinatorServices.swift
-    
-    private func waitForBLEPacketsAndDetermineLandingPoint(bleConnected: Bool) async {
-        appLog("ServiceCoordinator: Wait max 5 seconds for BLE packet signals", category: .general, level: .info)
-        
-        if !bleConnected {
-            // No BLE connection - go straight to landing point determination
-            appLog("ServiceCoordinator: No BLE connection - proceeding to landing point determination", category: .general, level: .info)
-            await determineLandingPoint()
-            return
-        }
-        
-        // Use the BLE service's published telemetry availability state
-        let isTelemetryAvailable = bleCommunicationService.telemetryAvailabilityState
-        
-        if isTelemetryAvailable {
-            appLog("ServiceCoordinator: Telemetry available - BLE service confirms Type 1 message received", category: .general, level: .info)
-            
-            // Get telemetry data and process it
-            if let telemetry = bleCommunicationService.latestTelemetry {
-                balloonTelemetry = telemetry
-
-                // Update balloon display position for flying balloons (landed balloons use position smoother)
-                if !balloonTrackService.isBalloonLanded {
-                    let telemetryPosition = CLLocationCoordinate2D(latitude: telemetry.latitude, longitude: telemetry.longitude)
-                    balloonDisplayPosition = telemetryPosition
-                    currentLocationService.updateBalloonDisplayPosition(telemetryPosition)
-                }
-
-                // Call balloon prediction service and routing service and wait for completion
-                await processBalloonTelemetry()
-            }
-        } else {
-            appLog("ServiceCoordinator: No telemetry available - BLE service reports no Type 1 messages", category: .general, level: .info)
-        }
-        
-        // Determine valid landing point with FSD priority
-        await determineLandingPoint()
-    }
-    
-    private func processBalloonTelemetry() async {
-        guard balloonTelemetry != nil else { return }
-        
-        appLog("ServiceCoordinator: Processing balloon telemetry - calling prediction and routing services", category: .general, level: .info)
-        
-        // Call balloon prediction service
-        await predictionService.triggerManualPrediction()
-        
-        // Call routing service if we have user location
-        if userLocation != nil {
-            await updateRoute()
-        }
-        
-        // Wait for completion
-        try? await Task.sleep(nanoseconds: 1_000_000_000) // 1 second for services to complete
-    }
-    
-    private func determineLandingPoint() async {
-        appLog("ServiceCoordinator: Determining landing point per FSD priority order", category: .general, level: .info)
-        
-        // Priority 1: If telemetry received and balloon has landed, current position is landing point
-        // Use simple criteria: low altitude OR low vertical speed (more permissive than original)
-        if let telemetry = balloonTelemetry {
-            let altitudeCheck = telemetry.altitude < 1000 && abs(telemetry.verticalSpeed) < 2.0
-            let lowAltitudeCheck = telemetry.altitude < 500
-            appLog("ServiceCoordinator: Landing check - altitude: \(Int(telemetry.altitude))m, vSpeed: \(String(format: "%.1f", telemetry.verticalSpeed))m/s, lowAlt: \(lowAltitudeCheck), combined: \(altitudeCheck)", category: .general, level: .info)
-            
-            if altitudeCheck || lowAltitudeCheck {
-                let currentPosition = CLLocationCoordinate2D(latitude: telemetry.latitude, longitude: telemetry.longitude)
-                landingPoint = currentPosition
-                appLog("ServiceCoordinator: Landing point set from current balloon position (landed)", category: .general, level: .info)
-                return
-            }
-        }
-        
-        // Priority 2: If balloon in flight, wait for and use predicted landing position
-        if balloonTelemetry != nil {
-            appLog("ServiceCoordinator: Telemetry available - waiting for prediction to complete", category: .general, level: .info)
-            
-            // Wait up to 10 seconds for prediction to complete
-            let predictionTimeout = Date().addingTimeInterval(10)
-            while Date() < predictionTimeout {
-                if let predictedLanding = predictionData?.landingPoint {
-                    landingPoint = predictedLanding
-                    appLog("ServiceCoordinator: Landing point set from prediction", category: .general, level: .info)
-                    return
-                }
-                try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 second checks
-            }
-            
-            appLog("ServiceCoordinator: Prediction timeout - falling back to other sources", category: .general, level: .info)
-        }
-        
-        appLog("ServiceCoordinator: No valid landing point available", category: .general, level: .info)
-    }
-    
     private func setupInitialMapDisplay() async {
         appLog("ServiceCoordinator: Display initial map with maximum zoom level showing all annotations", category: .general, level: .info)
         
@@ -548,54 +352,67 @@ final class ServiceCoordinator: ObservableObject {
             }
             .store(in: &cancellables)
         
-        // Subscribe to balloon track service for smoothed values
-        balloonTrackService.$smoothedVerticalSpeed
+                // Subscribe to balloon track service for motion metrics
+        balloonTrackService.$motionMetrics
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] speed in
-                self?.smoothedVerticalSpeed = speed
+            .sink { [weak self] metrics in
+                guard let self = self else { return }
+                self.smoothedVerticalSpeed = metrics.smoothedVerticalSpeedMS
+                self.smoothedHorizontalSpeed = metrics.smoothedHorizontalSpeedMS
+                self.smoothedDescentRate = metrics.adjustedDescentRateMS
+                self.predictionUsesSmoothedDescent = metrics.adjustedDescentRateMS != nil
             }
             .store(in: &cancellables)
-            
-        balloonTrackService.$smoothedHorizontalSpeed
+
+        balloonPositionService.$lastTelemetrySource
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] speed in
-                self?.smoothedHorizontalSpeed = speed
+            .sink { [weak self] source in
+                guard let self = self else { return }
+                if source == .aprs {
+                    self.scheduleFrequencySyncIfNeeded()
+                }
             }
             .store(in: &cancellables)
-            
-        balloonTrackService.$isTelemetryStale
+
+        balloonPositionService.$isTelemetryStale
             .receive(on: DispatchQueue.main)
             .sink { [weak self] stale in
                 self?.isTelemetryStale = stale
             }
             .store(in: &cancellables)
-            
-        // Subscribe to advanced landing detection from BalloonTrackService
-        balloonTrackService.$isBalloonLanded
+
+        balloonPositionService.$bleTelemetryIsAvailable
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] hasLanded in
-                self?.isBalloonLanded = hasLanded
-                if hasLanded, let position = self?.balloonTrackService.landingPosition {
+            .assign(to: &self.$bleTelemetryIsAvailable)
+
+        balloonPositionService.$aprsTelemetryIsAvailable
+            .receive(on: DispatchQueue.main)
+            .assign(to: &self.$aprsTelemetryIsAvailable)
+
+        // Subscribe to balloon phase updates for landing handling
+        balloonTrackService.$balloonPhase
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] phase in
+                guard let self = self else { return }
+                if phase == .landed, let position = self.balloonTrackService.landingPosition {
                     // Advanced landing detection triggered - update landing point
-                    self?.landingPoint = position
+                    self.landingPoint = position
+                    self.balloonDisplayPosition = position
+                    self.currentLocationService.updateBalloonDisplayPosition(position)
                     appLog("ServiceCoordinator: Advanced landing detection - landing point set to [\(String(format: "%.4f", position.latitude)), \(String(format: "%.4f", position.longitude))]", category: .general, level: .info)
+
+                    // Trigger route calculation now that landing point is available
+                    Task {
+                        await self.updateRoute()
+                    }
+                } else if let telemetry = self.balloonTelemetry {
+                    let livePosition = CLLocationCoordinate2D(latitude: telemetry.latitude, longitude: telemetry.longitude)
+                    self.balloonDisplayPosition = livePosition
+                    self.currentLocationService.updateBalloonDisplayPosition(livePosition)
                 }
             }
             .store(in: &cancellables)
 
-        // Subscribe to adjusted descent rate from BalloonTrackService
-        balloonTrackService.$adjustedDescentRate
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] rate in
-                guard let self = self else { return }
-                if let r = rate {
-                    self.smoothedDescentRate = r
-                } else {
-                    self.smoothedDescentRate = nil
-                }
-            }
-            .store(in: &cancellables)
-            
         // UI binds directly to PredictionService for time strings
             
         // Subscribe to device settings changes
@@ -607,39 +424,76 @@ final class ServiceCoordinator: ObservableObject {
             .store(in: &cancellables)
 
 
-        // Subscribe to landed position smoother for display position
-        landedPositionSmoother.$displayPosition
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] smoothedPos in
-                self?.balloonDisplayPosition = smoothedPos
-                self?.currentLocationService.updateBalloonDisplayPosition(smoothedPos)
-            }
-            .store(in: &cancellables)
-
         // Subscribe to APRS sonde names for display
-        balloonPositionService.aprsService.$bleSerialName
+
+        // Frequency sync scenarios per FSD requirements
+        // Scenario 1: RadioSondyGo connects after startup with APRS data - sync on first BLE packet
+        bleCommunicationService.$isReadyForCommands
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] bleName in
-                self?.bleSerialName = bleName ?? ""
+            .sink { [weak self] isReady in
+                if isReady {
+                    self?.handleFirstBLEConnection()
+                }
             }
             .store(in: &cancellables)
 
-        balloonPositionService.aprsService.$aprsSerialName
+        // Scenario 2: APRS data arrives when RadioSondyGo already connected - sync immediately
+        balloonPositionService.$aprsTelemetryIsAvailable
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] aprsName in
-                self?.aprsSerialName = aprsName ?? ""
+            .sink { [weak self] isAvailable in
+                if isAvailable {
+                    self?.handleAPRSDataAvailable()
+                }
             }
             .store(in: &cancellables)
 
         appLog("ServiceCoordinator: Setup direct telemetry, location, and BLE connection subscriptions", category: .general, level: .debug)
     }
-        
-    // MARK: - High-Level UI Methods for View Actions
-    
-    func triggerShowAllAnnotations() {
-        appLog("🔍 ZOOM: ServiceCoordinator triggerShowAllAnnotations called (computing region)", category: .general, level: .info)
-        updateCameraToShowAllAnnotations()
+
+    // MARK: - Frequency Sync Handlers
+
+    private func handleFirstBLEConnection() {
+        // Scenario 1: RadioSondyGo connects after APRS data is available
+        guard aprsTelemetryIsAvailable,
+              let telemetry = balloonPositionService.currentTelemetry,
+              telemetry.softwareVersion == "APRS" else {
+            appLog("ServiceCoordinator: RadioSondyGo connected but no APRS telemetry for frequency sync", category: .general, level: .debug)
+            return
+        }
+
+        appLog("ServiceCoordinator: RadioSondyGo connected with APRS data - syncing frequency", category: .general, level: .info)
+        syncFrequencyFromAPRS(aprsTelemetry: telemetry)
     }
+
+    private func handleAPRSDataAvailable() {
+        // Scenario 2: APRS data arrives when RadioSondyGo is already connected
+        guard bleCommunicationService.isReadyForCommands,
+              let telemetry = balloonPositionService.currentTelemetry,
+              telemetry.softwareVersion == "APRS" else {
+            appLog("ServiceCoordinator: APRS data available but not ready for frequency sync", category: .general, level: .debug)
+            return
+        }
+
+        appLog("ServiceCoordinator: APRS data available with RadioSondyGo connected - syncing frequency", category: .general, level: .info)
+        syncFrequencyFromAPRS(aprsTelemetry: telemetry)
+    }
+
+    private func syncFrequencyFromAPRS(aprsTelemetry: TelemetryData) {
+        let aprsFreq = aprsTelemetry.frequency
+        let bleFreq = bleCommunicationService.deviceSettings.frequency
+        let freqMismatch = abs(aprsFreq - bleFreq) > 0.01 // 0.01 MHz tolerance
+
+        if freqMismatch {
+            appLog("ServiceCoordinator: Syncing RadioSondyGo frequency from APRS - \(String(format: "%.2f", bleFreq)) MHz → \(String(format: "%.2f", aprsFreq)) MHz", category: .general, level: .info)
+
+            let probeType = BLECommunicationService.ProbeType.from(string: aprsTelemetry.probeType ?? "RS41") ?? .rs41
+            bleCommunicationService.setFrequency(aprsFreq, probeType: probeType)
+        } else {
+            appLog("ServiceCoordinator: Frequencies match - no sync needed (\(String(format: "%.2f", aprsFreq)) MHz)", category: .general, level: .debug)
+        }
+    }
+
+    // MARK: - High-Level UI Methods for View Actions
     
     func triggerPrediction() {
         appLog("ServiceCoordinator: Manual prediction triggered from UI", category: .general, level: .info)
@@ -663,41 +517,7 @@ final class ServiceCoordinator: ObservableObject {
         }
     }
     
-    func requestDeviceParameters() {
-        appLog("ServiceCoordinator: Requesting device parameters from BLE device", category: .general, level: .info)
-        bleCommunicationService.getParameters()
-    }
-    
-    func setMuteState(_ muted: Bool) {
-        appLog("ServiceCoordinator: Setting mute state to \(muted)", category: .general, level: .info)
-        isBuzzerMuted = muted
-        bleCommunicationService.setMute(muted)
-    }
-    
-    func sendFrequencyAndTypeToDevice(frequency: Double, probeType: String) {
-        appLog("ServiceCoordinator: Sending frequency \(frequency) MHz and type \(probeType) to device", category: .ble, level: .info)
-        
-        // Map probe type to command value (matching BLEService.ProbeType enum)
-        let sondeTypeMapping = [
-            "RS41": 1, "M20": 2, "M10": 3, "PILOT": 4, "DFM": 5
-        ]
-        let probeTypeNumber = sondeTypeMapping[probeType] ?? 1
-        
-        // Generate and send command
-        let commandString = "o{f=\(String(format: "%.2f", frequency))/tipo=\(probeTypeNumber)}o"
-        bleCommunicationService.sendCommand(command: commandString)
-    }
-    
-    func saveDataOnAppClose() {
-        appLog("ServiceCoordinator: Saving data on app close", category: .general, level: .info)
-        persistenceService.saveOnAppClose(balloonTrackService: balloonTrackService,
-                                         landingPointTrackingService: landingPointTrackingService)
-    }
-    
-    
     // MARK: - Simplified Event Handlers
-    
-    
     
     // Direct telemetry handling with prediction timing
     private func handleBalloonTelemetry(_ telemetry: TelemetryData) {
@@ -712,14 +532,17 @@ final class ServiceCoordinator: ObservableObject {
         // Update AFC frequency tracking (moved from SettingsView for proper separation of concerns)
         updateAFCTracking(telemetry)
 
-        // Update landed position smoother with new position
-        let balloonPosition = CLLocationCoordinate2D(latitude: telemetry.latitude, longitude: telemetry.longitude)
-        landedPositionSmoother.updateLandedPosition(newPosition: balloonPosition, isLanded: isBalloonLanded)
+        // Update display position: use landing point when landed, otherwise live telemetry
+        if isLanded, let landingPosition = balloonTrackService.landingPosition {
+            balloonDisplayPosition = landingPosition
+            currentLocationService.updateBalloonDisplayPosition(landingPosition)
+        } else {
+            let livePosition = CLLocationCoordinate2D(latitude: telemetry.latitude, longitude: telemetry.longitude)
+            balloonDisplayPosition = livePosition
+            currentLocationService.updateBalloonDisplayPosition(livePosition)
+        }
 
         // Adjusted descent rate is computed by BalloonTrackService; subscription updates UI
-
-        // Update map with balloon position and annotations
-        updateMapWithBalloonPosition(telemetry)
         
         // Startup trigger: first telemetry after launch -> immediate prediction once (but not if landed)
         if !hasTriggeredStartupPrediction && !isLanded {
@@ -770,27 +593,6 @@ final class ServiceCoordinator: ObservableObject {
         }
         
         lastUserLocation = userCoord
-        
-        // Update map annotations to include user location
-        if let telemetry = balloonTelemetry {
-            updateMapWithBalloonPosition(telemetry)
-        }
-    }
-
-    // MARK: - APRS Sonde Name Display (for tracking view)
-
-    private func handleSondeNameMismatchDetection(_ mismatchDetected: Bool) {
-        if mismatchDetected {
-            // Get the sonde names from APRS service for display purposes
-            if let bleSerial = balloonPositionService.aprsService.bleSerialName,
-               let aprsSerial = balloonPositionService.aprsService.aprsSerialName {
-
-                bleSerialName = bleSerial
-                aprsSerialName = aprsSerial
-
-                appLog("ServiceCoordinator: Sonde name difference detected - BLE: \(bleSerial), APRS: \(aprsSerial)", category: .service, level: .info)
-            }
-        }
     }
 
     // MARK: - Prediction Logic
@@ -845,6 +647,12 @@ final class ServiceCoordinator: ObservableObject {
     }
     
     private func executePrediction(telemetry: TelemetryData, measuredDescentRate: Double?, force: Bool) async {
+        // Skip predictions for landed balloons
+        if balloonTrackService.balloonPhase == .landed {
+            appLog("ServiceCoordinator: Skipping prediction - balloon is already landed", category: .general, level: .info)
+            return
+        }
+
         // Check cache first
         let cacheKey = generateCacheKey(telemetry)
         if let cachedPrediction = await predictionCache.get(key: cacheKey), !force {
@@ -917,50 +725,6 @@ final class ServiceCoordinator: ObservableObject {
     
     // MARK: - Simplified Business Logic
     
-    private func updateMapWithBalloonPosition(_ telemetry: TelemetryData) {
-        // Use smoothed position for display if available (for landed balloons), otherwise use raw telemetry
-        let displayCoordinate = balloonDisplayPosition ?? CLLocationCoordinate2D(latitude: telemetry.latitude, longitude: telemetry.longitude)
-
-        // Update balloon annotation directly
-        let balloonAnnotation = MapAnnotationItem(
-            coordinate: displayCoordinate,
-            title: "Balloon",
-            type: .balloon
-        )
-        
-        // Update user annotation if available (when navigation is needed)
-        var annotations: [MapAnnotationItem] = [balloonAnnotation]
-        if shouldShowNavigation, let userLocation = userLocation {
-            let userAnnotation = MapAnnotationItem(
-                coordinate: CLLocationCoordinate2D(latitude: userLocation.latitude, longitude: userLocation.longitude),
-                title: "You",
-            type: .user
-            )
-            annotations.append(userAnnotation)
-        }
-        
-        // Add landing point if available
-        if let landingPoint = getCurrentLandingPoint() {
-            let landingAnnotation = MapAnnotationItem(coordinate: landingPoint, title: "Landing",
-                type: .landing)
-            annotations.append(landingAnnotation)
-        }
-        
-        // Add burst point if available AND balloon is ascending
-        if let burstPoint = burstPoint,
-           balloonTrackService.balloonPhase == .ascending {
-            let burstAnnotation = MapAnnotationItem(coordinate: burstPoint, title: "Burst",
-                type: .burst)
-            annotations.append(burstAnnotation)
-        }
-        
-        // Direct map state update (no versioning complexity)
-        self.annotations = annotations
-        balloonTelemetry = telemetry
-        
-        // Updated map annotations (log removed)
-    }
-    
     // Prediction logic now handled directly in ServiceCoordinator
     
     func updateMapWithPrediction(_ prediction: PredictionData) {
@@ -984,6 +748,11 @@ final class ServiceCoordinator: ObservableObject {
         landingPoint = prediction.landingPoint
         burstPoint = prediction.burstPoint
 
+        // Trigger route calculation for updated landing point
+        Task {
+            await updateRoute()
+        }
+
         if let landingCoordinate = prediction.landingPoint {
             landingPointTrackingService.recordLandingPrediction(
                 coordinate: landingCoordinate,
@@ -1000,13 +769,8 @@ final class ServiceCoordinator: ObservableObject {
         // Phase 2: Mirror landing point in DomainModel
         // Landing point already updated in ServiceCoordinator state above
         
-        // Update map annotations to include landing and burst points
-        if let telemetry = bleCommunicationService.latestTelemetry {
-            updateMapWithBalloonPosition(telemetry)
-        }
-        
-        // Map annotations updated (no automatic zoom change)
-        
+        // MapPresenter consumes updated coordinator state to refresh annotations
+
         // Trigger route update if landing point moved significantly
         if shouldUpdateRouteFromLandingChange {
             Task {
@@ -1144,63 +908,6 @@ final class ServiceCoordinator: ObservableObject {
         lastRouteCalculationTime = Date()
     }
     
-    func updateCameraToShowAllAnnotations() {
-        if suspendCameraUpdates {
-            appLog("ServiceCoordinator: Camera update suspended (settings open)", category: .general, level: .debug)
-            return
-        }
-        // Don't override zoom when in heading mode - let TrackingMapView handle it
-        if isHeadingMode {
-            appLog("ServiceCoordinator: Skipping camera update - heading mode active", category: .general, level: .debug)
-            return
-        }
-        
-        // Camera update to show all annotations and overlay paths with appropriate zoom level
-        let allCoordinates = annotations.map { $0.coordinate }
-        guard !allCoordinates.isEmpty else { 
-            appLog("ServiceCoordinator: No annotations to show on map", category: .general, level: .debug)
-            return 
-        }
-        
-        // Include user location in calculations if available
-        var coordinates = allCoordinates
-        if let userLocation = userLocation {
-            coordinates.append(CLLocationCoordinate2D(latitude: userLocation.latitude, longitude: userLocation.longitude))
-        }
-        // Include balloon track points
-        let trackPoints = balloonTrackService.getAllTrackPoints()
-        if !trackPoints.isEmpty {
-            coordinates.append(contentsOf: trackPoints.map { CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude) })
-        }
-        // Include prediction path points (if available)
-        if let path = predictionData?.path, !path.isEmpty {
-            coordinates.append(contentsOf: path)
-        }
-        
-        // Calculate bounding region
-        let minLat = coordinates.map { $0.latitude }.min()!
-        let maxLat = coordinates.map { $0.latitude }.max()!
-        let minLon = coordinates.map { $0.longitude }.min()!
-        let maxLon = coordinates.map { $0.longitude }.max()!
-        
-        let center = CLLocationCoordinate2D(
-            latitude: (minLat + maxLat) / 2,
-            longitude: (minLon + maxLon) / 2
-        )
-        
-        // Calculate span with padding and minimum zoom constraints
-        // Use consistent minimum zoom level with heading mode
-        let latSpan = max((maxLat - minLat) * 1.4, 0.1) // Add 40% padding, minimum 0.1 degrees (~10km)
-        let lonSpan = max((maxLon - minLon) * 1.4, 0.1) // Add 40% padding, minimum 0.1 degrees (~10km)
-        
-        let span = MKCoordinateSpan(latitudeDelta: latSpan, longitudeDelta: lonSpan)
-        let zoomKm = Int(span.latitudeDelta * 111) // Approximate km conversion
-        
-        region = MKCoordinateRegion(center: center, span: span)
-        
-        appLog("🔍 ZOOM: ServiceCoordinator updateCameraToShowAllAnnotations - \(zoomKm)km (\(String(format: "%.3f", span.latitudeDelta))°) for \(coordinates.count) points at [\(String(format: "%.4f", center.latitude)), \(String(format: "%.4f", center.longitude))]", category: .general, level: .info)
-    }
-
     
     // MARK: - Persistence Data Loading (Per FSD)
     
@@ -1212,38 +919,10 @@ final class ServiceCoordinator: ObservableObject {
         // 2. Historic track data - load and add to current track if sonde matches
         // Note: This will be handled by BalloonTrackService when first telemetry arrives
         
-        // Landing point determination follows FSD 2-priority system in determineLandingPoint()
+        // Landing point state is supplied by BalloonTrackService and persistence caches.
         
         appLog("ServiceCoordinator: Persistence data loading complete", category: .general, level: .info)
         
-        // Update annotations with current data (user location + landing point, even without telemetry)
-        updateAnnotationsWithoutTelemetry()
-    }
-    
-    // determineLandingPointWithPriorities moved to CoordinatorServices.swift
-    
-    private func updateAnnotationsWithoutTelemetry() {
-        var annotations: [MapAnnotationItem] = []
-        
-        // Add user annotation if available (when navigation is needed)
-        if shouldShowNavigation, let userLocation = userLocation {
-            let userAnnotation = MapAnnotationItem(
-                coordinate: CLLocationCoordinate2D(latitude: userLocation.latitude, longitude: userLocation.longitude),
-                title: "You",
-            type: .user
-            )
-            annotations.append(userAnnotation)
-        }
-        
-        // Add landing point if available
-        if let landingPoint = getCurrentLandingPoint() {
-            let landingAnnotation = MapAnnotationItem(coordinate: landingPoint, title: "Landing",
-                type: .landing)
-            annotations.append(landingAnnotation)
-        }
-        
-        self.annotations = annotations
-        appLog("ServiceCoordinator: Updated annotations without telemetry - \(annotations.count) annotations", category: .general, level: .info)
     }
     
     // MARK: - Helper Methods
@@ -1267,15 +946,6 @@ final class ServiceCoordinator: ObservableObject {
         let mode = transportMode == .car ? "car" : "bike"
         
         return "route-\(fromLat)-\(fromLon)-\(toLat)-\(toLon)-\(mode)"
-    }
-    
-    private func getCurrentLandingPoint() -> CLLocationCoordinate2D? {
-        return landingPoint
-    }
-    
-    func getAllBalloonTrackPoints() -> [BalloonTrackPoint] {
-        // Get from balloon track service
-        return balloonTrackService.getAllTrackPoints()
     }
     
     // MARK: - Automatic Descent Rate Calculation moved to BalloonTrackService
@@ -1332,9 +1002,6 @@ final class ServiceCoordinator: ObservableObject {
         mapItem.openInMaps(launchOptions: launchOptions)
         appLog("ServiceCoordinator: Opened Apple Maps navigation to landing point", category: .general, level: .info)
 
-        // Track that navigation was started for update notifications
-        hasStartedAppleMapsNavigation = true
-        lastAppleMapsDestination = landingPoint
     }
 
     private func checkForNavigationUpdate(previousLandingPoint: CLLocationCoordinate2D?, newLandingPoint: CLLocationCoordinate2D) {
@@ -1384,9 +1051,73 @@ final class ServiceCoordinator: ObservableObject {
         }
     }
 
-    func updateLastAppleMapsDestination(_ destination: CLLocationCoordinate2D) {
-        lastAppleMapsDestination = destination
-        appLog("ServiceCoordinator: Updated last Apple Maps destination", category: .general, level: .debug)
+    private func scheduleFrequencySyncIfNeeded() {
+        // Skip during startup - automatic sync handled separately
+        guard isStartupComplete else { return }
+
+        guard aprsTelemetryIsAvailable,
+              let telemetry = balloonTelemetry else { return }
+
+        guard telemetry.frequency > 0 else { return }
+
+        guard bleCommunicationService.connectionStatus == .connected,
+              bleCommunicationService.isReadyForCommands else { return }
+
+        guard pendingFrequencySync == nil else { return }
+
+        if let lastPrompt = lastAprsSyncPromptTime,
+           Date().timeIntervalSince(lastPrompt) < 60 {
+            return
+        }
+
+        if let lastSync = lastAprsSyncCommandTime,
+           Date().timeIntervalSince(lastSync) < 60 {
+            return
+        }
+
+        let deviceSettings = bleCommunicationService.deviceSettings
+        guard let proposal = makeFrequencySyncProposal(from: telemetry, deviceSettings: deviceSettings) else { return }
+
+        pendingFrequencySync = proposal
+        lastAprsSyncPromptTime = Date()
+    }
+
+    private func makeFrequencySyncProposal(from telemetry: TelemetryData, deviceSettings: DeviceSettings) -> FrequencySyncProposal? {
+        let frequencyMismatch = abs(deviceSettings.frequency - telemetry.frequency) > 0.005
+        let aprsProbeTypeRaw = telemetry.probeType.uppercased()
+        let deviceProbeType = deviceSettings.probeType.uppercased()
+
+        let normalizedProbeType: String
+        if !aprsProbeTypeRaw.isEmpty {
+            normalizedProbeType = aprsProbeTypeRaw
+        } else if !deviceProbeType.isEmpty {
+            normalizedProbeType = deviceProbeType
+        } else {
+            normalizedProbeType = "RS41"
+        }
+
+        let typeMismatch = !aprsProbeTypeRaw.isEmpty && aprsProbeTypeRaw != deviceProbeType
+
+        guard frequencyMismatch || typeMismatch else { return nil }
+
+        return FrequencySyncProposal(frequency: telemetry.frequency, probeType: normalizedProbeType)
+    }
+
+    func applyPendingFrequencySync() {
+        guard let proposal = pendingFrequencySync else { return }
+        appLog("ServiceCoordinator: Applying APRS frequency sync (freq=\(String(format: "%.2f", proposal.frequency)) MHz, type=\(proposal.probeType))", category: .general, level: .info)
+        let probeType = BLECommunicationService.ProbeType.from(string: proposal.probeType) ?? .rs41
+        bleCommunicationService.setFrequency(proposal.frequency, probeType: probeType)
+        lastAprsSyncCommandTime = Date()
+        pendingFrequencySync = nil
+    }
+
+    func dismissPendingFrequencySync() {
+        if pendingFrequencySync != nil {
+            appLog("ServiceCoordinator: APRS frequency sync dismissed by user", category: .general, level: .info)
+            pendingFrequencySync = nil
+            lastAprsSyncPromptTime = Date()
+        }
     }
 
     func logZoomChange(_ description: String, span: MKCoordinateSpan, center: CLLocationCoordinate2D? = nil) {

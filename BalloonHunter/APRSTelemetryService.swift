@@ -31,15 +31,16 @@ final class APRSTelemetryService: ObservableObject {
     @Published var telemetryAvailabilityState: Bool = false
     @Published var latestTelemetry: TelemetryData? = nil
     @Published var connectionStatus: ConnectionStatus = .disconnected
-    @Published var lastTelemetryUpdateTime: Date? = nil
+    var lastTelemetryUpdateTime: Date? = nil
     @Published var isHealthy: Bool = false
 
     // APRS-specific published state
-    @Published var currentStationId: String = "06610" // Default to Payerne
-    @Published var lastSondeSerial: String? = nil
-    @Published var pollCadence: TimeInterval = 60.0
-    @Published var apiCallCount: Int = 0
-    @Published var lastApiError: String? = nil
+    var currentStationId: String = "06610" // Default to Payerne
+    var lastSondeSerial: String? = nil
+    var pollCadence: TimeInterval = 60.0
+    private var apiCallCount: Int = 0
+    var lastApiError: String? = nil
+    private var isProvidingTelemetry: Bool = false
 
     // Sonde name mismatch tracking (display only)
     @Published var bleSerialName: String? = nil
@@ -61,7 +62,9 @@ final class APRSTelemetryService: ObservableObject {
     // MARK: - Constants
     private static let sondeHubBaseURL = "https://api.v2.sondehub.org"
     private static let fastPollInterval: TimeInterval = 15.0
-    private static let healthCheckInterval: TimeInterval = 60.0
+    private static let landedThreshold: TimeInterval = 120.0
+    private static let landedConfirmationWindow: TimeInterval = 1_800.0
+    private static let landedConfirmationInterval: TimeInterval = 300.0
     private static let apiTimeout: TimeInterval = 30.0
 
     init(userSettings: UserSettings) {
@@ -75,8 +78,6 @@ final class APRSTelemetryService: ObservableObject {
         // Set initial connection status
         connectionStatus = .disconnected
         isHealthy = false
-
-        setupPolling()
 
         // Subscribe to station ID changes
         userSettings.$stationId
@@ -99,6 +100,7 @@ final class APRSTelemetryService: ObservableObject {
         isPollingActive = true
         pollCadence = Self.fastPollInterval
         connectionStatus = .connecting
+        isProvidingTelemetry = false
 
         appLog("APRSTelemetryService: Starting APRS polling every \(Int(pollCadence))s for station \(currentStationId)", category: .service, level: .info)
 
@@ -122,6 +124,7 @@ final class APRSTelemetryService: ObservableObject {
         pollingTimer = nil
 
         appLog("APRSTelemetryService: Stopped APRS polling (BLE telemetry resumed)", category: .service, level: .info)
+        isProvidingTelemetry = false
     }
 
     /// Update station ID and restart polling if active
@@ -145,25 +148,23 @@ final class APRSTelemetryService: ObservableObject {
     }
 
     /// Notify service about BLE telemetry health status
-    func updateBLETelemetryHealth(_ isHealthy: Bool) {
+    func updateBLETelemetryHealth(_ isHealthy: Bool, balloonIsLanded: Bool = false) {
         let wasHealthy = isBLETelemetryHealthy
         isBLETelemetryHealthy = isHealthy
 
         if !wasHealthy && isHealthy {
             // BLE telemetry resumed - stop APRS polling
             stopPolling()
-
-            // Switch to health check mode
-            pollCadence = Self.healthCheckInterval
-            if !isPollingActive {
-                startHealthCheckMode()
-            }
         } else if wasHealthy && !isHealthy {
-            // BLE telemetry failed - start APRS polling
-            startPolling()
+            // BLE telemetry failed - start APRS polling only if balloon is not landed
+            if !balloonIsLanded {
+                startPolling()
+            } else {
+                appLog("APRSTelemetryService: Skipping APRS start - balloon is already landed", category: .service, level: .info)
+            }
         } else if !wasHealthy && !isHealthy {
-            // Initial state or continued unhealthy state - ensure APRS polling is active
-            if !isPollingActive {
+            // Initial state or continued unhealthy state - ensure APRS polling is active only if balloon is not landed
+            if !isPollingActive && !balloonIsLanded {
                 startPolling()
             }
         }
@@ -204,25 +205,6 @@ final class APRSTelemetryService: ObservableObject {
 
     // MARK: - Private Implementation
 
-    private func setupPolling() {
-        // Start in health check mode
-        pollCadence = Self.healthCheckInterval
-        startHealthCheckMode()
-    }
-
-    private func startHealthCheckMode() {
-        guard !isPollingActive else { return }
-
-        appLog("APRSTelemetryService: Starting health check mode (every \(Int(Self.healthCheckInterval))s)", category: .service, level: .debug)
-
-        // Health check timer
-        pollingTimer = Timer.scheduledTimer(withTimeInterval: Self.healthCheckInterval, repeats: true) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                await self?.performHealthCheck()
-            }
-        }
-    }
-
     private func startPollingTimer() {
         pollingTimer?.invalidate()
         pollingTimer = nil
@@ -234,21 +216,26 @@ final class APRSTelemetryService: ObservableObject {
         }
     }
 
-    private func performHealthCheck() async {
-        appLog("APRSTelemetryService: Performing health check for station \(currentStationId)", category: .service, level: .debug)
+    private func updatePollingInterval(_ interval: TimeInterval) {
+        guard pollCadence != interval else { return }
+        pollCadence = interval
+        if isPollingActive {
+            appLog("APRSTelemetryService: Adjusting polling interval to \(Int(interval))s", category: .service, level: .debug)
+            startPollingTimer()
+        }
+    }
 
-        do {
-            let _ = try await fetchSiteData()
-            if !isHealthy {
-                isHealthy = true
-                appLog("APRSTelemetryService: Health check passed", category: .service, level: .debug)
-            }
-        } catch {
-            if isHealthy {
-                isHealthy = false
-                lastApiError = error.localizedDescription
-                appLog("APRSTelemetryService: Health check failed: \(error.localizedDescription)", category: .service, level: .error)
-            }
+    private func adjustPollingCadence(for telemetry: TelemetryData) {
+        guard isPollingActive else { return }
+        let age = Date().timeIntervalSince(telemetry.timestamp)
+
+        if age <= Self.landedThreshold {
+            updatePollingInterval(Self.fastPollInterval)
+        } else if age <= Self.landedConfirmationWindow {
+            updatePollingInterval(Self.landedConfirmationInterval)
+        } else {
+            appLog("APRSTelemetryService: APRS data older than 30 minutes — stopping polling", category: .service, level: .info)
+            stopPolling()
         }
     }
 
@@ -262,6 +249,7 @@ final class APRSTelemetryService: ObservableObject {
             guard let latestSonde = findLatestSonde(from: Array(siteResponse.values)) else {
                 appLog("APRSTelemetryService: No sondes found for station \(currentStationId)", category: .service, level: .info)
                 telemetryAvailabilityState = false
+                isProvidingTelemetry = false
                 return
             }
 
@@ -282,6 +270,12 @@ final class APRSTelemetryService: ObservableObject {
 
             appLog("APRSTelemetryService: Published telemetry for sonde \(latestSonde.serial) at \(String(format: "%.5f, %.5f", latestSonde.lat, latestSonde.lon))", category: .service, level: .info)
 
+            isProvidingTelemetry = true
+            adjustPollingCadence(for: telemetryData)
+
+        } catch APRSError.invalidPayload {
+            appLog("APRSTelemetryService: Ignoring incomplete telemetry payload", category: .service, level: .info)
+            isProvidingTelemetry = false
         } catch {
             appLog("APRSTelemetryService: Failed to fetch telemetry: \(error.localizedDescription)", category: .service, level: .error)
 
@@ -289,6 +283,7 @@ final class APRSTelemetryService: ObservableObject {
             connectionStatus = .failed(error.localizedDescription)
             lastApiError = error.localizedDescription
             isHealthy = false
+            isProvidingTelemetry = false
         }
     }
 
@@ -346,16 +341,31 @@ final class APRSTelemetryService: ObservableObject {
     }
 
     private func convertToTelemetryData(_ sonde: SondeHubSondeData) throws -> TelemetryData {
+        let trimmedSerial = sonde.serial.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedType = sonde.type.trimmingCharacters(in: .whitespacesAndNewlines)
+        let frequency = (sonde.frequency * 100).rounded() / 100.0
+        let latitude = sonde.lat
+        let longitude = sonde.lon
+
+        let coordinatesValid = latitude.isFinite && longitude.isFinite && abs(latitude) <= 90 && abs(longitude) <= 180 && !(latitude == 0 && longitude == 0)
+
+        guard !trimmedSerial.isEmpty,
+              !trimmedType.isEmpty,
+              frequency > 0,
+              coordinatesValid else {
+            throw APRSError.invalidPayload
+        }
+
         var telemetry = TelemetryData()
 
         // Basic identification
-        telemetry.sondeName = sonde.serial
-        telemetry.probeType = sonde.type.uppercased()
-        telemetry.frequency = sonde.frequency
+        telemetry.sondeName = trimmedSerial
+        telemetry.probeType = trimmedType.uppercased()
+        telemetry.frequency = frequency
 
         // Position and motion
-        telemetry.latitude = sonde.lat
-        telemetry.longitude = sonde.lon
+        telemetry.latitude = latitude
+        telemetry.longitude = longitude
         telemetry.altitude = sonde.alt
         telemetry.horizontalSpeed = sonde.vel_h
         telemetry.verticalSpeed = sonde.vel_v
@@ -414,6 +424,7 @@ enum APRSError: Error, LocalizedError {
     case networkUnavailable(String)
     case decodingError(String)
     case noSondesFound
+    case invalidPayload
 
     var errorDescription: String? {
         switch self {
@@ -429,7 +440,8 @@ enum APRSError: Error, LocalizedError {
             return "JSON decoding failed: \(description)"
         case .noSondesFound:
             return "No sondes found for station"
+        case .invalidPayload:
+            return "Received incomplete telemetry payload"
         }
     }
 }
-

@@ -64,7 +64,8 @@ struct BalloonHunterApp: App {
             coordinator: coordinator,
             balloonTrackService: services.balloonTrackService,
             landingPointTrackingService: services.landingPointTrackingService,
-            currentLocationService: services.currentLocationService
+            currentLocationService: services.currentLocationService,
+            aprsTelemetryService: services.aprsTelemetryService
         )
         _appServices = StateObject(wrappedValue: services)
         _serviceCoordinator = StateObject(wrappedValue: coordinator)
@@ -170,7 +171,10 @@ struct BalloonHunterApp: App {
         .onChange(of: scenePhase) { oldScenePhase, newScenePhase in
             if newScenePhase == .inactive {
                 // Save data on app close using the track service
-                serviceCoordinator.saveDataOnAppClose()
+                appServices.persistenceService.saveOnAppClose(
+                    balloonTrackService: appServices.balloonTrackService,
+                    landingPointTrackingService: appServices.landingPointTrackingService
+                )
                 appLog("BalloonHunterApp: App became inactive, saved data.", category: .lifecycle, level: .info)
             }
         }
@@ -190,9 +194,8 @@ struct BalloonHunterApp: App {
 
     private func setupNotificationHandling() {
         let center = UNUserNotificationCenter.current()
-        notificationDelegate = NotificationDelegate(serviceCoordinator: serviceCoordinator)
+        notificationDelegate = NotificationDelegate()
         center.delegate = notificationDelegate
-
     }
 
 }
@@ -200,11 +203,6 @@ struct BalloonHunterApp: App {
 // MARK: - Notification Delegate
 
 class NotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
-    let serviceCoordinator: ServiceCoordinator
-
-    init(serviceCoordinator: ServiceCoordinator) {
-        self.serviceCoordinator = serviceCoordinator
-    }
 
     // Handle notification tap
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse, withCompletionHandler completionHandler: @escaping () -> Void) {
@@ -242,9 +240,6 @@ class NotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
                 ]
 
                 mapItem.openInMaps(launchOptions: launchOptions)
-
-                // Update the last destination
-                self.serviceCoordinator.updateLastAppleMapsDestination(newDestination)
 
                 appLog("BalloonHunterApp: Opened Apple Maps from notification", category: .lifecycle, level: .info)
             }

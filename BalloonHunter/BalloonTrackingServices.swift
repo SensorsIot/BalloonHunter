@@ -9,28 +9,43 @@ import OSLog
 @MainActor
 final class BalloonPositionService: ObservableObject {
     // Current position and telemetry data
-    @Published var currentPosition: CLLocationCoordinate2D?
+    var currentPosition: CLLocationCoordinate2D?
     @Published var currentTelemetry: TelemetryData?
-    @Published var currentAltitude: Double?
-    @Published var currentVerticalSpeed: Double?
+    var currentAltitude: Double?
+    var currentVerticalSpeed: Double?
     @Published var currentBalloonName: String?
+    @Published var lastTelemetrySource: TelemetrySource = .ble
     
     // Derived position data
-    @Published var distanceToUser: Double?
-    @Published var timeSinceLastUpdate: TimeInterval = 0
-    @Published var hasReceivedTelemetry: Bool = false
-    
+    var distanceToUser: Double?
+    private var timeSinceLastUpdate: TimeInterval = 0
+    var hasReceivedTelemetry: Bool = false
+    @Published var burstKillerCountdown: Int? = nil
+    @Published var burstKillerReferenceDate: Date? = nil
+    @Published var isTelemetryStale: Bool = false
+    @Published var bleTelemetryIsAvailable: Bool = false
+    @Published var aprsTelemetryIsAvailable: Bool = false
+
     private let bleService: BLECommunicationService
     let aprsService: APRSTelemetryService
     private let currentLocationService: CurrentLocationService
+    private let persistenceService: PersistenceService
     private var currentUserLocation: LocationData?
     private var lastTelemetryTime: Date?
+    private var lastLoggedBurstKillerTime: Int?
     private var cancellables = Set<AnyCancellable>()
+    private let bleStalenessThreshold: TimeInterval = 3.0 // 3 seconds for BLE
+    private let aprsStalenessThreshold: TimeInterval = 30.0 // 30 seconds for APRS
+
     
-    init(bleService: BLECommunicationService, aprsService: APRSTelemetryService, currentLocationService: CurrentLocationService) {
+    init(bleService: BLECommunicationService,
+         aprsService: APRSTelemetryService,
+         currentLocationService: CurrentLocationService,
+         persistenceService: PersistenceService) {
         self.bleService = bleService
         self.aprsService = aprsService
         self.currentLocationService = currentLocationService
+        self.persistenceService = persistenceService
         setupSubscriptions()
         // BalloonPositionService initialized
     }
@@ -52,11 +67,11 @@ final class BalloonPositionService: ObservableObject {
             }
             .store(in: &cancellables)
 
-        // Monitor BLE telemetry availability and control APRS polling
-        bleService.$telemetryAvailabilityState
+        // Monitor BLE telemetry availability for APRS arbitration
+        $bleTelemetryIsAvailable
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] isHealthy in
-                self?.handleBLETelemetryAvailabilityChange(isHealthy)
+            .sink { [weak self] isAvailable in
+                self?.handleBLETelemetryAvailabilityChange(isAvailable)
             }
             .store(in: &cancellables)
 
@@ -79,24 +94,62 @@ final class BalloonPositionService: ObservableObject {
     }
     
     private func handleTelemetryUpdate(_ telemetry: TelemetryData, source: String) {
-        // Only process APRS telemetry when BLE is unavailable (arbitration)
-        if source == "APRS" && bleService.telemetryAvailabilityState {
-            appLog("BalloonPositionService: APRS telemetry received but BLE is healthy - ignoring", category: .service, level: .debug)
+        // Only process APRS telemetry when BLE telemetry is not available (arbitration)
+        if source == "APRS" && bleTelemetryIsAvailable {
+            appLog("BalloonPositionService: APRS telemetry received but BLE telemetry is available - ignoring", category: .service, level: .debug)
             return
         }
 
         let now = Date()
 
         appLog("BalloonPositionService: Processing \(source) telemetry for sonde \(telemetry.sondeName)", category: .service, level: .info)
+        if telemetry.burstKillerTime > 0 && lastLoggedBurstKillerTime != telemetry.burstKillerTime {
+            appLog("BalloonPositionService: burstKillerTime received = \(telemetry.burstKillerTime)", category: .service, level: .debug)
+            lastLoggedBurstKillerTime = telemetry.burstKillerTime
+        }
+
+        var telemetryToStore = telemetry
+
+        if source == "BLE" {
+            let countdown = telemetry.burstKillerTime
+            if countdown > 0 {
+                burstKillerCountdown = countdown
+                burstKillerReferenceDate = telemetry.timestamp
+                persistenceService.updateBurstKillerTime(for: telemetry.sondeName,
+                                                         time: countdown,
+                                                         referenceDate: telemetry.timestamp)
+            } else if countdown == 0 {
+                burstKillerCountdown = nil
+                burstKillerReferenceDate = nil
+            }
+        } else {
+            if let record = persistenceService.loadBurstKillerRecord(for: telemetry.sondeName) {
+                burstKillerCountdown = record.seconds
+                burstKillerReferenceDate = record.referenceDate
+                telemetryToStore.burstKillerTime = record.seconds
+            } else {
+                burstKillerCountdown = nil
+                burstKillerReferenceDate = nil
+            }
+        }
+
+        currentTelemetry = telemetryToStore
 
         // Update current state
-        currentTelemetry = telemetry
-        currentPosition = CLLocationCoordinate2D(latitude: telemetry.latitude, longitude: telemetry.longitude)
-        currentAltitude = telemetry.altitude
-        currentVerticalSpeed = telemetry.verticalSpeed
-        currentBalloonName = telemetry.sondeName
+        currentPosition = CLLocationCoordinate2D(latitude: telemetryToStore.latitude,
+                                                 longitude: telemetryToStore.longitude)
+        currentAltitude = telemetryToStore.altitude
+        currentVerticalSpeed = telemetryToStore.verticalSpeed
+        currentBalloonName = telemetryToStore.sondeName
         hasReceivedTelemetry = true
         lastTelemetryTime = now
+        if source == "BLE" {
+            bleTelemetryIsAvailable = true
+        } else if source == "APRS" {
+            aprsTelemetryIsAvailable = true
+        }
+
+        lastTelemetrySource = (source == "APRS") ? .aprs : .ble
 
         // Update APRS service with BLE sonde name for mismatch detection
         if source == "BLE" {
@@ -110,17 +163,10 @@ final class BalloonPositionService: ObservableObject {
         // Suppress verbose position update log in debug output
     }
 
-    private func handleBLETelemetryAvailabilityChange(_ isHealthy: Bool) {
-        appLog("BalloonPositionService: BLE telemetry availability changed - healthy=\(isHealthy)", category: .service, level: .info)
-
-        // Notify APRS service about BLE health status
-        aprsService.updateBLETelemetryHealth(isHealthy)
-
-        if isHealthy {
-            appLog("BalloonPositionService: BLE telemetry resumed - APRS polling suspended", category: .service, level: .info)
-        } else {
-            appLog("BalloonPositionService: BLE telemetry lost - APRS polling activated", category: .service, level: .info)
-        }
+    private func handleBLETelemetryAvailabilityChange(_ isAvailable: Bool) {
+        // Notify APRS service about BLE telemetry availability status
+        let balloonIsLanded = (balloonPhase == .landed)
+        aprsService.updateBLETelemetryHealth(isAvailable, balloonIsLanded: balloonIsLanded)
     }
     
     private func handleUserLocationUpdate(_ location: LocationData) {
@@ -143,9 +189,19 @@ final class BalloonPositionService: ObservableObject {
     private func updateTimeSinceLastUpdate() {
         guard let lastUpdate = lastTelemetryTime else {
             timeSinceLastUpdate = 0
+            // Don't mark as stale if we never had telemetry - only when existing telemetry ages out
+            isTelemetryStale = false
             return
         }
         timeSinceLastUpdate = Date().timeIntervalSince(lastUpdate)
+
+        // Use different staleness thresholds based on telemetry source
+        let threshold = (lastTelemetrySource == .aprs) ? aprsStalenessThreshold : bleStalenessThreshold
+        isTelemetryStale = timeSinceLastUpdate > threshold
+
+        if isTelemetryStale {
+            bleTelemetryIsAvailable = false
+        }
     }
     
     // Convenience methods for policies
@@ -173,20 +229,25 @@ final class BalloonPositionService: ObservableObject {
 final class BalloonTrackService: ObservableObject {
     @Published var currentBalloonTrack: [BalloonTrackPoint] = []
     @Published var currentBalloonName: String?
-    @Published var currentEffectiveDescentRate: Double?
-    @Published var trackUpdated = PassthroughSubject<Void, Never>()
+    var currentEffectiveDescentRate: Double?
+    var trackUpdated = PassthroughSubject<Void, Never>()
+    @Published var motionMetrics: BalloonMotionMetrics = BalloonMotionMetrics(
+        rawHorizontalSpeedMS: 0,
+        rawVerticalSpeedMS: 0,
+        smoothedHorizontalSpeedMS: 0,
+        smoothedVerticalSpeedMS: 0,
+        adjustedDescentRateMS: nil
+    )
     
     // Landing detection
-    @Published var isBalloonFlying: Bool = false
-    @Published var isBalloonLanded: Bool = false
     @Published var landingPosition: CLLocationCoordinate2D?
     @Published var balloonPhase: BalloonPhase = .unknown
     
     // Smoothed telemetry data (moved from DataPanelView for proper separation of concerns)
-    @Published var smoothedHorizontalSpeed: Double = 0
-    @Published var smoothedVerticalSpeed: Double = 0
-    @Published var adjustedDescentRate: Double? = nil
-    @Published var isTelemetryStale: Bool = true
+    var smoothedHorizontalSpeed: Double = 0
+    var smoothedVerticalSpeed: Double = 0
+    var adjustedDescentRate: Double? = nil
+
     
     private let persistenceService: PersistenceService
     let balloonPositionService: BalloonPositionService
@@ -206,27 +267,30 @@ final class BalloonTrackService: ObservableObject {
     private let landingConfidenceClearThreshold = 0.40
     private let landingConfidenceClearSamplesRequired = 3
     private var landingConfidenceFalsePositiveCount = 0
+    private let aprsLandingAgeThreshold: TimeInterval = 120
 
     // Adjusted descent rate smoothing buffer (FSD: 20 values)
     private var adjustedDescentHistory: [Double] = []
-    
-    // Staleness detection (moved from DataPanelView for proper separation of concerns)
-    private var stalenessTimer: Timer?
-    private let stalenessThreshold: TimeInterval = 3.0 // 3 seconds threshold
+
 
     // Robust speed smoothing state
     private var lastEmaTimestamp: Date? = nil
     private var emaHorizontalMS: Double = 0
     private var emaVerticalMS: Double = 0
+    private var slowEmaHorizontalMS: Double = 0
+    private var slowEmaVerticalMS: Double = 0
     private var hasEma: Bool = false
+    private var hasSlowEma: Bool = false
     private var hWindow: [Double] = []
     private var vWindow: [Double] = []
     private let hampelWindowSize = 10
     private let hampelK = 3.0
     private let vHDeadbandMS: Double = 0.2   // ~0.72 km/h
     private let vVDeadbandMS: Double = 0.05
-    private let tauHorizontal: Double = 10.0 // seconds
-    private let tauVertical: Double = 10.0   // seconds
+    private let tauHorizontal: Double = 3.0  // seconds (fast EMA)
+    private let tauVertical: Double = 3.0    // seconds (fast EMA)
+    private let tauSlowHorizontal: Double = 25.0 // seconds (slow EMA)
+    private let tauSlowVertical: Double = 30.0   // seconds (slow EMA)
     private var lastMetricsLog: Date? = nil
     
     init(persistenceService: PersistenceService, balloonPositionService: BalloonPositionService) {
@@ -235,7 +299,6 @@ final class BalloonTrackService: ObservableObject {
         // BalloonTrackService initialized
         setupSubscriptions()
         loadPersistedDataAtStartup()
-        startStalenessTimer()
     }
     
     /// Load any persisted balloon data at startup
@@ -258,30 +321,39 @@ final class BalloonTrackService: ObservableObject {
     }
     
     func processTelemetryData(_ telemetryData: TelemetryData) {
-        if currentBalloonName == nil || telemetryData.sondeName != currentBalloonName {
-            appLog("BalloonTrackService: New sonde detected - \(telemetryData.sondeName), switching from \(currentBalloonName ?? "none")", category: .service, level: .info)
-            
-            // First, try to load the track for the new sonde
-            let persistedTrack = persistenceService.loadTrackForCurrentSonde(sondeName: telemetryData.sondeName)
-            
-            // Only purge tracks if we're actually switching to a different sonde
-            if let currentName = currentBalloonName, currentName != telemetryData.sondeName {
+        let incomingName = telemetryData.sondeName.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if !incomingName.isEmpty,
+           incomingName != currentBalloonName {
+            appLog("BalloonTrackService: New sonde detected - \(incomingName), switching from \(currentBalloonName ?? "none")", category: .service, level: .info)
+
+            let persistedTrack = persistenceService.loadTrackForCurrentSonde(sondeName: incomingName)
+
+            if let currentName = currentBalloonName,
+               currentName != incomingName {
                 appLog("BalloonTrackService: Switching from different sonde (\(currentName)) - purging old tracks", category: .service, level: .info)
                 persistenceService.purgeAllTracks()
             }
-            
+
             if let track = persistedTrack {
                 self.currentBalloonTrack = track
-                appLog("BalloonTrackService: Loaded persisted track for \(telemetryData.sondeName) with \(self.currentBalloonTrack.count) points", category: .service, level: .info)
+                appLog("BalloonTrackService: Loaded persisted track for \(incomingName) with \(self.currentBalloonTrack.count) points", category: .service, level: .info)
             } else {
                 self.currentBalloonTrack = []
-                appLog("BalloonTrackService: No persisted track found - starting fresh track for \(telemetryData.sondeName)", category: .service, level: .info)
+                appLog("BalloonTrackService: No persisted track found - starting fresh track for \(incomingName)", category: .service, level: .info)
             }
             telemetryPointCounter = 0
+            currentBalloonName = incomingName
+            emaHorizontalMS = 0
+            emaVerticalMS = 0
+            slowEmaHorizontalMS = 0
+            slowEmaVerticalMS = 0
+            hasEma = false
+            hasSlowEma = false
+        } else if currentBalloonName == nil {
+            currentBalloonName = incomingName
         }
-        
-        currentBalloonName = telemetryData.sondeName
-        
+
         // Compute track-derived speeds prior to appending, so we can store derived values
         var derivedHorizontalMS: Double? = nil
         var derivedVerticalMS: Double? = nil
@@ -323,10 +395,7 @@ final class BalloonTrackService: ObservableObject {
         updateEffectiveDescentRate()
 
         // Update landing detection
-        updateLandingDetection(telemetryData)
-
-        // Update adjusted descent rate (60s robust + 20-sample smoothing)
-        updateAdjustedDescentRate()
+        let landingLatched = updateLandingDetection(telemetryData)
 
         // CSV logging (all builds)
         DebugCSVLogger.shared.logTelemetry(telemetryData)
@@ -343,13 +412,49 @@ final class BalloonTrackService: ObservableObject {
         }
 
         // Update published balloon phase
-        if isBalloonLanded {
-            balloonPhase = .landed
-        } else if trackPoint.verticalSpeed >= 0 {
-            balloonPhase = .ascending
-        } else {
-            balloonPhase = trackPoint.altitude < 10_000 ? .descendingBelow10k : .descendingAbove10k
+        let telemetryAge = Date().timeIntervalSince(telemetryData.timestamp)
+        let isAprsTelemetry = telemetryData.softwareVersion == "APRS"
+
+        // Debug APRS landing detection
+        if isAprsTelemetry {
+            appLog("BalloonTrackService: APRS landing check - age=\(Int(telemetryAge))s, threshold=\(Int(aprsLandingAgeThreshold))s, willLand=\(telemetryAge > aprsLandingAgeThreshold)", category: .service, level: .info)
         }
+
+        if isAprsTelemetry && telemetryAge > aprsLandingAgeThreshold {
+            let aprsCoordinate = CLLocationCoordinate2D(latitude: telemetryData.latitude, longitude: telemetryData.longitude)
+            if landingPosition == nil {
+                landingPosition = aprsCoordinate
+            }
+            balloonPhase = .landed
+            appLog("BalloonTrackService: APRS age-based landing detected - balloon marked as LANDED at [\(String(format: "%.4f", aprsCoordinate.latitude)), \(String(format: "%.4f", aprsCoordinate.longitude))]", category: .service, level: .info)
+        } else if landingLatched {
+            balloonPhase = .landed
+        } else {
+            let verticalTrend = smoothedVerticalSpeed
+            if verticalTrend >= 0 {
+                balloonPhase = .ascending
+            } else {
+                balloonPhase = trackPoint.altitude < 10_000 ? .descendingBelow10k : .descendingAbove10k
+            }
+        }
+
+        if balloonPhase == .landed {
+            smoothedHorizontalSpeed = 0
+            smoothedVerticalSpeed = 0
+            adjustedDescentRate = nil
+            adjustedDescentHistory.removeAll()
+            emaHorizontalMS = 0
+            emaVerticalMS = 0
+            slowEmaHorizontalMS = 0
+            slowEmaVerticalMS = 0
+            hasEma = false
+            hasSlowEma = false
+            hWindow.removeAll()
+            vWindow.removeAll()
+        }
+
+        publishMotionMetrics(rawHorizontal: telemetryData.horizontalSpeed,
+                              rawVertical: telemetryData.verticalSpeed)
 
         // Periodic persistence
         telemetryPointCounter += 1
@@ -393,6 +498,8 @@ final class BalloonTrackService: ObservableObject {
         if let pt = prevTime { dtEff = max(0.01, timestamp.timeIntervalSince(pt)) } else { dtEff = max(0.01, dt > 0 ? dt : 1.0) }
         let alphaH = dtEff / (tauHorizontal + dtEff)
         let alphaV = dtEff / (tauVertical + dtEff)
+        let alphaSlowH = dtEff / (tauSlowHorizontal + dtEff)
+        let alphaSlowV = dtEff / (tauSlowVertical + dtEff)
 
         if !hasEma {
             emaHorizontalMS = xh
@@ -403,15 +510,29 @@ final class BalloonTrackService: ObservableObject {
             emaVerticalMS = (1 - alphaV) * emaVerticalMS + alphaV * xv
         }
 
+        if !hasSlowEma {
+            slowEmaHorizontalMS = xh
+            slowEmaVerticalMS = xv
+            hasSlowEma = true
+        } else {
+            slowEmaHorizontalMS = (1 - alphaSlowH) * slowEmaHorizontalMS + alphaSlowH * xh
+            slowEmaVerticalMS = (1 - alphaSlowV) * slowEmaVerticalMS + alphaSlowV * xv
+        }
+
         smoothedHorizontalSpeed = emaHorizontalMS
         smoothedVerticalSpeed = emaVerticalMS
+
+        updateAdjustedDescentRate(fallback: slowEmaVerticalMS)
     }
 
-    private func updateAdjustedDescentRate() {
+    private func updateAdjustedDescentRate(fallback: Double) {
         let now = Date()
         let windowStart = now.addingTimeInterval(-60)
         let window = currentBalloonTrack.filter { $0.timestamp >= windowStart }
-        guard window.count >= 3 else { return }
+        guard window.count >= 3 else {
+            adjustedDescentRate = hasSlowEma ? slowEmaVerticalMS : fallback
+            return
+        }
 
         var intervalRates: [Double] = []
         for i in 1..<window.count {
@@ -420,7 +541,10 @@ final class BalloonTrackService: ObservableObject {
             let dv = window[i].altitude - window[i-1].altitude
             intervalRates.append(dv / dt)
         }
-        guard !intervalRates.isEmpty else { return }
+        guard !intervalRates.isEmpty else {
+            adjustedDescentRate = hasSlowEma ? slowEmaVerticalMS : fallback
+            return
+        }
 
         let sorted = intervalRates.sorted()
         let mid = sorted.count/2
@@ -453,7 +577,8 @@ final class BalloonTrackService: ObservableObject {
         }
     }
     
-    private func updateLandingDetection(_ telemetryData: TelemetryData) {
+    @discardableResult
+    private func updateLandingDetection(_ telemetryData: TelemetryData) -> Bool {
         // Update speed buffers for smoothing (prefer track-derived values)
         if let last = currentBalloonTrack.last {
             verticalSpeedBuffer.append(last.verticalSpeed)
@@ -563,11 +688,13 @@ final class BalloonTrackService: ObservableObject {
                    category: .general, level: .debug)
         }
 
-        let wasPreviouslyFlying = isBalloonFlying
+        let wasLanded = balloonPhase == .landed
+        let wasPreviouslyFlying = balloonPhase != .landed && balloonPhase != .unknown
+        var isLanded = wasLanded
 
-        if !isBalloonLanded && isLandedNow {
+        if !wasLanded && isLandedNow {
             // Balloon just landed
-            isBalloonLanded = true
+            isLanded = true
             landingConfidenceFalsePositiveCount = 0
 
             // Use smoothed (100) position for landing point
@@ -583,7 +710,7 @@ final class BalloonTrackService: ObservableObject {
             let radiusStr = radius30.isFinite ? String(format: "%.1f", radius30) : "∞"
             appLog("BalloonTrackService: Balloon LANDED — altSpread30=\(altSpreadStr)m, radius30=\(radiusStr)m", category: .service, level: .info)
 
-        } else if isBalloonLanded {
+        } else if isLanded {
             let belowSampleThreshold = window30.count < 3
             if belowSampleThreshold || landingConfidence < landingConfidenceClearThreshold {
                 landingConfidenceFalsePositiveCount += 1
@@ -592,7 +719,7 @@ final class BalloonTrackService: ObservableObject {
             }
 
             if landingConfidenceFalsePositiveCount >= landingConfidenceClearSamplesRequired {
-                isBalloonLanded = false
+                isLanded = false
                 landingPosition = nil
                 landingConfidenceFalsePositiveCount = 0
                 appLog(
@@ -605,15 +732,14 @@ final class BalloonTrackService: ObservableObject {
             landingConfidenceFalsePositiveCount = 0
         }
 
-        // Update balloon flying state after landing evaluation
-        isBalloonFlying = hasRecentTelemetry && !isBalloonLanded
+        let isCurrentlyFlying = hasRecentTelemetry && !isLanded
 
-        if wasPreviouslyFlying && isBalloonFlying {
+        if wasPreviouslyFlying && isCurrentlyFlying {
             let instH = telemetryData.horizontalSpeed * 3.6
             let instV = telemetryData.verticalSpeed
             let avgV = smoothedVerticalSpeed
             let phase: String = {
-                if isBalloonLanded { return "Landed" }
+                if isLanded { return "Landed" }
                 if telemetryData.verticalSpeed >= 0 { return "Ascending" }
                 return telemetryData.altitude < 10_000 ? "Descending <10k" : "Descending"
             }()
@@ -626,7 +752,7 @@ final class BalloonTrackService: ObservableObject {
         
         // Periodic debug metrics while not landed (compile-time gated)
         #if DEBUG
-        if !isBalloonLanded && window30.count >= 10 {
+        if !isLanded && window30.count >= 10 {
             let nowT = Date()
             if lastMetricsLog == nil || nowT.timeIntervalSince(lastMetricsLog!) > 10.0 {
                 lastMetricsLog = nowT
@@ -637,6 +763,20 @@ final class BalloonTrackService: ObservableObject {
         }
         #endif
         
+        return isLanded
+    }
+
+    private func publishMotionMetrics(rawHorizontal: Double, rawVertical: Double) {
+        let smoothedH = balloonPhase == .landed ? 0 : smoothedHorizontalSpeed
+        let smoothedV = balloonPhase == .landed ? 0 : smoothedVerticalSpeed
+        let adjusted = balloonPhase == .landed ? Double?(0.0) : adjustedDescentRate
+        motionMetrics = BalloonMotionMetrics(
+            rawHorizontalSpeedMS: rawHorizontal,
+            rawVerticalSpeedMS: rawVertical,
+            smoothedHorizontalSpeedMS: smoothedH,
+            smoothedVerticalSpeedMS: smoothedV,
+            adjustedDescentRateMS: adjusted
+        )
     }
     
     private func saveCurrentTrack() {
@@ -658,57 +798,17 @@ final class BalloonTrackService: ObservableObject {
         trackUpdated.send()
     }
 
-    // Manually set balloon as landed (e.g., when landing point comes from clipboard)
+    // Exposed helper to mark the balloon as landed at a given coordinate
     func setBalloonAsLanded(at coordinate: CLLocationCoordinate2D) {
-        isBalloonLanded = true
         landingPosition = coordinate
         balloonPhase = .landed
         appLog("BalloonTrackService: Balloon manually set as LANDED at \(String(format: "%.5f, %.5f", coordinate.latitude, coordinate.longitude))", category: .service, level: .info)
     }
 
     // MARK: - Smoothing and Staleness Detection (moved from DataPanelView)
-    
+
     private func updateSmoothedSpeeds() {
-        // Per FSD: Smoothing using last 5 values (moved from DataPanelView for proper separation of concerns)
-        let last5 = Array(currentBalloonTrack.suffix(5))
-        
-        // Smoothed horizontal speed
-        let horizontalSpeeds = last5.compactMap { $0.horizontalSpeed }
-        if !horizontalSpeeds.isEmpty {
-            smoothedHorizontalSpeed = horizontalSpeeds.reduce(0, +) / Double(horizontalSpeeds.count)
-        } else {
-            smoothedHorizontalSpeed = balloonPositionService.currentTelemetry?.horizontalSpeed ?? 0
-        }
-        
-        // Smoothed vertical speed
-        let verticalSpeeds = last5.compactMap { $0.verticalSpeed }
-        if !verticalSpeeds.isEmpty {
-            smoothedVerticalSpeed = verticalSpeeds.reduce(0, +) / Double(verticalSpeeds.count)
-        } else {
-            smoothedVerticalSpeed = balloonPositionService.currentTelemetry?.verticalSpeed ?? 0
-        }
-    }
-    
-    private func startStalenessTimer() {
-        stalenessTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                self?.checkTelemetryStaleness()
-            }
-        }
-    }
-    
-    private func checkTelemetryStaleness() {
-        guard let telemetry = balloonPositionService.currentTelemetry else {
-            isTelemetryStale = true
-            return
-        }
-        
-        let timeSinceUpdate = Date().timeIntervalSince(telemetry.timestamp)
-        isTelemetryStale = timeSinceUpdate > stalenessThreshold
-    }
-    
-    deinit {
-        stalenessTimer?.invalidate()
+        // Implementation moved to motion metrics calculation
     }
 }
 

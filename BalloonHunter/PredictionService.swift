@@ -166,10 +166,10 @@ final class PredictionService: ObservableObject {
     private let balloonTrackService: BalloonTrackService?
     
     // MARK: - Published State
-    @Published var isRunning: Bool = false
-    @Published var hasValidPrediction: Bool = false
-    @Published var lastPredictionTime: Date?
-    @Published var predictionStatus: String = "Not started"
+    var isRunning: Bool = false
+    var hasValidPrediction: Bool = false
+    private var lastPredictionTime: Date?
+    var predictionStatus: String = "Not started"
     @Published var latestPrediction: PredictionData?
     
     // Time calculations (moved from DataPanelView for proper separation of concerns)
@@ -345,13 +345,24 @@ final class PredictionService: ObservableObject {
     
     private func calculateEffectiveDescentRate(telemetry: TelemetryData) -> Double {
         let isDescending = telemetry.verticalSpeed < 0
-        if telemetry.altitude < 10000, let smoothedRate = serviceCoordinator?.smoothedDescentRate {
+        if telemetry.altitude < 10000,
+           let smoothedRate = serviceCoordinator?.smoothedDescentRate,
+           smoothedRate != 0,
+           isDescending {
             let val = abs(smoothedRate)
-            if isDescending { appLog("PredictionService: Using smoothed descent rate: \(String(format: "%.2f", val)) m/s (below 10000m)", category: .service, level: .info) }
+            appLog("PredictionService: Using smoothed descent rate: \(String(format: "%.2f", val)) m/s (below 10000m)", category: .service, level: .info)
+            Task { @MainActor in
+                self.serviceCoordinator?.predictionUsesSmoothedDescent = true
+            }
             return val
         } else {
             let val = userSettings.descentRate
-            if isDescending { appLog("PredictionService: Using settings descent rate: \(String(format: "%.2f", val)) m/s (above 10000m or no smoothed rate)", category: .service, level: .info) }
+            if isDescending {
+                appLog("PredictionService: Using settings descent rate: \(String(format: "%.2f", val)) m/s (above 10000m or no smoothed rate)", category: .service, level: .info)
+            }
+            Task { @MainActor in
+                self.serviceCoordinator?.predictionUsesSmoothedDescent = false
+            }
             return val
         }
     }

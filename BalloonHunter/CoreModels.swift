@@ -19,6 +19,11 @@ enum BalloonPhase: String, Codable {
     case unknown
 }
 
+enum TelemetrySource: String, Codable {
+    case ble
+    case aprs
+}
+
 struct TelemetryData {
     var sondeName: String = ""
     var probeType: String = ""
@@ -129,6 +134,20 @@ struct BalloonTrackPoint: Codable {
     let timestamp: Date
     let verticalSpeed: Double
     let horizontalSpeed: Double
+}
+
+struct BalloonMotionMetrics {
+    let rawHorizontalSpeedMS: Double
+    let rawVerticalSpeedMS: Double
+    let smoothedHorizontalSpeedMS: Double
+    let smoothedVerticalSpeedMS: Double
+    let adjustedDescentRateMS: Double?
+}
+
+struct FrequencySyncProposal: Identifiable, Equatable {
+    let id = UUID()
+    let frequency: Double
+    let probeType: String
 }
 
 struct PredictionData {

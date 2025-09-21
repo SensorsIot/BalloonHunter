@@ -43,7 +43,7 @@ final class UserSettings: ObservableObject, Codable {
 @MainActor
 final class AppSettings: ObservableObject {
     // App-level settings can be added here as needed
-    @Published var debugMode: Bool = false
+    var debugMode: Bool = false
 
     // Transport mode with UserDefaults persistence
     @Published var transportMode: TransportationMode = .car {

@@ -10,8 +10,8 @@ import OSLog
 final class CurrentLocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     @Published var locationData: LocationData? = nil
-    @Published var isLocationPermissionGranted: Bool = false
-    @Published var significantMovementLocation: LocationData? = nil // Only updates on 10m+ movement
+    var isLocationPermissionGranted: Bool = false
+    var significantMovementLocation: LocationData? = nil // Only updates on 10m+ movement
     @Published var distanceToBalloon: CLLocationDistance? = nil // Raw distance in meters for overlay display
     @Published var isWithin200mOfBalloon: Bool = false // For navigation logic
 

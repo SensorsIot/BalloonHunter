@@ -236,7 +236,7 @@ struct TrackingMapView: View {
                     // 7. Burst Point: Only visible when balloon is ascending
                     if let burstPoint = mapPresenter.burstPoint,
                        mapPresenter.balloonPhase == .ascending {
-                        Annotation("Burst", coordinate: burstPoint) {
+                        Annotation("", coordinate: burstPoint) {
                             Image(systemName: "burst.fill")
                                 .font(.title2)
                                 .foregroundColor(.orange)
@@ -339,6 +339,23 @@ struct TrackingMapView: View {
                 .environmentObject(mapPresenter.persistenceService)
                 .environmentObject(userSettings)
         }
+        .alert(item: Binding(
+            get: { mapPresenter.frequencySyncProposal },
+            set: { _ in }
+        )) { proposal in
+            Alert(
+                title: Text("Update RadioSondyGo?"),
+                message: Text("Use APRS frequency \(String(format: "%.2f", proposal.frequency)) MHz and probe type \(proposal.probeType)?"),
+                primaryButton: .default(Text("Update")) {
+                    appLog("UI: Frequency sync Update tapped (freq=\(String(format: "%.2f", proposal.frequency)) type=\(proposal.probeType))", category: .ui, level: .info)
+                    mapPresenter.confirmFrequencySync()
+                },
+                secondaryButton: .cancel {
+                    appLog("UI: Frequency sync Update cancelled by user", category: .ui, level: .info)
+                    mapPresenter.cancelFrequencySync()
+                }
+            )
+        }
         .onChange(of: showSettings) { _, isOpen in
             mapPresenter.setCameraUpdatesSuspended(isOpen)
         }
@@ -409,7 +426,8 @@ struct TrackingMapView: View {
         coordinator: mockServiceCoordinator,
         balloonTrackService: mockAppServices.balloonTrackService,
         landingPointTrackingService: mockAppServices.landingPointTrackingService,
-        currentLocationService: mockAppServices.currentLocationService
+        currentLocationService: mockAppServices.currentLocationService,
+        aprsTelemetryService: mockAppServices.aprsTelemetryService
     )
     
     TrackingMapView()

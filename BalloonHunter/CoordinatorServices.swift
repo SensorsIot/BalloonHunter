@@ -33,9 +33,9 @@ in‑code markup for quick reference while working on the startup sequence.
 3) Publish Telemetry
    - After the first BLE packet is received and decoded, BLE publishes whether telemetry is available.
 
-4) Device Settings (optional, non‑blocking)
-   - BLE issues o{?}o opportunistically after the first packet, and SettingsView can also request on demand.
-   - Startup does not wait for a settings response; configuration is stored when received and used by settings views.
+4) Device Settings (on-demand only)
+   - Device settings are fetched only when SettingsView is opened or frequency sync is needed.
+   - Startup optimization: No automatic o{?}o command during startup since frequency/probe type are available in telemetry packets.
 
 5) Read Persistence
    - Load from persistence:
@@ -43,10 +43,9 @@ in‑code markup for quick reference while working on the startup sequence.
      - Historic track data
      - Landing point (if available)
 
-6) Landing Point Determination (per FSD - 2 priorities only)
-   - Prio 1: If telemetry is received and the balloon is landed, set landing point to current balloon position.
-   - Prio 2: If balloon is still in flight (telemetry available), use the predicted landing position.
-   - Otherwise: No landing point is available.
+6) Landing Point Determination
+   - BalloonTrackService publishes landing state/position derived from telemetry and persistence.
+   - Coordinator simply mirrors that state; no additional heuristics required.
 
 7) Final Map Displayed
    - Show the tracking map (with button row and data panel).
@@ -66,72 +65,68 @@ in‑code markup for quick reference while working on the startup sequence.
 */
 extension ServiceCoordinator {
     
-    /// Performs the complete 7-step startup sequence as defined in FSD
+    /// Performs the complete startup sequence
     func performCompleteStartupSequence() async {
         let startTime = Date()
-        
-        // Phase 1: Steps 1-2 (Services → BLE)
-        let phase1Start = Date()
-        await MainActor.run {
-            currentStartupStep = 1
-            startupProgress = "1-2. Services & BLE"
-        }
 
         // Step 1: Service Initialization (already done)
-        // Step 2: BLE Connection
-        let _ = await startBLEConnectionWithTimeout()
+        await MainActor.run {
+            currentStartupStep = 1
+            startupProgress = "Step 1: Services"
+        }
+        appLog("STARTUP: Step 1 - Service initialization complete", category: .general, level: .info)
 
-        let phase1Time = Date().timeIntervalSince(phase1Start)
-        appLog("STARTUP: Steps 1-2 ✅ Services → BLE (\(String(format: "%.1f", phase1Time))s)", category: .general, level: .info)
+        // Step 2: BLE Connection + APRS Priming (parallel with timeout)
+        await MainActor.run {
+            currentStartupStep = 2
+            startupProgress = "Step 2: BLE & APRS"
+        }
+        async let bleResult = startBLEConnectionWithTimeout()
+        async let aprsResult = primeAPRSStartupData()
 
-        // Phase 2: Steps 3-5 (Telemetry → Settings → Data)
-        let phase2Start = Date()
+        let _ = await bleResult
+        let _ = await aprsResult
+        appLog("STARTUP: Step 2 - BLE connection and APRS priming complete", category: .general, level: .info)
+
+        // Step 3: First Telemetry Package
         await MainActor.run {
             currentStartupStep = 3
-            startupProgress = "3-5. Telemetry & Data"
+            startupProgress = "Step 3: Telemetry"
         }
-
-        // Step 3: APRS Startup Priming - call SondeHub API to get latest telemetry data
-        await primeAPRSStartupData()
-        // Step 4: First Telemetry Package
         await waitForFirstBLEPackageAndPublishTelemetryStatus()
-        // Step 5: Device Settings - handled opportunistically by BLE service; no blocking needed
-        // Step 6: Persistence Data
-        await loadAllPersistenceData()
+        appLog("STARTUP: Step 3 - First telemetry package processed", category: .general, level: .info)
 
-        let phase2Time = Date().timeIntervalSince(phase2Start)
-        appLog("STARTUP: Steps 3-6 ✅ APRS → Telemetry → Settings → Data (\(String(format: "%.1f", phase2Time))s)", category: .general, level: .info)
-
-        // Phase 3: Steps 7-8 (Landing Point → Final Map)
-        let phase3Start = Date()
+        // Step 4: Persistence Data
         await MainActor.run {
-            currentStartupStep = 7
-            startupProgress = "7-8. Landing & Display"
+            currentStartupStep = 4
+            startupProgress = "Step 4: Data"
         }
+        await loadAllPersistenceData()
+        appLog("STARTUP: Step 4 - Persistence data loaded", category: .general, level: .info)
 
-        // Step 7: Landing Point Determination
-        appLog("STARTUP: Step 7 - Starting landing point determination", category: .general, level: .info)
-        await determineLandingPointWithPriorities()
-        appLog("STARTUP: Step 7 - Landing point determination complete", category: .general, level: .info)
+        // Step 5: Landing Point (APRS data available from parallel Step 2)
+        await MainActor.run {
+            currentStartupStep = 5
+            startupProgress = "Step 5: Landing Point"
+        }
+        appLog("STARTUP: Step 5 - Landing point provided by BalloonTrackService/persistence", category: .general, level: .info)
 
-        // Step 8: Final Map Display
-        appLog("STARTUP: Step 8 - Starting final map display", category: .general, level: .info)
+        // Step 6: Final Map Display
+        await MainActor.run {
+            currentStartupStep = 6
+            startupProgress = "Step 6: Map Display"
+        }
         await setupInitialMapDisplay()
-        appLog("STARTUP: Step 8 - Final map display complete", category: .general, level: .info)
-
-        let phase3Time = Date().timeIntervalSince(phase3Start)
-        appLog("STARTUP: Steps 7-8 ✅ Landing Point → Final Map (\(String(format: "%.1f", phase3Time))s)", category: .general, level: .info)
+        appLog("STARTUP: Step 6 - Final map display complete", category: .general, level: .info)
 
         // Mark startup as complete
         let totalTime = Date().timeIntervalSince(startTime)
         await MainActor.run {
-            currentStartupStep = 7
-            startupProgress = "Startup Complete"
             isStartupComplete = true
             showLogo = false
             showTrackingMap = true
         }
-        
+
         appLog("STARTUP: Complete ✅ Ready for tracking (\(String(format: "%.1f", totalTime))s total)", category: .general, level: .info)
     }
     
@@ -145,12 +140,12 @@ extension ServiceCoordinator {
         // Wait for Bluetooth to be powered on (reasonable timeout)
         let bluetoothTimeout = Date().addingTimeInterval(5) // 5 seconds for Bluetooth
         while bleCommunicationService.centralManager.state != .poweredOn && Date() < bluetoothTimeout {
-            appLog("Step 4: Waiting for Bluetooth to power on", category: .general, level: .info)
+            appLog("Step 2: Waiting for Bluetooth to power on", category: .general, level: .info)
             try? await Task.sleep(nanoseconds: 1_000_000_000) // 1 second check interval
         }
         
         guard bleCommunicationService.centralManager.state == .poweredOn else {
-            appLog("Step 4: Bluetooth not powered on - proceeding without connection", category: .general, level: .info)
+            appLog("Step 2: Bluetooth not powered on - proceeding without connection", category: .general, level: .info)
             return (connected: false, hasMessage: false)
         }
         
@@ -220,64 +215,6 @@ extension ServiceCoordinator {
 
     // MARK: - Step 6: Landing Point & Step 7: Final Display
     
-    func determineLandingPointWithPriorities() async {
-        appLog("Landing: Starting landing point determination", category: .general, level: .info)
-        if let t = balloonTelemetry {
-            let condA = (t.altitude < 1000 && abs(t.verticalSpeed) < 2.0)
-            let condB = (t.altitude < 500)
-            appLog(String(format: "Landing: Telemetry present: lat=%.5f lon=%.5f alt=%.1f v=%.2f h=%.2f condA=%@ condB=%@",
-                          t.latitude, t.longitude, t.altitude, t.verticalSpeed, t.horizontalSpeed,
-                          condA ? "true" : "false", condB ? "true" : "false"),
-                   category: .general, level: .info)
-        } else {
-            appLog("Landing: No telemetry available at decision time", category: .general, level: .info)
-        }
-        
-        // Priority 1: If telemetry received and balloon has landed, current position is landing point
-        // Priority 1: Check if balloon has landed (improved criteria)
-        if let telemetry = balloonTelemetry, 
-           (telemetry.altitude < 1000 && abs(telemetry.verticalSpeed) < 2.0) || 
-           (telemetry.altitude < 500) {
-            let currentPosition = CLLocationCoordinate2D(latitude: telemetry.latitude, longitude: telemetry.longitude)
-            await MainActor.run {
-                landingPoint = currentPosition
-            }
-            appLog(String(format: "Priority 1: SUCCESS - Landing set from telemetry at %.5f, %.5f (alt=%.1f v=%.2f)",
-                          telemetry.latitude, telemetry.longitude, telemetry.altitude, telemetry.verticalSpeed),
-                   category: .general, level: .info)
-            return
-        }
-        
-        // Priority 2: If balloon in flight, use predicted landing position
-        if balloonTelemetry != nil {
-                
-            // Trigger prediction if needed and wait for result
-            await predictionService.triggerManualPrediction()
-            
-            // Wait up to 10 seconds for prediction to complete
-            let predictionTimeout = Date().addingTimeInterval(10)
-            while Date() < predictionTimeout {
-                if let predictedLanding = predictionData?.landingPoint {
-                    await MainActor.run {
-                        landingPoint = predictedLanding
-                    }
-                    appLog("Priority 2: SUCCESS - Landing point set from prediction", category: .general, level: .info)
-                    return
-                }
-                try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 second checks
-            }
-            appLog("Priority 2: FAILED - Prediction timeout or no landing point in prediction", category: .general, level: .info)
-        } else {
-            appLog("Priority 2: Not applicable - no telemetry available", category: .general, level: .info)
-        }
-        
-        // All priorities failed
-        appLog("BOTH PRIORITIES FAILED - No landing point available", category: .general, level: .info)
-        await MainActor.run {
-            landingPoint = nil
-        }
-    }
-    
     private func setupInitialMapDisplay() async {
         // Show tracking map for the first time
         // TrackingMapView will automatically trigger showAnnotations when map is ready
@@ -294,13 +231,14 @@ extension ServiceCoordinator {
         // TrackingMapView will call updateCameraToShowAllAnnotations() when map camera initializes
     }
 
-    /// Prime APRS startup data (Step 3 of startup sequence)
+    /// Prime APRS startup data (Step 2 of startup sequence)
     private func primeAPRSStartupData() async {
-        appLog("STARTUP: Step 3 - Priming APRS startup data", category: .general, level: .info)
+        appLog("STARTUP: Step 2 - Priming APRS startup data", category: .general, level: .info)
 
         // Access APRS service through BalloonPositionService
         await balloonPositionService.aprsService.primeStartupData()
 
-        appLog("STARTUP: Step 3 - APRS startup priming complete", category: .general, level: .info)
+        appLog("STARTUP: Step 2 - APRS startup priming complete", category: .general, level: .info)
     }
+
 }

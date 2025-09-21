@@ -45,7 +45,10 @@ final class AppServices: ObservableObject {
         self.currentLocationService = CurrentLocationService()
         
         // 3. Initialize specialized services
-        self.balloonPositionService = BalloonPositionService(bleService: bleCommunicationService, aprsService: aprsTelemetryService, currentLocationService: currentLocationService)
+        self.balloonPositionService = BalloonPositionService(bleService: bleCommunicationService,
+                                                             aprsService: aprsTelemetryService,
+                                                             currentLocationService: currentLocationService,
+                                                             persistenceService: persistenceService)
         self.balloonTrackService = BalloonTrackService(
             persistenceService: persistenceService, 
             balloonPositionService: balloonPositionService
