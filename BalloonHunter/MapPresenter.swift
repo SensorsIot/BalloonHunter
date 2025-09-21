@@ -32,7 +32,7 @@ final class MapPresenter: ObservableObject {
     // APRS sonde name display (for persistent field in tracking view)
     @Published private(set) var bleSerialName: String = ""
     @Published private(set) var aprsSerialName: String = ""
-    @Published private(set) var frequencySyncProposal: FrequencySyncProposal? = nil
+    // Frequency sync proposal removed - automatic sync only
 
     // MARK: - Dependencies
 
@@ -216,8 +216,15 @@ final class MapPresenter: ObservableObject {
             }
             .store(in: &cancellables)
 
-        coordinator.$pendingFrequencySync
-            .assign(to: &$frequencySyncProposal)
+        coordinator.$showAllAnnotations
+            .sink { [weak self] shouldShow in
+                if shouldShow {
+                    self?.triggerShowAllAnnotations()
+                }
+            }
+            .store(in: &cancellables)
+
+        // Frequency sync subscription removed - automatic sync only
 
         currentLocationService.$distanceToBalloon
             .sink { [weak self] distance in
@@ -259,21 +266,7 @@ final class MapPresenter: ObservableObject {
             .assign(to: &$aprsSerialName)
     }
 
-    func confirmFrequencySync() {
-        guard let proposal = frequencySyncProposal else {
-            appLog("MapPresenter: confirmFrequencySync called with no proposal", category: .ui, level: .error)
-            return
-        }
-        appLog("MapPresenter: Confirming frequency sync (freq=\(String(format: "%.2f", proposal.frequency)) type=\(proposal.probeType))", category: .ui, level: .info)
-        coordinator.applyPendingFrequencySync()
-    }
-
-    func cancelFrequencySync() {
-        if let proposal = frequencySyncProposal {
-            appLog("MapPresenter: Cancelling frequency sync (freq=\(String(format: "%.2f", proposal.frequency)) type=\(proposal.probeType))", category: .ui, level: .info)
-            coordinator.dismissPendingFrequencySync()
-        }
-    }
+    // Frequency sync methods removed - automatic sync only
 
     // MARK: - Annotation & Camera Helpers
 

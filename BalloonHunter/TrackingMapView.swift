@@ -339,23 +339,7 @@ struct TrackingMapView: View {
                 .environmentObject(mapPresenter.persistenceService)
                 .environmentObject(userSettings)
         }
-        .alert(item: Binding(
-            get: { mapPresenter.frequencySyncProposal },
-            set: { _ in }
-        )) { proposal in
-            Alert(
-                title: Text("Update RadioSondyGo?"),
-                message: Text("Use APRS frequency \(String(format: "%.2f", proposal.frequency)) MHz and probe type \(proposal.probeType)?"),
-                primaryButton: .default(Text("Update")) {
-                    appLog("UI: Frequency sync Update tapped (freq=\(String(format: "%.2f", proposal.frequency)) type=\(proposal.probeType))", category: .ui, level: .info)
-                    mapPresenter.confirmFrequencySync()
-                },
-                secondaryButton: .cancel {
-                    appLog("UI: Frequency sync Update cancelled by user", category: .ui, level: .info)
-                    mapPresenter.cancelFrequencySync()
-                }
-            )
-        }
+        // Frequency sync alert removed - automatic sync only
         .onChange(of: showSettings) { _, isOpen in
             mapPresenter.setCameraUpdatesSuspended(isOpen)
         }
