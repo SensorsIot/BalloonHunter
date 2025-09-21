@@ -222,24 +222,24 @@ struct DataPanelView: View {
     }
 
     private var frequencyString: String {
-        // FSD frequency priority: BLE telemetry > BLE device settings (when connected) > APRS telemetry > default
+        // Display ONLY frequency confirmed by the sonde, never source frequencies
+
         if serviceCoordinator.bleTelemetryIsAvailable,
-           let telemetry = balloonPositionService.currentTelemetry {
-            // BLE telemetry available - use frequency from telemetry (source of truth)
+           let telemetry = balloonPositionService.currentTelemetry,
+           telemetry.softwareVersion != "APRS" {
+            // BLE telemetry available - show frequency from live sonde telemetry
             return String(format: "%.2f MHz", telemetry.frequency)
         } else if bleService.connectionStatus == .connected {
-            // BLE connected but no telemetry - use confirmed device settings frequency
+            // BLE connected - show confirmed device settings frequency from sonde
             let frequency = bleService.deviceSettings.frequency
-            let displayFrequency = frequency != 434.0 ? frequency : 434.0
-            return String(format: "%.2f MHz", displayFrequency)
-        } else if serviceCoordinator.aprsTelemetryIsAvailable,
-                  let telemetry = balloonPositionService.currentTelemetry {
-            // APRS-only mode (no BLE connection) - use APRS frequency
-            return String(format: "%.2f MHz", telemetry.frequency)
-        } else {
-            // Fallback to default
-            return String(format: "%.2f MHz", 434.0)
+            // Only show if we have actual device settings from sonde (not default)
+            if frequency != 434.0 {
+                return String(format: "%.2f MHz", frequency)
+            }
         }
+
+        // No sonde frequency available
+        return "--- MHz"
     }
 
     private var signalStrengthString: String {
