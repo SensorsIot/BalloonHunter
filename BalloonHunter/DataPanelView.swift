@@ -222,14 +222,9 @@ struct DataPanelView: View {
     }
 
     private var frequencyString: String {
-        // Display only the frequency programmed into RadioSondyGo
-        if bleService.connectionStatus == .connected {
-            let frequency = bleService.deviceSettings.frequency
-            return String(format: "%.2f MHz", frequency)
-        }
-
-        // No RadioSondyGo connection - no frequency to display
-        return "--- MHz"
+        // Display the frequency programmed into RadioSondyGo
+        let frequency = bleService.deviceSettings.frequency
+        return String(format: "%.2f MHz", frequency)
     }
 
     private var signalStrengthString: String {
