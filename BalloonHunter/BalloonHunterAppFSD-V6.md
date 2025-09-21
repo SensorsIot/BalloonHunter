@@ -10,11 +10,36 @@ This document outlines requirements for an iOS application designed to assist a 
 
 The balloon carries a sonde that transmits its position signal. This signal is received by a device, called “MySondyGo”. This device transmits the received telemetry data via BLE to our app. So, sonde and balloon are used interchangeable.
 
-## Arcitecture
+### Architecture
 
-We want true separation of concerns with views handling only presentation logic and services managing all business  operations.
+  Our architecture continues to enforce a clean separation of responsibilities while embracing the new modular service layout and the map presenter.
 
- The app shall use a centralized coordinator pattern. The ServiceCoordinator class is the heart of this architecture. It should only be used when beneficial. Otherwise use direct calls
+  - Separation of Concerns
+    Business logic lives in services and the coordinator; SwiftUI views remain declarative, consuming ready-to-render state from environment objects without
+    reaching into data sources directly.
+  - Coordinator as Orchestrator
+    ServiceCoordinator is still the single point that listens to raw service publishers, applies cross-cutting rules (prediction cadence, landing detection
+    policy, route refresh), and publishes the merged app state.
+  - Modular Services
+    Each service file bundles one domain: location tracking, balloon telemetry smoothing, persistence, routing, or prediction. Grouping the related caches
+    (PredictionCache, RoutingCache) alongside their services keeps the surface area small and reduces coupling.
+  - Presenter Layer for Complex Views
+    The new MapPresenter packages map-specific state transformations (overlay generation, formatted strings, user intents) so TrackingMapView no longer needs
+    to manipulate coordinator state directly. This keeps the coordinator focused on orchestration and the view focused on layout.
+  - Combine-Driven Data Flow
+    Services publish changes via @Published properties or actors; the coordinator and presenter subscribe, transform, and re-publish derived values. This
+    provides a single reactive pipeline from BLE/location inputs to UI outputs.
+  - Environment-Driven UI
+    Views observe the coordinator, presenter, and settings objects through @EnvironmentObject. User actions (toggle heading, trigger prediction, open Maps)
+    bubble up through intent methods defined on the presenter/coordinator instead of mutating state locally.
+  - Persistence & Caching
+    PersistenceService handles all disk IO (tracks, landing history, user/device prefs), and caching actors prevent redundant prediction/route work. Both are
+    injected once through AppServices, reinforcing a single source of truth.
+  - Extensibility Without File Sprawl
+    Although the monolith Services.swift is gone, we still ask before adding files. Related services are grouped, presenters encapsulate screen-specific
+    logic, and shared models remain centralized (CoreModels.swift) to keep navigation simple.
+
+This combination preserves the coordinator-centric design from the original FSD while aligning better with SwiftUI best practices (thin views, observable presenters) and making individual services easier to test and swap.
 
 ### File Structure
 
@@ -36,13 +61,33 @@ The central architectural component that coordinates all services, manages appli
 
 An extension to ServiceCoordinator that specifically contains the detailed 8-step startup sequence logic, keeping the main ServiceCoordinator file cleaner.
 
-#### Services.swift:
+#### CoreModels.swift:
 
-A consolidated services implementation file. It defines shared models (`TelemetryData`, `LandingPredictionPoint`, etc.), the telemetry providers (BLE and APRS), `BalloonTrackService`, `LandingPointTrackingService`, routing helpers, persistence, and supporting utilities used throughout the app.
+Centralizes the shared data types (`TelemetryData`, `BalloonTrackPoint`, `PredictionData`, etc.) plus logging helpers so every service can import the same model definitions without circular references.
+
+#### LocationServices.swift:
+
+Houses the `CurrentLocationService` and related helpers that manage background/precision GPS updates, distance overlays, and proximity checks against the balloon.
+
+#### BalloonTrackingServices.swift:
+
+Contains `BalloonPositionService`, `BalloonTrackService`, and `LandingPointTrackingService`. These coordinate telemetry parsing, track smoothing, landing detection, and persistence of historic track/landing data.
+
+#### RoutingServices.swift:
+
+Bundles `RouteCalculationService` with the `RoutingCache` actor. Route planning and caching logic now live together so the coordinator can request routes without touching unrelated services.
+
+#### PersistenceService.swift:
+
+Dedicated file for the `PersistenceService`, responsible for saving/loading tracks, landing histories, user/device settings, and coordinating document-directory persistence.
 
 #### BLEService.swift:
 
-Contains the BLECommunicationService, which is responsible for all Bluetooth Low Energy  communication, including device scanning, connection, and parsing incoming data packets from the MySondyGo device.
+Contains the `BLECommunicationService`, which is responsible for all Bluetooth Low Energy communication, including device scanning, connection, and parsing incoming data packets from the MySondyGo device.
+
+#### MapPresenter.swift:
+
+An observable presenter that aggregates map-related state from the coordinator and services. Views bind to it for overlays, distance text, and intent methods (toggle heading, open Maps, etc.).
 
 #### TrackingMapView.swift:
 
@@ -54,27 +99,15 @@ A SwiftUI view that displays the two tables of telemetry and calculated data at 
 
 #### SettingsView.swift:
 
-Contains the UI for all settings, including the main "Sonde Settings" and the tabbed "Device Settings" sheet.
+Contains the UI for all settings, including the main "Sonde Settings" and the tabbed "Device Settings" sheet (with inlined numeric text field control).
 
 #### PredictionService.swift:
 
-Implements the SondeHub prediction workflow (manual and scheduled), including API orchestration, caching integration, and publishing `PredictionData` back to the coordinator and UI.
-
-#### PredictionCache.swift:
-
-An actor that provides a thread-safe, in-memory cache for prediction data to avoid redundant API calls.
-
-#### RoutingCache.swift:
-
-An actor that provides a thread-safe, in-memory cache for calculated routes to avoid redundant route calculations.
+Implements the SondeHub prediction workflow (manual and scheduled), including API orchestration, caching integration, and publishing `PredictionData` back to the coordinator and UI. The prediction cache actor now lives inside this file.
 
 #### DebugCSVLogger.swift:
 
 Utility that records incoming telemetry frames (excluding development sondes) to a CSV file in the app’s documents directory for offline analysis.
-
-#### NumericTextField.swift:
-
-A reusable SwiftUI control for constrained numeric entry, used in settings screens where keypad-free digit editing is required.
 
 #### Settings.swift:
 
@@ -83,31 +116,33 @@ Defines `UserSettings`, `DeviceSettings`, and app-level configuration structures
 
 
 
-### Key components and roles:
+### Architecture
 
-####    AppServices (Dependency Container):
+Our architecture keeps the coordinator-centric design while reinforcing clear separation of responsibilities.
 
-This class acts as a simple dependency injection (DI) container. It is  responsible for creating and owning the instances of the foundational services when the app starts.
+- **Separation of Concerns**  
+  Business logic lives in services and the coordinator; SwiftUI views remain declarative consumers of published state and never reach into data sources directly.
 
-#### Service Coordinator (The Central Hub):
+- **Coordinator as Orchestrator**  
+  `ServiceCoordinator` listens to service publishers, applies cross-cutting rules (prediction cadence, landing detection, routing policies), and republishes merged state for the UI.
 
-This is the most critical component in the architecture. It serves two  primary functions:  
-**State Manager:** It acts as the single source of truth for the application's state. It holds all the data needed for the UI in its @Published properties (e.g., balloonTelemetry, annotations, userRoute).  
-**Orchestrator**: It contains the business logic that subscribes to events from the various services and decides what to do. For example, it listens for new telemetry data and decides whether to trigger a new prediction or route calculation.
+- **Modular Services**  
+  Location, balloon tracking, routing, prediction, and persistence each live in their own files. Caches are co-located with the services that use them, keeping APIs small and dependencies minimal.
 
-####    Services (Data Producers and Workers):
+- **Presenter Layer for Complex Screens**  
+  `MapPresenter` consolidates map-specific state transformations (overlays, distance strings, intent handling) so the map view remains a pure SwiftUI layout and the coordinator stays focused on coordination.
 
-Each service has a distinct responsibility:
+- **Combine-Driven Data Flow**  
+  Services publish via `@Published` or actors; the coordinator and presenter subscribe, transform, and re-publish. This provides a single reactive pipeline from BLE/location inputs to UI outputs.
 
-* BLE CommunicationService: Manages all aspects of Bluetooth communication.  
-* CurrentLocationService: Provides the user's GPS location.  
-* BalloonTrackService: Manages the history of the balloon's flight path.  
-* PredictionService & RouteCalculationService: Perform on-demand calculations then called by the ServiceCoordinator.  
-* PersistenceService: Handles saving and loading data.
+- **Environment-Driven UI**  
+  Views observe the coordinator/presenter/settings through `@EnvironmentObject`. User actions bubble up through intent methods instead of mutating state locally.
 
-#### Views (UI Layer):
+- **Persistence & Caching**  
+  `PersistenceService` centralizes disk IO, `PredictionCache` and `RoutingCache` avoid redundant work, and both are injected once through `AppServices`, ensuring a single source of truth.
 
-The SwiftUI views (like TrackingMapView and DataPanelView) are the presentation layer. They are designed to be "dumb" consumers of data. They use @EnvironmentObject to observe the ServiceCoordinator and automatically update whenever its @Published properties change. User interactions (like button taps) are forwarded as simple method calls to the ServiceCoordinator.
+- **Extensibility Without File Sprawl**  
+  Even though services live in multiple files now, related pieces are grouped, shared models remain in `CoreModels.swift`, and new files are added only with deliberate intent, keeping navigation simple.
 
 ### Data Flow
 
@@ -124,165 +159,158 @@ The SwiftUI views (like TrackingMapView and DataPanelView) are the presentation 
 
 ## Services
 
-### BLE Communication Service
+### BLE Communication Service (MySondyGo UART)
 
-Purpose: Manages Bluetooth communication with MySondyGo devices
+**Purpose**  
+Discover and connect to MySondyGo devices over Bluetooth Low Energy, subscribe to their UART characteristic, parse the MySondyGo Type 0–3 packets, and surface telemetry, device status, and diagnostic information to the rest of the app.
 
-####   Input Triggers:
+**Constants & UUIDs**
 
-- Bluetooth state changes (powered on/off)  
-- Device discovery events  
-- Incoming BLE data packets  
-- User commands (get parameters, set frequency, etc.)
+- `UART_SERVICE_UUID` = `53797269-614D-6972-6B6F-44616C6D6F6E`
+- `UART_RX_CHARACTERISTIC_UUID` (notify) = `53797267-614D-6972-6B6F-44616C6D6F8E`
+- `UART_TX_CHARACTERISTIC_UUID` (write/writeWithoutResponse) = `53797268-614D-6972-6B6F-44616C6D6F7E`
 
-####   Data it Consumes:
+**Initialization**
 
-1. Raw BLE message strings (Type 0,1,2,3 packets)  
+1. Constructed with a `PersistenceService` reference.
+2. Creates a `CBCentralManager` (queue `nil`, delegate `self`).
+3. Starts two timers: every 3 seconds `updateTelemetryAvailabilityState()` checks `lastTelemetryUpdateTime`; every 10 seconds `printBLEDiagnostics()` logs health information.
 
-2. User command requests  
-3. Bluetooth peripheral data
+**State Publishers**
 
-####   Data it Publishes:
+- `telemetryAvailabilityState`, `latestTelemetry`, `deviceSettings`, `connectionStatus`, `lastMessageType`.
+- `telemetryData` (`PassthroughSubject<TelemetryData, Never>`), `lastTelemetryUpdateTime`, `isReadyForCommands`.
+- `centralManagerPoweredOn` (`PassthroughSubject<Void, Never>`).
 
--  @Published var telemetryAvailabilityState: Bool \- Whether telemetry is available  
+**Central Manager Lifecycle**
 
--  @Published var latestTelemetry: TelemetryData? \- Latest parsed telemetry  
--  @Published var deviceSettings: DeviceSettings \- MySondyGo device configuration  
--  @Published var connectionStatus: ConnectionStatus \- .connected, .disconnected, .connecting  
--  @Published var lastMessageType: String? \- "0", "1", "2", "3"  
--  PassthroughSubject\<TelemetryData, Never\>() \- Real-time telemetry stream  
--  @Published var lastTelemetryUpdateTime: Date? \- Last update timestamp  
--  @Published var isReadyForCommands: Bool \- Can send commands to device
+- `centralManagerDidUpdateState` logs state transitions. When `.poweredOn`, emits `centralManagerPoweredOn` and marks BLE healthy; when powered off/unauthorized, sets `connectionStatus = .disconnected` and publishes an unhealthy event.
+- `startScanning()` runs only when Bluetooth is powered on. Scans for peripherals advertising the UART service whose name contains “MySondy”; duplicate discovery is disabled.
 
-####   Example Data:
+**Peripheral Discovery & Connection**
 
-  TelemetryData(  
-      sondeName: "V4210129",  
-      probeType: "RS41",  
-      frequency: 404.500,  
-      latitude: 46.9043,  
-      longitude: 7.3100,  
-      altitude: 1151.0, // meters  
-      verticalSpeed: 153.0, // m/s  
-      horizontalSpeed: 25.3, // km/h  
-      signalStrength: \-90 // dBm
+- `didDiscover` accepts devices whose name contains “MySondy”. Stops scanning, assigns `connectedPeripheral`, sets the delegate, and calls `connect`.
+- `didConnect` logs success, sets `connectionStatus = .connected`, and starts `discoverServices([UART_SERVICE_UUID])`.
+- `didFailToConnect` logs an error and restarts scanning.
+- `didDisconnect` logs whether the disconnect was clean or error-driven, flips `connectionStatus`, resets `isReadyForCommands`, and—if unexpected—restarts the scan after 2 seconds.
 
-#### Device Discovery and Connection  
+**Service & Characteristic Discovery**
 
-* The service actively scans for nearby Bluetooth Low Energy (BLE) devices.  
-* It will only attempt to connect to devices whose name includes “MySondyGo”.  
-* At any time, the service will maintain a connection to at most one “MySondyGo” device. If a connection is lost, it will attempt to reconnect automatically.  
-* UART\_SERVICE\_UUID \= "53797269-614D-6972-6B6F-44616C6D6F6E"  
-* UART\_RX\_CHARACTERISTIC\_UUID \= "53797267-614D-6972-6B6F-44616C6D6F8E"  
-* UART\_TX\_CHARACTERISTIC\_UUID \= "53797268-614D-6972-6B6F-44616C6D6F7E"
+- `didDiscoverServices` iterates services; for the UART service it discovers RX/TX characteristics.
+- `didDiscoverCharacteristicsFor` sets `writeCharacteristic` (prefers `.write` but falls back to `.writeWithoutResponse`) and enables notifications on RX. If TX is missing it logs an error; once configured it publishes a healthy event.
 
-2. Receiving Data from the Balloon  
+**Receiving Data**
 
-- When a connection to a device is established, the device begins transmitting data packets using the Serial BLE protocol as described in the Appendix.  
-- The service is responsible for receiving, buffering, and assembling these packets as they arrive.
+- `didUpdateNotificationStateFor` logs success/failure when enabling RX notifications.
+- `didUpdateValueFor` receives `Data` from RX, converts to UTF‑8, and passes the string to `parseMessage(_)`.
 
-3. Packet Parsing and Data Extraction  
+**Packet Parsing**
 
-* The service parses each incoming BLE packet according to the structure and definitions specified in the Appendix.  
+- `parseMessage` splits on `/`, stores `lastMessageType`, and flips `isReadyForCommands` on the first valid packet. It schedules `getParameters()` 0.5 s after the first packet per the FSD.
+- On the first packet it also logs telemetry availability (Type 1 implies telemetry is ready).
+- Switches on `messageType`:
+  - **Type 0** (device status): logs a structured “📊 BLE PARSED (Type 0)” line; on parse failure logs raw fields.
+  - **Type 1** (telemetry): logs both a debug (label=value) and info summary, performs plausibility checks (latitude/longitude bounds, altitude range, horizontal speed ≤150 m/s, vertical speed ≤100 m/s, battery percentage 0–100, battery mV 2500–5000). Failing fields emit a ⚠️ log. Calls `parseType1Message` to build `TelemetryData` and discards samples with latitude/longitude 0. Valid telemetry updates `latestTelemetry`, `lastTelemetryUpdateTime`, and pushes through `telemetryData`.
+  - **Type 2** (name/status) and **Type 3** (device config) log structured output and update `deviceSettings`.
+- Out-of-range or malformed packets (also la:0/lon:0) log `🔴` messages and are skipped. RSSI is reported as a positive number from BLE and is displayed as negative nummer.
 
-* All packets are parsed and the content made available to other parts of the app in real time.  
+**Command Interface**
 
-* Type 1 Outliers with lat: \=0/lon=0 positions shall be skipped right after parsing and not be passed on.
+- Methods such as `getParameters()`, `setMuteState(_:)`, `sendFrequencyAndTypeToDevice(...)`, and `setAPRSNameType(_:)` construct UART commands and write them to TX (preferring `.withResponse`). Guard clauses ensure commands only execute when TX is ready; otherwise a log entry is produced.
 
-  Reliability and Error Handling
+**Telemetry Availability**
 
-* If the BLE connection is dropped or interrupted for any reason, the service will attempt to reconnect and resume regular operation automatically.  
+- `updateTelemetryAvailabilityState()` runs every 3 seconds; if the latest Type‑1 packet is older than 3 seconds, logs “Telemetry LOST”, flips `telemetryAvailabilityState` to false; when telemetry resumes it logs “Telemetry GAINED” and sets the state to true.
 
-* All parsing errors or malformed packets will be skipped to maintain stability, and attempts will be made to process subsequent packets.
+**Stability Notes**
+
+- All CoreBluetooth errors are caught and logged without crashing the service.
+- CSV logging for each telemetry sample is handled downstream (`BalloonTrackService` → `DebugCSVLogger`).
+- Automatic settings requests happen once after the first valid packet; subsequent requests are user-driven via the settings UI.
+
 
 
 ### APRS Telemetry Service
 
-Purpose: Provide SondeHub-driven telemetry frames when BLE data is unavailable while presenting a unified interface to consumers.
+**Purpose**  
+Provide SondeHub-driven telemetry frames whenever BLE data is unavailable so downstream services can keep running without special cases.
 
-####   Input Triggers:
+#### Input Triggers
 
-- Poll ticks on the APRS scheduler (5 s when BLE is stale, 60 s otherwise)  
-- Notifications from the coordinator that BLE telemetry has resumed (stop polling)  
-- Active sonde name updates from the BLE pipeline (reconcile SondeHub serial)  
-- User confirmation events for serial remapping prompts
+- Scheduler tick (5 s when BLE telemetry is stale, 60 s health-check cadence otherwise).
+- Notification from the coordinator that BLE telemetry has resumed (stop polling).
+- Station-ID changes in settings (e.g., switching to a different launch site).
 
-####   Data it Consumes:
+#### Data it Consumes
 
-1. SondeHub v2 REST API (`/sondes/<serial>/telemetry?limit=1`)  
-2. Current BLE-reported sonde name to determine the matching SondeHub serial  
-3. Coordinator-provided confirmation callback to resolve serial mismatches
+1. SondeHub site data: `GET /sondes/site/<station_id>` (Payerne = `06610`). This single call provides both the latest sonde serial numbers and their most recent telemetry data.
+2. Station configuration stored in user settings (defaults to Payerne).
 
-####   Data it Publishes:
+#### Data it Publishes
 
-- `TelemetryFrame` objects tagged with `.aprs` source for downstream processing  
-- Service state (e.g., current SondeHub serial, polling cadence) for diagnostics
+- `TelemetryFrame` objects tagged with `.aprs` for the same consumers that read BLE frames.
+- Service state (current station ID, last SondeHub serial, poll cadence) for diagnostics.
+- The service should be compatible with th BLE telemetry service
 
-####   Example Data:
+#### Example Data
 
-  TelemetryFrame(  
-      source: .aprs,  
-      sondeName: "T4630250",  
-      latitude: 47.1234,  
-      longitude: 7.5678,  
-      altitude: 1850.0,  
-      horizontalSpeed: 21.7,  
-      verticalSpeed: -4.2,  
-      timestamp: Date()  
-  )
+```swift
+TelemetryFrame(
+    source: .aprs,
+    sondeName: "V4210201",
+    latitude: 47.00093,
+    longitude: 7.15809,
+    altitude: 8928.4,
+    horizontalSpeed: 22.8,
+    verticalSpeed: 7.2,
+    timestamp: Date()
+)
+```
 
-####   Behavior
+#### Behavior
 
-- Acts as a `TelemetryProvider`, allowing `BalloonTrackService` to consume APRS frames identically to BLE frames.  
-- On startup, probes SondeHub for the most recent telemetry using the BLE-provided sonde name; if SondeHub reports a different serial, the user is prompted: “Use SondeHub serial T4630250 changed to V4210123?”. Polling continues only after confirmation, and the mapping lasts for the current run.  
-- Poll cadence is 5 s when APRS data is actively needed (BLE stale) and 60 s as a lightweight health check when BLE is healthy.  
-- Automatically suspends polling as soon as fresh BLE telemetry resumes, resuming later if BLE becomes stale again.  
-- Does not perform flight-state decisions, smoothing, or plausibility checks; these remain centralized in `BalloonTrackService`.
-
+- On startup (and whenever the station ID changes), and during active polling, call `/sondes/site/<station_id>`.
+- From the response, identify the most recent sonde by its timestamp.
+- Convert the telemetry data for that sonde directly into a `TelemetryFrame` and publish it so `BalloonTrackService` treats it exactly like BLE telemetry. This single call replaces the previous two-step process.
+- Poll every 15 seconds while BLE telemetry is stale; slow down to a 60-second health check when BLE is healthy.  
+- Suspend polling as soon as fresh BLE telemetry resumes.  
+- Flight-state decisions, smoothing, and landing detection remain the responsibility of `BalloonTrackService`—the APRS service only supplies raw telemetry frames.
 
 ### Current Location Service
 
-Purpose: Tracks iPhone's GPS location and heading
+**Purpose**  
+Keep track of the iPhone’s location and heading, swap automatically between low-power background tracking and precise “heading mode,” detect meaningful movement, and publish the raw distance to the balloon so the UI can render the overlay.
 
-####   Input Triggers:
+#### When it runs
 
-  \- Location permission changes  
-  \- GPS location updates from iOS  
-  \- Heading/compass changes  
-  \- Proximity mode changes (balloon distance)
+- Whenever the user changes location permissions.
+- Whenever iOS delivers new location updates (background mode roughly every 30 s, precision mode every few meters/seconds).
+- Whenever the compass heading changes.
+- Whenever the presenter/coordinator provides an updated balloon position.
 
-####   Data it Consumes:
+#### What it listens to
 
-  \- iOS CLLocation updates  
-  \- CLHeading updates  
-  \- Balloon position (for proximity calculations)
+- Location and heading events emitted by iOS.
+- The current balloon coordinate supplied upstream.
 
-####   Data it Publishes:
+#### What it shares
 
-  \- @Published var locationData: LocationData? \- Current iPhone location  
-  \- @Published var isLocationPermissionGranted: Bool \- Permission status
+- `locationData`: latest user position with altitude/accuracy/heading/timestamp.
+- `isLocationPermissionGranted`: current authorization state.
+- `significantMovementLocation`: last position where the user moved ≥10 m.
+- `distanceToBalloon`: straight-line distance in meters (nil if unknown).
+- `isWithin200mOfBalloon`: proximity flag used by the UI to toggle navigation cues.
 
-####   Example Data:
+#### How it behaves
 
-  LocationData(  
-      latitude: 47.4746668, // degrees  
-      longitude: 7.7673036, // degrees    
-      altitude: 456.2, // meters  
-      accuracy: 5.0, // meters  
-      heading: 245.3, // degrees  
-      timestamp: Date()
-
-####    Description
-
-Two-Mode GPS Configuration  
-  🎯 CLOSE MODE (\<100m to balloon):  
-  \- kCLLocationAccuracyBest \- Highest GPS precision  
-  \- distanceFilter \= kCLDistanceFilterNone \- No movement threshold  
-  \- Time-based filtering: Max 1 update per second  
-  📡 FAR MODE (\>100m to balloon):  
-  \- kCLLocationAccuracyNearestTenMeters \- Reasonable precision  
-  \- distanceFilter \= 5.0 \- Only update on 5+ meter movement  
-  \- No additional time filtering needed
+- Creates two location managers: one for background updates (10 m filter + 30 s timer) and one for heading mode (best accuracy, 2 m filter).
+- Requests “When In Use,” then “Always,” and begins monitoring significant movement once permitted.
+- `enableHeadingMode()` / `disableHeadingMode()` switch managers and log the change so diagnostics stay clear.
+- Every location callback builds a new `LocationData`, throttles precision updates to at least 1 s apart, logs movement jumps (>20 m), updates the significant-movement marker, and recomputes both distance-to-balloon and the 200 m proximity flag.
+- Heading callbacks keep the last known direction so future `LocationData` includes it.
+- `updateDistanceToBalloon()` computes the raw meters from user to balloon; formatting (e.g., “123 m” vs “1.2 km”) is handled by the view.
+- `updateBalloonDisplayPosition(_:)` is called whenever the presenter pushes a new balloon coordinate, so distance and proximity are refreshed immediately.
+- Errors or denials are logged via `appLog`; routine health spam is muted. Timers are cleaned up automatically when the service is deallocated.
 
 ### Persistence Service
 
@@ -332,315 +360,207 @@ Purpose: Saves/loads data to UserDefaults. During development, and because user 
 * Landing Point: Coordinates of the landing point are persisted together with the sonde name. It always persists if  the landing point is updated.  
 * Balloon track: All balloon track data is stored together with a time stamp. Historic track data is persisted.
 
+### Balloon Position Service
+
+**Purpose**  
+Store the most recent telemetry snapshot (coordinates, altitude, sonde name, vertical speed) and keep the current distance from the user to the balloon up to date.
+
+#### Inputs
+
+- Type 1 telemetry packets published by `BLECommunicationService`.
+- User location updates from `CurrentLocationService`.
+
+#### Publishes
+
+- `currentTelemetry`, `currentPosition`, `currentAltitude`, `currentVerticalSpeed`, `currentBalloonName`.
+- `distanceToUser` (meters), `timeSinceLastUpdate`, `hasReceivedTelemetry`.
+
+#### Behavior
+
+- Subscribes to BLE telemetry and caches the latest packet, updating the time stamp and derived values.
+- Subscribes to user location changes; whenever either endpoint moves, it recomputes the straight-line distance.
+- A 1 Hz timer updates `timeSinceLastUpdate` so other services can detect staleness.
+- Exposes helper methods (`getBalloonLocation()`, `isWithinRange(_:)`, etc.) for downstream policies.
+
+An APRS telemetry provider can publish into the same Combine pipeline. When enabled, it would feed the position service whenever BLE telemetry is stale (see "APRS Telemetry Service" for the planned behavior).
+
 ### Balloon Track Service
 
-    Purpose: Maintain telemetry-derived flight history, smoothed motion metrics, landing state, and persistence for the active sonde.
+**Purpose**  
+Build the flight history, smooth velocities, detect landings, derive descent metrics, and persist track data for the active sonde.
 
-####   Input Triggers:
+#### Inputs
 
-- Telemetry frames emitted by any registered `TelemetryProvider` (BLE or APRS)  
-- Sonde identity changes embedded in telemetry (switching between balloons)  
-- Manual commands (`clearCurrentTrack()`, `setBalloonAsLanded(...)`)  
-- 1 Hz staleness timer evaluating telemetry freshness
+- `BalloonPositionService.$currentTelemetry` for every telemetry sample.
+- `PersistenceService` to load/save tracks keyed by sonde name.
 
-####   Data it Consumes:
+#### Publishes
 
-1. Unified `TelemetryFrame` stream from `BLETelemetryProvider` and `APRSTelemetryService`  
-2. `PersistenceService` for loading/saving tracks per sonde  
-3. `BalloonPositionService` for current telemetry snapshots during smoothing/staleness checks
+- `currentBalloonTrack`, `currentBalloonName`, `currentEffectiveDescentRate`.
+- `trackUpdated` (Combine subject), `isBalloonFlying`, `isBalloonLanded`, `landingPosition`, `balloonPhase`.
+- Smoothed metrics: `smoothedHorizontalSpeed`, `smoothedVerticalSpeed`, `adjustedDescentRate`, `isTelemetryStale`.
 
-####   Data it Publishes:
+#### Behavior
 
-- `@Published var currentBalloonTrack: [BalloonTrackPoint]` — per-sample history with derived speeds  
-- `@Published var currentBalloonName: String?` — active sonde identifier  
-- `@Published var currentEffectiveDescentRate: Double?` — regression-based descent (m/s) from last 5 points  
-- `let trackUpdated = PassthroughSubject<Void, Never>()` — notifications for observers that the track changed  
-- `@Published var isBalloonFlying: Bool` — true when recent telemetry indicates flight  
-- `@Published var isBalloonLanded: Bool` — landing latch driven by statistical detector  
-- `@Published var landingPosition: CLLocationCoordinate2D?` — smoothed landing coordinate when available  
-- `@Published var balloonPhase: BalloonPhase` — `.unknown`, `.ascending`, `.descendingAbove10k`, `.descendingBelow10k`, `.landed`  
-- `@Published var smoothedHorizontalSpeed: Double` — Hampel-filtered + EMA result in m/s  
-- `@Published var smoothedVerticalSpeed: Double` — Hampel-filtered + EMA result in m/s  
-- `@Published var adjustedDescentRate: Double?` — 60 s robust median blended into 20-sample moving average  
-- `@Published var isTelemetryStale: Bool` — true if the latest telemetry is older than 3 s
+1. **Sonde management** — When a new sonde appears, the service attempts to load its persisted history. Switching sondes clears the previous track and counters before loading the new data (or starting fresh).
+2. **Track updates** — Each telemetry sample is converted into a `BalloonTrackPoint`; if a previous point exists the service recomputes horizontal speed via great-circle distance and vertical speed via altitude delta for consistency. The point is appended, descent regression is updated, and observers receive `trackUpdated`.
+3. **Speed smoothing** — Maintains Hampel buffers (window 10, k=3) to reject outliers, applies deadbands near zero, and feeds an exponential moving average (τ = 10 s) to publish smoothed horizontal/vertical speeds.
+4. **Adjusted descent rate** — Looks back 60 s over the track, computes interval descent rates, takes the median, and keeps a 20-entry rolling average; this value feeds UI displays when available.
+5. **Landing detection** — Uses rolling buffers (vertical/horizontal speeds, up to 100 coordinates) to compute a confidence score combining altitude spread, horizontal radius, speed stability, and sample count. Once confidence reaches 75%, `isBalloonLanded` latches and the landing coordinate is averaged. Confidence dropping below 40% for three consecutive updates (or too few samples) clears the latch. `balloonPhase` is updated to ascending/descending/landed accordingly.
+6. **Staleness** — A 1 Hz timer flips `isTelemetryStale = true` whenever the latest telemetry is more than 3 s old.
+7. **Persistence** — Saves the track every 10 telemetry points via `saveBalloonTrack`. Helpers expose the full track for app-shutdown persistence (`saveOnAppClose`). CSV logging for each telemetry sample is routed to `DebugCSVLogger`.
 
-####   Example Data:
+### Landing Point Tracking Service
 
-  BalloonTrackPoint(  
-      latitude: 46.9043,  
-      longitude: 7.3100,  
-      altitude: 1151.0, // meters  
-      verticalSpeed: -3.2, // m/s (derived)  
-      horizontalSpeed: 7.1, // m/s (derived)  
-      timestamp: Date()  
-  )
+**Purpose**  
+Maintain the list of landing predictions for the active sonde, deduplicate noisy updates, and persist/restore the history for reuse in the tracking map.
 
-####   Startup & Sonde Switching
+#### Inputs
 
-- On initialization, logs readiness and waits for the first telemetry sample to determine the sonde.  
-- The first sample for a sonde attempts to load its persisted track via `PersistenceService.loadTrackForCurrentSonde`.  
-- When telemetry announces a different sonde than the current one, previous track data is purged before loading the new sonde’s history; counters reset to start a fresh track when needed.
+- Landing predictions (coordinate, prediction time, optional ETA) produced by `PredictionService` / coordinator.
+- `BalloonTrackService.$currentBalloonName` to detect sonde changes.
+- `PersistenceService` for load/save operations keyed by sonde name.
 
-####   Telemetry Providers & Arbitration
+#### Publishes
 
-- Subscribes to every registered `TelemetryProvider` (BLE and APRS) and maintains the freshest frame per source.  
-- Prefers BLE telemetry whenever the last BLE frame is ≤3 seconds old; otherwise, falls back to APRS.  
-- Switches immediately back to BLE once fresh frames return.  
-- Staleness detection drives the `isTelemetryStale` flag published to the UI.
+- `landingHistory` (ordered `LandingPredictionPoint` array).
+- `lastLandingPrediction` (latest entry, or `nil`).
 
-####   Telemetry Processing Pipeline
+#### Behavior
 
-- Each incoming frame passes a plausibility check: the derived 3-D speed (using horizontal and vertical components) must be ≤700 km/h (~194.4 m/s); faster frames are dropped as outliers.  
-- Each telemetry sample is converted into a `BalloonTrackPoint`, recomputing horizontal speed via great-circle distance/T∆ and vertical speed via altitude delta/T∆ to ensure consistent metrics.  
-- The new point is appended, `currentEffectiveDescentRate` is recomputed using linear regression over the last 5 points, and `trackUpdated` notifies observers.  
-- Robust speed smoothing mirrors the FSD spec: Hampel filter (window 10, k=3), deadbands (|vᵥ| < 0.05 m/s, vₕ < 0.2 m/s), followed by EMA with τ=10 s, producing the published smoothed speeds.  
-- `adjustedDescentRate` derives from the last 60 s of track samples (median interval rate) blended into a 20-sample rolling average.  
-- CSV diagnostics for every telemetry sample are forwarded to `DebugCSVLogger` for offline analysis.
-
-####   Landing Detection & Phase Updates
-
-- Maintains sliding buffers (10/30 samples plus 100-position landing buffer) to evaluate stability.  
-- Calculates landing confidence by weighting altitude spread (20%), horizontal radius (40%), speed stability (30%), and sample count (10%); 75% confidence or higher latches `isBalloonLanded = true`.  
-- When latched, landing position is the averaged coordinate from the buffered samples (requires ≥50 points, otherwise last position).  
-- Hysteresis reuses the confidence score: if a latched landing later reports <40% confidence (or the sample window drops below 3 points) for 3 consecutive updates, the service treats it as a false positive, clears `isBalloonLanded`, wipes the provisional landing position, and resumes flight mode.  
-- `isBalloonFlying` is true whenever telemetry is recent and landing has not latched; `balloonPhase` is set to ascending/descending/landed based on smoothed vertical speed and altitude thresholds.  
-- When APRS continues to supply an identical position (e.g., after landing), the existing landing detection logic marks the balloon as landed; any new moving BLE frames re-evaluate the state.  
-- Manual override `setBalloonAsLanded` can force the landed state at an arbitrary coordinate for clipboard-driven workflows.
-
-####   Persistence & Staleness Handling
-
-- Tracks are persisted via `PersistenceService.saveBalloonTrack` every 10 telemetry points while a sonde name is known.  
-- `clearCurrentTrack()` removes in-memory history and notifies observers without touching persistence.  
-- A repeating 1 s timer calls `checkTelemetryStaleness()`; if the latest telemetry timestamp is >3 s old, `isTelemetryStale` flips to true.  
-- Timer is invalidated on deinit to prevent leaks.
-
-GPS accuracy-aware statistical confidence-based landing detection: The system accounts for real-world GPS limitations where altitude accuracy (±10-15m) is 2-3x worse than horizontal accuracy (±3-5m). The weighted confidence calculation combines:
-
-* Altitude stability (20% weight) - Standard deviation with 12m tolerance for GPS altitude noise
-* Position stability (40% weight) - Maximum drift distance, prioritized due to superior horizontal GPS accuracy
-* Speed stability (30% weight) - Average (not maximum) speeds for more stable detection*
-* Sample size confidence (10% weight) - More data points increase confidence*
-
-Landing decision requires 75% confidence threshold and minimum 3 data points, enabling immediate detection when persistent track data is available while maintaining accuracy through proper statistical analysis that accounts for GPS technology limitations.
-
-False-positive guard: once the landing latch is set, the same confidence score must remain ≥40% (with ≥3 samples). Dropping below that floor for three consecutive updates automatically clears the landed state and resets the provisional landing position.
-
-#### Landing Point Tracking Service
-
-Purpose: Maintain a per-sonde history of predicted landing coordinates, persist the data alongside other telemetry artifacts, and present the path on the tracking map as a purple overlay.
-
-##### Input Triggers:
-
-- New Sondehub prediction results containing a landing position  
-- Sonde name changes reported by telemetry (reset state)  
-- App lifecycle events that trigger persistence (background, termination)
-
-##### Data it Consumes:
-
-- `PredictionService.latestPrediction` for landing coordinate/ETA metadata  
-- `PersistenceService` for loading/saving histories keyed by sonde name  
-- `BalloonTrackService.currentBalloonName` to scope histories to the active balloon
-
-##### Data it Publishes:
-
-- `@Published var landingHistory: [LandingPredictionPoint]` — ordered landing predictions for the active sonde  
-- `@Published var lastLandingPrediction: LandingPredictionPoint?` — latest entry for panels and tooltips
-
-##### Example Data:
-
-  LandingPredictionPoint(  
-      coordinate: CLLocationCoordinate2D(latitude: 46.91234, longitude: 7.31567),  
-      predictedAt: Date(),  
-      landingEta: Date().addingTimeInterval(3600),  
-      source: .sondehub  
-  )
-
-##### Behavior & Map Integration
-
-- Append new landing points when predictions arrive; deduplicate points closer than 25 m to reduce jitter before appending.  
-- Persist the history every few additions and during lifecycle saves using the current sonde name as the key.  
-- Clear in-memory and persisted history when the sonde name changes so each balloon starts fresh.  
-- Tracking map reads the published history directly, rendering a purple polyline and dot markers for each stored landing estimate.  
-- `lastLandingPrediction` feeds clipboard/manual overrides and fallback landing selection.
-
-Adjusted descend rate: This value is calculated every time a new telemetry arrives.
-
-#### Descent Rate Calculation:  
-
-  \- Takes current telemetry (altitude \+ timestamp) as "now"  
-  \- Finds reference point from \~60 seconds ago in track history  
-  \- Calculates: descent\_rate \= (current\_altitude \- historical\_altitude) / actual\_time\_difference  
-  Then 20-Value Smoothing:  
-  \- Each of these precisely-calculated descent rates goes into a buffer  
-  \- Average the last 20 such calculations for the final adjusted descent rate. If less than 20 values are available, it uses the available number.
+- When the active sonde changes, the previous history is cleared, the persisted history for the new sonde (if any) is loaded, and `lastLandingPrediction` is updated.
+- New landing predictions are deduplicated against the last point (25 m threshold) to avoid jitter; if it’s a new location, it is appended and immediately saved.
+- `persistCurrentHistory()` is invoked during app shutdown so the latest state is stored.
+- `resetHistory()` wipes the array and published “last” value so each balloon starts with a clean slate.
+- The tracking map observes `landingHistory` to draw the purple polyline and dots for historical landing estimates.
 
 ### Prediction Service
 
-Purpose: Single service handling both Sondehub API calls AND automatic prediction scheduling
+**Purpose**  
+Call the SondeHub prediction API on demand (manual or scheduled), cache results to avoid redundant requests, and surface landing-distance/time strings for the UI.
 
-####   Input Triggers:
+#### Inputs
 
-  \- Timer-based: 60-second automatic intervals when running  
-  \- Manual: User taps on balloon annotation  
-  \- Startup: First telemetry received after app launch  
-  \- API requests: External calls for prediction data
+- Latest telemetry frame (`TelemetryData`).
+- User settings (burst altitude, ascent/descent rates).
+- Smoothed descent rate supplied by `BalloonTrackService` when the balloon is below 10 000 m.
+- Cache key components (balloon ID, location, altitude, time bucket).
+#### Triggers
 
-####   Data it Consumes:
+- Manual: user taps the balloon annotation.
+- Startup: first telemetry after launch.
+- Timer: every 60 s while a valid prediction has not been generated recently.
 
-  \- Current telemetry data (TelemetryData)  
-  \- User settings (burst altitude, ascent/descent rates)  
-  \- Atmospheric model parameters from Sondehub  
-  \- Cache keys for deduplication  
-  \- ServiceCoordinator state for smoothed descent rates
+#### Publishes
 
-#####   Data it Publishes:
+- `isRunning`, `hasValidPrediction`, `lastPredictionTime`, `predictionStatus`, `latestPrediction`.
+- Formatted strings: `predictedLandingTimeString` (HH:mm) and `remainingFlightTimeString` (HH:mm).
 
-  \- @Published var isRunning: Bool \- Automatic prediction status  
-  \- @Published var hasValidPrediction: Bool \- Prediction available  
-  \- @Published var lastPredictionTime: Date? \- Last successful prediction  
-  \- @Published var predictionStatus: String \- Current status messages  
-  \- @Published var latestPrediction: PredictionData? \- Most recent prediction results  
-\- landing time  
-  \- Service health events and API responses
+#### Behavior
 
-The Sondehub balloon path prediction API ([https://github.com/projecthorus/tawhiri/](https://github.com/projecthorus/tawhiri/)) is used to predict:
+1. Builds a cache key using the balloon ID, quantized coordinate (two decimal places), altitude, and 5‑minute time bucket.
+2. On each trigger:
+   - Checks the `PredictionCache`; if a fresh entry exists and the call is not forced, emits the cached result.
+   - Otherwise constructs a SondeHub request using the current telemetry, burst altitude (user default above 10 km; current altitude + 10 m below 10 km), ascent/descent rates, and a “now + 1 minute” timestamp.
+   - Spins a non-blocking `URLSession` request with a 30 s timeout; interprets the JSON response into `PredictionData` (path, burst point, landing point/time). See [Prediction Service API (Sondehub)](#prediction-service-api-sondehub) for request/response details.
+   - Updates `latestPrediction`, `predictedLandingTimeString`, `remainingFlightTimeString`, and caches the response for future use.
+3. Logs API success/failure, tracks `apiCallCount`, and guards against overlapping calls.
+4. Provides manual `triggerManualPrediction()` (used by coordinator/tap gesture) and internal scheduling via a 60 s timer.
+5. Handles failures gracefully by updating `predictionStatus` and leaving `hasValidPrediction` false.
 
-* The balloon path  
-* The burst point (Balloon Burst)  
-* The landing point
+#### Notes
 
-* The landing time
-
-The API call has to be non-blocking with a timeout and provide a flag for a valid/nonvalid prediction that is published.
-
-It parses the JSON file and extracts the path, the burst point, and the landing point and time.
-
-##### Key parameters for the prediction API call:
-
-The api expects a date-time in the future, the burst altitude,  and the current altitude (launch altitude).
-
-* Burst Altitude: During ascent, the default is 35000m (can be changed in settings). When the balloon is descending, the burstAltitude parameter to be sent to the API is then automatically set to the current altitude plus 10 meters. The persisted burst altitude in the settings remains unchanged.  
-
-* Ascending Speed: Can be changed in settings, default is 5m/s.  
-
-* Descending Speed: Can be changed in settings, default is 5m/s. It is replaced by the adjusted descent speed if the balloon is below 10000m altitude  
-
-* Time: the actual time+1 minute
-
+- Predictions are skipped entirely if no telemetry is available or the balloon is already marked as landed.
+- The service lives on the main actor so published state updates remain synchronous with the UI.
+- CSV logging and other long-term diagnostics remain outside this service to keep it focused on API orchestration.
 
 ### Route Calculation Service
 
-Purpose: Calculates driving/cycling routes to landing point
+**Purpose**  
+Request a route from the user’s current location to the landing point using Apple Maps when possible, fall back to heuristics when it is not, and avoid redundant work via an in-memory cache.
 
-####   Input Triggers:
+#### Inputs
 
-  \- New landing point available  
-  \- User location changes (significant movement)  
-  \- Transport mode changes (car ↔ bike)  
-  \- Route recalculation requests
+- User location (`LocationData`).
+- Landing point coordinate (`CLLocationCoordinate2D`).
+- Selected transport mode (`TransportationMode.car` or `.bike`).
 
-####   Data it Consumes:
+#### Publishes
 
-  \- User location (LocationData)  
-  \- Landing point coordinates  
-  \- Transport mode (.car or .bike)
+- Returns `RouteData` asynchronously (`coordinates`, `distance`, `expectedTravelTime`, `transportType`).
+- `RoutingCache` actor stores recently computed routes keyed by origin/destination/mode.
 
-####   Data it Publishes:
+#### Behavior
 
-  \- RouteData \- Apple Maps route information  
-\- “valid/nonvalid” route
+1. Logs each request, then builds an `MKDirections.Request` from the user location to the landing point using the preferred transport type (car → `.automobile`, bike → `.cycling` on iOS 17+ with a `.walking` fallback when cycling data is unavailable).
+2. Attempts to calculate the route via `MKDirections`.
+3. If a route is returned, converts the polyline to `[CLLocationCoordinate2D]`, adjusts the ETA for bike mode (multiplies by 0.7), and wraps everything in `RouteData`.
+4. If `MKDirections` throws `MKError.directionsNotAvailable`:  
+   • Tries up to ten random 500 m offsets around the destination.  
+   • Runs a radial search (300/600/1200 m every 45°) while the error remains “directions not available”.  
+   • If nothing succeeds, falls back to a straight-line segment with a heuristic speed (car ≈ 60any other services km/h, bike ≈ 20 km/h) to produce a distance and arrival estimate.
+5. Any other error is propagated to the caller so the UI can handle failure states (e.g., hide the overlay).
+6. Successful routes are cached in `RoutingCache` for 5 minutes (LRU eviction, capacity 100). Callers check the cache before invoking Apple Maps again.
 
-####   Example Data:
+#### Notes
 
-  RouteData(  
-      route: MKRoute, // Apple Maps route object  
-      distance: 15420.0, // meters  
-      expectedTravelTime: 1260.0, // seconds (21 minutes)  
-      transportType: .car,  
-      polyline: MKPolyline, // Route path for map display  
-      instructions: \["Turn right on...", "Continue for 5km..."\]  
-  )
+- Bike travel times are shortened by 30 % to offset conservative Apple Maps (walking) estimates when MapKit directions are used; the native Maps hand-off still opens true cycling mode via the transport toggle.
+- Straight-line fallback ensures the UI always has a path to display, even without Apple Maps coverage.
+- `RoutingCache` entries expire automatically; metrics are logged for cache hits/misses.
 
-The route from the current location (the location of the iPhone) to the predicted landing point is calculated by calling Apple Maps. Two modes of transport are selectable (car or bicycle). The track is shown in a map overlay. The predicted arrival time at the landing point is shown in the data panel.
+### Service Coordinator
 
-A Transport Mode selector (car or bicycle) decides how to plan the route. If a new transport mode is selected, the existing route has to be erased.
+**Purpose**  
+Act as the single orchestration layer: subscribe to all service publishers, apply cross-service rules (landing detection, prediction cadence, routing refresh), and expose consolidated state to the UI.
 
-Use request.transportType \= .cycling for the transport mode “ bicycle”. Reduce the calculated travel time by 30% for the bicycle.
+#### Inputs
 
-#### Read landing point from clipboard
+- Telemetry updates from `BalloonPositionService` / `BalloonTrackService`.
+- User location updates from `CurrentLocationService`.
+- Prediction responses (`PredictionService`), route results (`RouteCalculationService`).
+- User intents coming from the presenter/views (toggle heading, mute buzzer, open settings, launch Apple Maps, etc.).
+- Lifecycle events (startup sequence, app backgrounding).
 
-If the user is too far from the balloon, the landing point information comes from [Radiosondy.info](http://Radiosondy.info). The user copies an openstreetmap link into the clipboard. The app can read it from there with a button press. A new landing position can be parsed from a URL in the clipboard.
-Example: [https://www.openstreetmap.org/directions?route=47.4738%2C7.75929%3B47.4987%2C7.667\#](https://www.openstreetmap.org/directions?route=47.4738%2C7.75929%3B47.4987%2C7.667#)
-This landing point is (lat: [47.4987, lon: 7.667](https://www.openstreetmap.org/directions?route=47.4738%2C7.75929%3B47.4987%2C7.667#)).
+#### Publishes
 
-*When a landing point is successfully parsed from the clipboard, the balloon is automatically set as landed. This triggers the landing mode UI which hides prediction paths, user routes, and runner icons while displaying the distance overlay for recovery operations.*
+- Map overlays and annotations (balloon track, predictions, routes, landing point, user location).
+- Aggregated telemetry (`balloonTelemetry`, `userLocation`, `balloonPhase`, landing status flags).
+- UI flags (`isHeadingMode`, `isRouteVisible`, `isTelemetryStale`, button enablement state).
+- Cached prediction/route data (`predictionData`, `routeData`) and derived strings (frequency, countdowns, etc.).
 
-###  Service Coordinator
+#### Behavior
 
-Purpose: Central coordinator orchestrating all services
-
-####   Input Triggers:
-
-  \- Telemetry updates from multiple sources  
-  \- Location updates  
-  \- User interactions  
-  \- Startup sequence events
-
-####   Data it Consumes:
-
-  \- All service outputs  
-  \- User interface events
-
-####   Data it Publishes:
-
-  \- Map state (annotations, regions, overlays)  
-  \- Coordinated application state  
-  \- UI update triggers  
-  \- Smoothed/calculated derivatives (descent rates, etc.)
-
-####   Example Coordinated Data:
-
-  // Map region encompassing all important points  
-  MKCoordinateRegion(  
-      center: CLLocationCoordinate2D(lat: 46.8800, lon: 7.3300),  
-      span: MKCoordinateSpan(latitudeDelta: 0.05, longitudeDelta: 0.05)  
-  )  
-  // Smoothed descent rate (20-value average)  
-  smoothedDescentRate: \-12.3 // m/s (negative \= descending)
-
-####   APRS Integration
-
-- Instantiates the BLE and APRS telemetry providers and injects them into `BalloonTrackService` so both data feeds share the same processing pipeline.  
-- Continuously forwards the current BLE sonde name to the APRS service, allowing it to reconcile and prompt for SondeHub serial changes before polling.  
-- Presents a centered confirmation popup (“Use SondeHub serial T4630250 changed to V4210123?”) whenever the SondeHub serial differs from the BLE telemetry name; APRS polling proceeds only after the user confirms.  
-- Suspends APRS polling the moment fresh BLE telemetry is available and restarts it automatically when BLE becomes stale again.
+1. **Startup orchestration** — Drives the multi-step startup sequence: show logo, initialise services, attempt BLE connection/settings, load persisted track/landing data, determine an initial landing point, and finally reveal the tracking map.
+2. **Telemetry pipeline** — Listens to balloon telemetry and user location; updates `balloonDisplayPosition`, phases, proximity flags, Apple Maps tracking, and pushes smoothed metrics from `BalloonTrackService`.
+3. **Landing point workflow** — Chooses the active landing point in priority order (live landed telemetry → prediction → clipboard → persisted fallback) and updates the map overlays accordingly.
+4. **Prediction scheduling** — Hands telemetry and settings to `PredictionService`, reacts to completions/failures, and exposes landing/flight time strings for the data panel.
+5. **Route management** — Requests routes when the landing point or user location changes, updates the green overlay, surfaces ETA/distance in the data panel, and honours cache hits to avoid redundant Apple Maps calls.
+6. **UI state management** — Owns camera mode (`isHeadingMode`), overlay toggles, buzzer mute, centre-on-all logic, and guards against updates while sheets (settings) are open.
+7. **Apple Maps hand-off** — `openInAppleMaps()` launches navigation using the selected transport mode (car → driving, bike → cycling on iOS 14+ with walking fallback). Tracks the last destination so the coordinator can detect navigation updates.
+8. **Optional APRS bridge** — When an APRS provider is enabled, the coordinator brokers SondeHub serial prompts and pauses APRS polling whenever fresh BLE telemetry is available.
 
 ## Startup
 
-1. Service Initialization: Services are initialized and logo page presentation (logo has to be presented as early as possible).   
-2. Initial Map: After calling location service, the tracking map (including button row and data panel)  shows the user's position (from location service) with a zoom of 25km.  
-3. Connect Device: The BLE communication service connects to the device. If no connection can be established, the app waits max 5 seconds for a connection. If no connection is available the no tracking flag is set. The BLE service is a non-blocking process that runs separately. Maybe a device is later connected.  
-4. Publish Telemetry: With an established connection, after receiving and decoding the first BLE package, the BLE service publishes if telemetry is available.  
-5. Read Settings: A command to read settings variables from MySondyGo is issued and the resulting settings are stored locally  
-6. Read Persistence: Next, the following data shall be read from persistence:  
-   * Prediction parameters  
-   * Historic track data  
-   * Landing point (if available)  
-7. Landing point determination: With this information, a valid landing point shall be determined.The priorities for that process are:
-   * Prio 1: If telemetry is received and islanded is active, the current balloon position is the landing point
-   * Prio 2: If the balloon is still in flight(telemetry available), the predicted landing position is the landing point
-   * Prio 3: If priority 1 and 2 do not apply, the landing point shall be read and parsed from clipboard (as described below) *- this automatically sets the balloon as landed*
-   * Prio 4: If no valid coordinates can be parsed from the clipboard, the persisted landing point is used
-   * Otherwise: If all above fail, no landing point is available.  
-8. Final Map displayed: Next, the map + data panel is displayed. It uses the maximum zoom level to show the following annotations:  
+The coordinator runs `performCompleteStartupSequence()` in three labelled phases so the splash-screen progress indicator stays informative.
 
-* The user position  
-* The landing position   
-* If a balloon is flying, the route and predicted path
+1. **Services & BLE (Step 1)**  
+   - Show the logo and set the progress label to "1".  
+   - Wait up to five seconds for Bluetooth to power on; if it remains off we continue in "no tracking" mode.  
+   - Start scanning for a MySondyGo device and allow up to five more seconds for the connection. Regardless of success, the app proceeds.
 
-If no landing point is available: The map  shows the user's position (from location service) with a zoom of 25km.  
+2. **Telemetry & Persistence (Step 2)**  
+   - Update the progress label to "2".  
+   - Call the SondeHub API (`GET /sondes/site/<station_id>`) using the launch site stored in settings to fetch the latest telemetry for the most recent sonde, so APRS fallback data is primed when BLE is unavailable.  
+   - Wait up to three seconds for the first BLE packet so we can publish telemetry availability.  
+   - Load user settings, historic track data, and landing histories from `PersistenceService`.
 
-9: End of Setup:
+3. **Landing Point & Display (Step 3)**  
+   - Update the progress label to "3".  
+   - Resolve the landing point using the following priority:  
+     1. Live telemetry or APRS indicates the balloon is landed (use current balloon position).
+     2. If the balloon is still flying, use the predicted landing point.   
+   - Call `setupInitialMapDisplay()` to reveal the map, overlays, and data panel.  
+   - Hide the logo, mark `isStartupComplete = true`, and transition into steady-state tracking (BLE telemetry, 60 second predictions, route refresh on movement or mode change).
 
 ## Tracking View
 
@@ -653,6 +573,7 @@ A row for Buttons is placed above the map. It is fixed and covers the entire wid
 * Settings  
 
 * Mode of transportation: The transport mode (car or bicycle) shall be used to calculate the route and the predicted arrival time. Every time the mode is changed, a new calculation has to be done. Use icons to save horizontal space.  
+* Apple Maps navigation: Opens Apple Maps with the current landing point pre-filled. Car mode launches driving directions; bicycle mode launches cycling directions on iOS 14+ and falls back to walking on older systems.  
 
 * Prediction on/off. It toggles if the balloon predicted path is displayed.  
 
@@ -683,7 +604,7 @@ The overlays must remain accurately positioned and correctly cropped within the 
 * Balloon Track: The map overlay shall show the current balloon track as a thin red line. At startup, this array was populated with the historic track data. New telemetry points are appended to the array as they are received. The array is automatically cleared and reset by the persistence service if a different sonde name is received (new sonde). It is updated when a new point is added to the track. The track should appear on the map when it is available.  
 * Balloon Predicted Path: The complete predicted flight path from the Sondehub API is displayed as a thick blue line. While the balloon is ascending, a distinct marker indicates the predicted burst location. The burst location shall only be visible when the balloon is ascending. The display of this path is controlled by the button “Prediction on/off”. The path should appear on the map when it is available.  
 * Landing point: Shall be visible if a valid landing point is available  
-* Planned Route from User to Landing Point: The recommended route from the user's current location to the predicted landing point is retrieved from Apple Maps and displayed on the map as a green overlay path. The route should appear on the map when it is available.
+* Planned Route from User to Landing Point: The recommended route from the user's current location to the predicted landing point is retrieved from Apple Maps and displayed on the map as a green overlay path. When bicycle mode is selected the in-app overlay still uses walking directions (MapKit limitation) but the Apple Maps button launches native cycling navigation. The route should appear on the map when it is available.  
 
 A new route calculation and presentation is triggered:
 

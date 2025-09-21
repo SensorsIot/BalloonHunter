@@ -244,6 +244,8 @@ struct DeviceSettingsView: View {
                     .keyboardType(.numberPad)
                 TextField("Descent Rate", value: $userSettings.descentRate, formatter: NumberFormatter())
                     .keyboardType(.numberPad)
+                TextField("Station ID", text: $userSettings.stationId)
+                    .keyboardType(.numberPad)
             }
         }
     }
@@ -366,6 +368,7 @@ struct SettingsView: View {
     
     @State private var selectedTab: Int = 0
     @State private var isShowingDeviceSettings = false
+    @State private var isShowingPredictionSettings = false
     
     // For Sonde Settings
     @State private var tempDeviceSettings: DeviceSettings = .default
@@ -403,6 +406,7 @@ struct SettingsView: View {
                 }
                 ToolbarItemGroup(placement: .navigationBarTrailing) {
                     if selectedTab == 0 { // Sonde
+                        Button("Prediction Settings") { isShowingPredictionSettings = true }
                         Button("Device Settings") { isShowingDeviceSettings = true }
                             .disabled(!bleService.isReadyForCommands)
                         Button("Tune") { selectedTab = 1 }
@@ -426,6 +430,9 @@ struct SettingsView: View {
             }
             .sheet(isPresented: $isShowingDeviceSettings, onDismiss: loadSondeSettings) {
                 DeviceSettingsView()
+            }
+            .sheet(isPresented: $isShowingPredictionSettings) {
+                PredictionSettingsView()
             }
             .alert("Restore original values?", isPresented: $showRestoreAlert) {
                 Button("Restore", role: .destructive) {
@@ -632,5 +639,97 @@ struct SettingsView: View {
             // Removed any selectedTab = 0 here to prevent automatic tab switching
         }
         .tabItem { Label("Tune", systemImage: "slider.horizontal.3") }
+    }
+}
+
+// MARK: - Reusable Controls
+
+struct NumericTextField: View {
+    @Binding var value: Int
+    @State private var text: String
+    var placeholder: String = ""
+
+    init(_ placeholder: String = "", value: Binding<Int>) {
+        self._value = value
+        self._text = State(initialValue: String(value.wrappedValue))
+        self.placeholder = placeholder
+    }
+
+    var body: some View {
+        TextField(placeholder, text: $text)
+            .keyboardType(.numberPad)
+            .multilineTextAlignment(.trailing)
+            .onChange(of: text) { _, newValue in
+                let filtered = newValue.filter { $0.isNumber }
+                if filtered != newValue { text = filtered }
+                if let intVal = Int(filtered), intVal != value {
+                    value = intVal
+                }
+            }
+            .onChange(of: value) { _, newVal in
+                let stringValue = String(newVal)
+                if stringValue != text { text = stringValue }
+            }
+    }
+}
+
+// MARK: - Prediction Settings View (Sheet)
+struct PredictionSettingsView: View {
+    @EnvironmentObject var userSettings: UserSettings
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Prediction Parameters") {
+                    HStack {
+                        Text("Burst Altitude")
+                        Spacer()
+                        TextField("30000", value: $userSettings.burstAltitude, format: .number)
+                            .keyboardType(.numberPad)
+                            .multilineTextAlignment(.trailing)
+                    }
+
+                    HStack {
+                        Text("Ascent Rate")
+                        Spacer()
+                        TextField("5.0", value: $userSettings.ascentRate, format: .number)
+                            .keyboardType(.decimalPad)
+                            .multilineTextAlignment(.trailing)
+                    }
+
+                    HStack {
+                        Text("Descent Rate")
+                        Spacer()
+                        TextField("5.0", value: $userSettings.descentRate, format: .number)
+                            .keyboardType(.decimalPad)
+                            .multilineTextAlignment(.trailing)
+                    }
+                }
+
+                Section("Station Configuration") {
+                    HStack {
+                        Text("Station ID")
+                        Spacer()
+                        TextField("06610", text: $userSettings.stationId)
+                            .keyboardType(.numberPad)
+                            .multilineTextAlignment(.trailing)
+                    }
+                }
+
+                Section {
+                    Text("Burst altitude must be higher than the balloon's current altitude for predictions to work.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+            .navigationTitle("Prediction Settings")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
     }
 }

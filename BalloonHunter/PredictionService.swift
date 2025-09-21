@@ -333,6 +333,7 @@ final class PredictionService: ObservableObject {
                 case .invalidResponse: msg = "Invalid response"
                 case .httpError(let code): msg = "HTTP \(code)"
                 case .decodingError(let d): msg = "Decoding error: \(d)"
+                case .invalidParameters(let p): msg = "Invalid parameters: \(p)"
                 }
             } else {
                 msg = error.localizedDescription
@@ -470,7 +471,10 @@ final class PredictionService: ObservableObject {
         var components = URLComponents(string: "https://api.v2.sondehub.org/tawhiri")!
         let launchTime = ISO8601DateFormatter().string(from: Date().addingTimeInterval(60))
         // FSD: Use settings burst altitude while ascending; when descending, send current altitude + 10m
-        let burstAlt = telemetry.verticalSpeed >= 0 ? userSettings.burstAltitude : telemetry.altitude + 10.0
+        // Ensure burst altitude is always greater than current altitude (API requirement)
+        let burstAlt = telemetry.verticalSpeed >= 0 ?
+            max(userSettings.burstAltitude, telemetry.altitude + 100.0) :
+            telemetry.altitude + 10.0
         
         components.queryItems = [
             URLQueryItem(name: "launch_latitude", value: String(format: "%.4f", telemetry.latitude)),
@@ -603,6 +607,7 @@ final class PredictionService: ObservableObject {
         case invalidResponse
         case httpError(Int)
         case decodingError(String)
+        case invalidParameters(String)
     }
     
     // MARK: - Health

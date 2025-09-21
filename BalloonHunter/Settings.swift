@@ -15,9 +15,10 @@ final class UserSettings: ObservableObject, Codable {
     @Published var burstAltitude: Double = 30000
     @Published var ascentRate: Double = 5.0
     @Published var descentRate: Double = 5.0
+    @Published var stationId: String = "06610" // Default to Payerne
 
     enum CodingKeys: CodingKey {
-        case burstAltitude, ascentRate, descentRate
+        case burstAltitude, ascentRate, descentRate, stationId
     }
 
     required init(from decoder: Decoder) throws {
@@ -25,6 +26,7 @@ final class UserSettings: ObservableObject, Codable {
         burstAltitude = try container.decode(Double.self, forKey: .burstAltitude)
         ascentRate = try container.decode(Double.self, forKey: .ascentRate)
         descentRate = try container.decode(Double.self, forKey: .descentRate)
+        stationId = try container.decodeIfPresent(String.self, forKey: .stationId) ?? "06610"
     }
 
     func encode(to encoder: Encoder) throws {
@@ -32,6 +34,7 @@ final class UserSettings: ObservableObject, Codable {
         try container.encode(burstAltitude, forKey: .burstAltitude)
         try container.encode(ascentRate, forKey: .ascentRate)
         try container.encode(descentRate, forKey: .descentRate)
+        try container.encode(stationId, forKey: .stationId)
     }
 
     init() { }

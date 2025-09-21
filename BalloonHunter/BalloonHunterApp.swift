@@ -43,14 +43,14 @@ struct BalloonHunterApp: App {
     @Environment(\.scenePhase) var scenePhase
     @StateObject var appServices: AppServices
     @StateObject var serviceCoordinator: ServiceCoordinator
-    @StateObject var appSettings = AppSettings()
+    @StateObject var mapPresenter: MapPresenter
+    @StateObject var appSettings: AppSettings
     @State private var animateLoading = false
     @State private var notificationDelegate: NotificationDelegate?
     
     init() {
         let services = AppServices()
-        _appServices = StateObject(wrappedValue: services)
-        _serviceCoordinator = StateObject(wrappedValue: ServiceCoordinator(
+        let coordinator = ServiceCoordinator(
             bleCommunicationService: services.bleCommunicationService,
             currentLocationService: services.currentLocationService,
             persistenceService: services.persistenceService,
@@ -59,7 +59,16 @@ struct BalloonHunterApp: App {
             balloonPositionService: services.balloonPositionService,
             balloonTrackService: services.balloonTrackService,
             landingPointTrackingService: services.landingPointTrackingService
-        ))
+        )
+        let presenter = MapPresenter(
+            coordinator: coordinator,
+            balloonTrackService: services.balloonTrackService,
+            landingPointTrackingService: services.landingPointTrackingService,
+            currentLocationService: services.currentLocationService
+        )
+        _appServices = StateObject(wrappedValue: services)
+        _serviceCoordinator = StateObject(wrappedValue: coordinator)
+        _mapPresenter = StateObject(wrappedValue: presenter)
         _appSettings = StateObject(wrappedValue: AppSettings())
     }
 
@@ -71,6 +80,7 @@ struct BalloonHunterApp: App {
                 if serviceCoordinator.isStartupComplete {
                     // Main app UI after startup complete
                     TrackingMapView()
+                        .environmentObject(mapPresenter)
                         .environmentObject(appServices)
                         .environmentObject(appSettings)
                         .environmentObject(appServices.userSettings)

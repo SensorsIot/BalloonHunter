@@ -1,0 +1,240 @@
+import Foundation
+import Combine
+import CoreLocation
+import OSLog
+
+// MARK: - Persistence Service
+
+@MainActor
+final class PersistenceService: ObservableObject {
+    private let userDefaults = UserDefaults.standard
+    
+    // Internal storage for cached data
+    @Published var userSettings: UserSettings
+    @Published var deviceSettings: DeviceSettings?
+    private var internalTracks: [String: [BalloonTrackPoint]] = [:]
+    private var internalLandingHistories: [String: [LandingPredictionPoint]] = [:]
+    
+    init() {
+        // PersistenceService initializing (log removed for reduction)
+        
+        // Load user settings
+        self.userSettings = Self.loadUserSettings()
+        
+        // Load device settings
+        self.deviceSettings = Self.loadDeviceSettings()
+        
+        // Load tracks
+        self.internalTracks = Self.loadAllTracks()
+        
+        // Load landing point histories
+        self.internalLandingHistories = Self.loadAllLandingHistories()
+        
+        appLog("PersistenceService: Tracks loaded from UserDefaults. Total tracks: \(internalTracks.count)", category: .service, level: .info)
+    }
+    
+    // MARK: - User Settings
+    
+    func save(userSettings: UserSettings) {
+        self.userSettings = userSettings
+        
+        let encoder = JSONEncoder()
+        if let encoded = try? encoder.encode(userSettings) {
+            userDefaults.set(encoded, forKey: "UserSettings")
+            appLog("PersistenceService: UserSettings saved to UserDefaults.", category: .service, level: .debug)
+        }
+    }
+    
+    func readPredictionParameters() -> UserSettings? {
+        return userSettings
+    }
+    
+    private static func loadUserSettings() -> UserSettings {
+        let decoder = JSONDecoder()
+        if let data = UserDefaults.standard.data(forKey: "UserSettings"),
+           let userSettings = try? decoder.decode(UserSettings.self, from: data) {
+            appLog("PersistenceService: UserSettings loaded from UserDefaults.", category: .service, level: .debug)
+            return userSettings
+        } else {
+            let defaultSettings = UserSettings()
+            appLog("PersistenceService: UserSettings not found, using defaults.", category: .service, level: .debug)
+            return defaultSettings
+        }
+    }
+    
+    // MARK: - Device Settings
+    
+    func save(deviceSettings: DeviceSettings) {
+        self.deviceSettings = deviceSettings
+        
+        let encoder = JSONEncoder()
+        if let encoded = try? encoder.encode(deviceSettings) {
+            userDefaults.set(encoded, forKey: "DeviceSettings")
+            appLog("PersistenceService: deviceSettings saved: \(deviceSettings)", category: .service, level: .debug)
+        }
+    }
+    
+    private static func loadDeviceSettings() -> DeviceSettings? {
+        let decoder = JSONDecoder()
+        if let data = UserDefaults.standard.data(forKey: "DeviceSettings"),
+           let deviceSettings = try? decoder.decode(DeviceSettings.self, from: data) {
+            return deviceSettings
+        }
+        return nil
+    }
+    
+    // MARK: - Track Management
+    
+    func saveBalloonTrack(sondeName: String, track: [BalloonTrackPoint]) {
+        internalTracks[sondeName] = track
+        saveAllTracks()
+        appLog("PersistenceService: Saved balloon track for sonde '\(sondeName)'.", category: .service, level: .debug)
+    }
+    
+    func loadTrackForCurrentSonde(sondeName: String) -> [BalloonTrackPoint]? {
+        return internalTracks[sondeName]
+    }
+    
+    func purgeAllTracks() {
+        internalTracks.removeAll()
+        userDefaults.removeObject(forKey: "BalloonTracks")
+        appLog("PersistenceService: All balloon tracks purged.", category: .service, level: .debug)
+    }
+    
+    func saveOnAppClose(balloonTrackService: BalloonTrackService,
+                        landingPointTrackingService: LandingPointTrackingService) {
+        if let currentName = balloonTrackService.currentBalloonName {
+            let track = balloonTrackService.getAllTrackPoints()
+            saveBalloonTrack(sondeName: currentName, track: track)
+            appLog("PersistenceService: Saved current balloon track for sonde '\(currentName)' on app close.", category: .service, level: .info)
+        }
+        landingPointTrackingService.persistCurrentHistory()
+    }
+    
+    private func saveAllTracks() {
+        let encoder = JSONEncoder()
+        if let encoded = try? encoder.encode(internalTracks) {
+            // Save to both UserDefaults (for production) and Documents directory (for development persistence)
+            userDefaults.set(encoded, forKey: "BalloonTracks")
+            saveToDocumentsDirectory(data: encoded, filename: "BalloonTracks.json")
+        }
+    }
+    
+    private static func loadAllTracks() -> [String: [BalloonTrackPoint]] {
+        let decoder = JSONDecoder()
+        
+        // Try Documents directory first (survives development installs)
+        if let data = loadFromDocumentsDirectory(filename: "BalloonTracks.json"),
+           let tracks = try? decoder.decode([String: [BalloonTrackPoint]].self, from: data) {
+            appLog("PersistenceService: Loaded tracks from Documents directory", category: .service, level: .debug)
+            return tracks
+        }
+        
+        // Fallback to UserDefaults (for production)
+        if let data = UserDefaults.standard.data(forKey: "BalloonTracks"),
+           let tracks = try? decoder.decode([String: [BalloonTrackPoint]].self, from: data) {
+            appLog("PersistenceService: Loaded tracks from UserDefaults", category: .service, level: .debug)
+            return tracks
+        }
+        
+        appLog("PersistenceService: No existing tracks found", category: .service, level: .debug)
+        return [:]
+    }
+    
+    // MARK: - Landing Points
+    
+    func saveLandingHistory(sondeName: String, history: [LandingPredictionPoint]) {
+        internalLandingHistories[sondeName] = history
+        saveAllLandingHistories()
+    }
+
+    func loadLandingHistory(sondeName: String) -> [LandingPredictionPoint]? {
+        internalLandingHistories[sondeName]
+    }
+
+    func removeLandingHistory(for sondeName: String) {
+        internalLandingHistories.removeValue(forKey: sondeName)
+        saveAllLandingHistories()
+    }
+
+    func purgeAllLandingHistories() {
+        internalLandingHistories.removeAll()
+        userDefaults.removeObject(forKey: "LandingPointHistories")
+        removeFromDocumentsDirectory(filename: "LandingPointHistories.json")
+        appLog("PersistenceService: Purged all landing point histories", category: .service, level: .debug)
+    }
+
+    private func saveAllLandingHistories() {
+        let encoder = JSONEncoder()
+        guard let encoded = try? encoder.encode(internalLandingHistories) else { return }
+        userDefaults.set(encoded, forKey: "LandingPointHistories")
+        saveToDocumentsDirectory(data: encoded, filename: "LandingPointHistories.json")
+    }
+
+    private static func loadAllLandingHistories() -> [String: [LandingPredictionPoint]] {
+        let decoder = JSONDecoder()
+
+        if let data = loadFromDocumentsDirectory(filename: "LandingPointHistories.json"),
+           let histories = try? decoder.decode([String: [LandingPredictionPoint]].self, from: data) {
+            appLog("PersistenceService: Loaded landing histories from Documents directory", category: .service, level: .debug)
+            return histories
+        }
+
+        if let data = UserDefaults.standard.data(forKey: "LandingPointHistories"),
+           let histories = try? decoder.decode([String: [LandingPredictionPoint]].self, from: data) {
+            appLog("PersistenceService: Loaded landing histories from UserDefaults", category: .service, level: .debug)
+            return histories
+        }
+
+        // Legacy support for single landing point storage
+        if let legacy = UserDefaults.standard.object(forKey: "LandingPoints") as? [String: [String: Double]] {
+            let converted = legacy.compactMapValues { dict -> [LandingPredictionPoint]? in
+                guard let lat = dict["latitude"], let lon = dict["longitude"] else { return nil }
+                let coordinate = CLLocationCoordinate2D(latitude: lat, longitude: lon)
+                let legacyPoint = LandingPredictionPoint(coordinate: coordinate, predictedAt: Date.distantPast, landingEta: nil, source: .sondehub)
+                return [legacyPoint]
+            }
+            return converted
+        }
+
+        return [:]
+    }
+    
+    // MARK: - Documents Directory Helpers
+    
+    private func saveToDocumentsDirectory(data: Data, filename: String) {
+        do {
+            let documentsURL = try FileManager.default.url(for: .documentDirectory, in: .userDomainMask, appropriateFor: nil, create: false)
+            let fileURL = documentsURL.appendingPathComponent(filename)
+            try data.write(to: fileURL)
+            appLog("PersistenceService: Saved \(filename) to Documents directory", category: .service, level: .debug)
+        } catch {
+            appLog("PersistenceService: Failed to save \(filename) to Documents directory: \(error)", category: .service, level: .error)
+        }
+    }
+    
+    private func removeFromDocumentsDirectory(filename: String) {
+        do {
+            let documentsURL = try FileManager.default.url(for: .documentDirectory, in: .userDomainMask, appropriateFor: nil, create: false)
+            let fileURL = documentsURL.appendingPathComponent(filename)
+            if FileManager.default.fileExists(atPath: fileURL.path) {
+                try FileManager.default.removeItem(at: fileURL)
+            }
+        } catch {
+            appLog("PersistenceService: Failed to remove \(filename) from Documents directory: \(error)", category: .service, level: .debug)
+        }
+    }
+
+    private static func loadFromDocumentsDirectory(filename: String) -> Data? {
+        do {
+            let documentsURL = try FileManager.default.url(for: .documentDirectory, in: .userDomainMask, appropriateFor: nil, create: false)
+            let fileURL = documentsURL.appendingPathComponent(filename)
+            let data = try Data(contentsOf: fileURL)
+            appLog("PersistenceService: Loaded \(filename) from Documents directory", category: .service, level: .debug)
+            return data
+        } catch {
+            appLog("PersistenceService: Failed to load \(filename) from Documents directory: \(error)", category: .service, level: .debug)
+            return nil
+        }
+    }
+}

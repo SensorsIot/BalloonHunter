@@ -6,12 +6,21 @@ import OSLog
 
 // MARK: - Distance Overlay Component
 struct DistanceOverlayView: View {
-    let distanceText: String
+    let distanceMeters: CLLocationDistance?
+
+    private var formattedDistance: String {
+        guard let distance = distanceMeters else { return "--" }
+        if distance < 1000 {
+            return "\(Int(distance.rounded())) m"
+        } else {
+            return String(format: "%.1f km", distance / 1000)
+        }
+    }
 
     var body: some View {
         VStack {
             Spacer()
-            Text(distanceText)
+            Text(formattedDistance)
                 .font(.headline)
                 .foregroundColor(.white)
                 .padding(.horizontal, 12)
@@ -20,16 +29,13 @@ struct DistanceOverlayView: View {
                 .cornerRadius(20)
                 .padding(.bottom, 20)
         }
-        .animation(.easeInOut(duration: 0.3), value: distanceText) // Smooth distance changes when significant movement occurs
+        .animation(.easeInOut(duration: 0.3), value: formattedDistance) // Smooth distance changes when significant movement occurs
     }
 }
 
 struct TrackingMapView: View {
-    @EnvironmentObject var appServices: AppServices
+    @EnvironmentObject var mapPresenter: MapPresenter
     @EnvironmentObject var userSettings: UserSettings
-    @EnvironmentObject var serviceCoordinator: ServiceCoordinator
-    @EnvironmentObject var balloonTrackService: BalloonTrackService
-    @EnvironmentObject var landingPointTrackingService: LandingPointTrackingService
 
     @State private var showSettings = false
     @State private var position: MapCameraPosition = .automatic
@@ -40,26 +46,16 @@ struct TrackingMapView: View {
     @State private var needsStartupZoom = true  // Track if we need to apply startup zoom
 
     // MARK: - Flight State Computed Properties
-    private var isFlying: Bool {
-        return serviceCoordinator.balloonTrackService.balloonPhase != .landed &&
-               serviceCoordinator.balloonTrackService.balloonPhase != .unknown
-    }
+    private var isFlying: Bool { mapPresenter.isFlying }
 
-    private var isLanded: Bool {
-        return serviceCoordinator.balloonTrackService.balloonPhase == .landed
-    }
+    private var isLanded: Bool { mapPresenter.isLanded }
 
-    private var shouldShowRoute: Bool {
-        // Show route when flying OR when landed but more than 200m away
-        return isFlying || (isLanded && !isWithin200mOfLandedBalloon)
-    }
+    private var shouldShowRoute: Bool { mapPresenter.shouldShowRoute }
 
-    private var isWithin200mOfLandedBalloon: Bool {
-        return isLanded && serviceCoordinator.currentLocationService.isWithin200mOfBalloon
-    }
+    private var isWithin200mOfLandedBalloon: Bool { mapPresenter.isWithin200mOfBalloon }
 
     private func logZoomChange(_ description: String, span: MKCoordinateSpan, center: CLLocationCoordinate2D? = nil) {
-        serviceCoordinator.logZoomChange(description, span: span, center: center)
+        mapPresenter.logZoomChange(description, span: span, center: center)
     }
 
     var body: some View {
@@ -70,7 +66,7 @@ struct TrackingMapView: View {
                     HStack(spacing: 12) {
                         // Settings button
                         Button {
-                            serviceCoordinator.requestDeviceParameters()
+                            mapPresenter.requestDeviceParameters()
                             showSettings = true
                         } label: {
                             Image(systemName: "gearshape")
@@ -82,8 +78,8 @@ struct TrackingMapView: View {
 
                         // Transport mode picker
                         Picker("Mode", selection: Binding(
-                            get: { serviceCoordinator.transportMode },
-                            set: { newValue in serviceCoordinator.transportMode = newValue }
+                            get: { mapPresenter.transportMode },
+                            set: { newValue in mapPresenter.setTransportMode(newValue) }
                         )) {
                             Image(systemName: "car.fill").tag(TransportationMode.car)
                             Image(systemName: "bicycle").tag(TransportationMode.bike)
@@ -93,10 +89,10 @@ struct TrackingMapView: View {
 
 
                         // Show All or Point button
-                        if serviceCoordinator.landingPoint != nil {
+                        if mapPresenter.landingPoint != nil {
                             Button("All") {
-                                if serviceCoordinator.isHeadingMode { serviceCoordinator.isHeadingMode = false }
-                                serviceCoordinator.triggerShowAllAnnotations()
+                                if mapPresenter.isHeadingMode { mapPresenter.toggleHeadingMode() }
+                                mapPresenter.triggerShowAllAnnotations()
                             }
                             .buttonStyle(.bordered)
                         } else {
@@ -109,9 +105,9 @@ struct TrackingMapView: View {
 
                         // Heading mode toggle
                         Button {
-                            serviceCoordinator.isHeadingMode.toggle()
+                            mapPresenter.toggleHeadingMode()
                         } label: {
-                            Image(systemName: serviceCoordinator.isHeadingMode ? "location.north.circle.fill" : "location.circle")
+                            Image(systemName: mapPresenter.isHeadingMode ? "location.north.circle.fill" : "location.circle")
                                 .imageScale(.large)
                                 .padding(8)
                         }
@@ -120,9 +116,9 @@ struct TrackingMapView: View {
 
                         // Buzzer mute toggle
                         Button {
-                            serviceCoordinator.setMuteState(!serviceCoordinator.isBuzzerMuted)
+                            mapPresenter.setMuteState(!mapPresenter.isBuzzerMuted)
                         } label: {
-                            Image(systemName: (serviceCoordinator.balloonTelemetry?.buzmute ?? false) ? "speaker.slash.fill" : "speaker.2.fill")
+                            Image(systemName: (mapPresenter.balloonTelemetry?.buzmute ?? false) ? "speaker.slash.fill" : "speaker.2.fill")
                                 .imageScale(.large)
                                 .padding(8)
                         }
@@ -130,9 +126,9 @@ struct TrackingMapView: View {
                         .cornerRadius(8)
 
                         // Apple Maps navigation button (only show when landing point available)
-                        if serviceCoordinator.landingPoint != nil {
+                        if mapPresenter.landingPoint != nil {
                             Button {
-                                serviceCoordinator.openInAppleMaps()
+                                mapPresenter.openInAppleMaps()
                             } label: {
                                 Image(systemName: "location.fill.viewfinder")
                                     .imageScale(.large)
@@ -149,10 +145,10 @@ struct TrackingMapView: View {
 
                 // Direct ServiceCoordinator Map Rendering
                 ZStack {
-                    Map(position: $position, interactionModes: serviceCoordinator.isHeadingMode ? .zoom : .all) {
+                    Map(position: $position, interactionModes: mapPresenter.isHeadingMode ? .zoom : .all) {
                     
                     // 1. Balloon Track: Historic track as thin red line
-                    let trackPoints = balloonTrackService.currentBalloonTrack
+                    let trackPoints = mapPresenter.trackPoints
                     if trackPoints.count >= 2 {
                         let coordinates = trackPoints.map { CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude) }
                         let trackPolyline = MKPolyline(coordinates: coordinates, count: coordinates.count)
@@ -162,20 +158,20 @@ struct TrackingMapView: View {
                     
                     // 2. Balloon Predicted Path: Thick blue line (flying mode only)
                     if isFlying,
-                       let predictionPath = serviceCoordinator.predictionPath {
+                       let predictionPath = mapPresenter.predictionPath {
                         MapPolyline(predictionPath)
                             .stroke(.blue, lineWidth: 4)
                     }
                     
                     // 3. Planned Route: Green path from user to landing point (when needed for navigation)
                     if shouldShowRoute,
-                       let userRoute = serviceCoordinator.userRoute {
+                       let userRoute = mapPresenter.userRoute {
                         MapPolyline(userRoute)
                             .stroke(.green, lineWidth: 3)
                     }
 
                     // 4. Landing prediction history: Purple polyline connecting Sondehub landing estimates
-                    let landingHistory = landingPointTrackingService.landingHistory
+                    let landingHistory = mapPresenter.landingHistory
                     if landingHistory.count >= 2 {
                         let landingCoordinates = landingHistory.map { $0.coordinate }
                         let landingPolyline = MKPolyline(coordinates: landingCoordinates, count: landingCoordinates.count)
@@ -195,8 +191,8 @@ struct TrackingMapView: View {
                     }
 
                     // 5. User Position: Runner icon at user location (always shown in tracking view)
-                    if !serviceCoordinator.isHeadingMode,
-                       let userLocation = serviceCoordinator.userLocation {
+                    if !mapPresenter.isHeadingMode,
+                       let userLocation = mapPresenter.userLocation {
                         let userCoordinate = CLLocationCoordinate2D(
                             latitude: userLocation.latitude,
                             longitude: userLocation.longitude
@@ -210,14 +206,14 @@ struct TrackingMapView: View {
                     }
                     
                     // 6. Balloon Live Position: Color based on flight phase
-                    if let balloonTelemetry = serviceCoordinator.balloonTelemetry {
+                    if let balloonTelemetry = mapPresenter.balloonTelemetry {
                         // Use smoothed display position when available (for landed balloons), otherwise use raw telemetry
-                        let balloonCoordinate = serviceCoordinator.balloonDisplayPosition ?? CLLocationCoordinate2D(
+                        let balloonCoordinate = mapPresenter.balloonDisplayPosition ?? CLLocationCoordinate2D(
                             latitude: balloonTelemetry.latitude,
                             longitude: balloonTelemetry.longitude
                         )
                         let balloonColor: Color = {
-                            switch serviceCoordinator.balloonTrackService.balloonPhase {
+                            switch mapPresenter.balloonPhase {
                             case .ascending: return .green
                             case .descendingAbove10k: return .orange
                             case .descendingBelow10k: return .red
@@ -232,14 +228,14 @@ struct TrackingMapView: View {
                                 .foregroundColor(balloonColor)
                             .onTapGesture {
                                 // Manual prediction trigger
-                                serviceCoordinator.triggerPrediction()
+                                mapPresenter.triggerPrediction()
                             }
                         }
                     }
-                    
+
                     // 7. Burst Point: Only visible when balloon is ascending
-                    if let burstPoint = serviceCoordinator.burstPoint,
-                       serviceCoordinator.balloonTrackService.balloonPhase == .ascending {
+                    if let burstPoint = mapPresenter.burstPoint,
+                       mapPresenter.balloonPhase == .ascending {
                         Annotation("Burst", coordinate: burstPoint) {
                             Image(systemName: "burst.fill")
                                 .font(.title2)
@@ -248,7 +244,7 @@ struct TrackingMapView: View {
                     }
                     
                     // 8. Landing Point: Always visible if available
-                    if let landingPoint = serviceCoordinator.landingPoint {
+                    if let landingPoint = mapPresenter.landingPoint {
                         Annotation("", coordinate: landingPoint) {
                             Image(systemName: "target")
                                 .font(.title2)
@@ -263,34 +259,30 @@ struct TrackingMapView: View {
                     MapUserLocationButton()
                 }
                 .mapStyle(.standard(pointsOfInterest: .excludingAll, showsTraffic: false))
-                .mapControlVisibility(serviceCoordinator.isHeadingMode ? .hidden : .automatic)
+                .mapControlVisibility(mapPresenter.isHeadingMode ? .hidden : .automatic)
                 .frame(height: geometry.size.height * 0.7)
                 .onMapCameraChange { context in
                     guard !showSettings else { return }
 
-                    // If this is the first camera change and we need startup zoom, trigger it
                     if needsStartupZoom {
                         needsStartupZoom = false
                         appLog("🔍 ZOOM: Map initialized, triggering startup zoom", category: .general, level: .info)
-                        serviceCoordinator.updateCameraToShowAllAnnotations()
+                        mapPresenter.updateCameraToShowAllAnnotations()
                         return
                     }
 
-                    // Update saved zoom level when user changes map view
                     savedZoomLevel = context.region.span
                     logZoomChange("Map camera changed by user", span: context.region.span, center: context.region.center)
                 }
-                .onReceive(serviceCoordinator.$region) { region in
+                .onReceive(mapPresenter.$region) { region in
                     guard !showSettings else { return }
-                    if let region = region, !serviceCoordinator.isHeadingMode {
-                        // Reduced logging: keep map updates quiet unless debugging
+                    if let region = region, !mapPresenter.isHeadingMode {
                         position = .region(region)
                     }
                 }
-                .onReceive(serviceCoordinator.$isHeadingMode) { isHeadingMode in
+                .onReceive(mapPresenter.$isHeadingMode) { isHeadingMode in
                     guard !showSettings else { return }
 
-                    // On first appearance, preserve startup zoom by not switching modes yet
                     if !hasPreservedStartupZoom {
                         hasPreservedStartupZoom = true
                         isInHeadingMode = isHeadingMode
@@ -300,22 +292,38 @@ struct TrackingMapView: View {
 
                     updateMapPositionForHeadingMode(isHeadingMode)
                 }
-                .onReceive(serviceCoordinator.$userLocation) { userLocation in
+                .onReceive(mapPresenter.$userLocation) { _ in
                     guard !showSettings else { return }
-                    // Don't override startup zoom until we've preserved it
                     guard hasPreservedStartupZoom else { return }
-                    if serviceCoordinator.isHeadingMode {
+                    if mapPresenter.isHeadingMode {
                         updateMapPositionForHeadingMode(true)
                     }
                 }
-                .onReceive(serviceCoordinator.$showAllAnnotations) { _ in /* deprecated path; coordinator computes region now */ }
 
                     // Distance annotation overlay (landing mode only)
                     if isLanded {
                         DistanceOverlayView(
-                            distanceText: serviceCoordinator.currentLocationService.distanceOverlayText
+                            distanceMeters: mapPresenter.distanceToBalloon
                         )
                     }
+                }
+
+                // Sonde name mismatch field (persistent, only visible when mismatch detected)
+                if mapPresenter.bleSerialName != mapPresenter.aprsSerialName &&
+                   !mapPresenter.bleSerialName.isEmpty &&
+                   !mapPresenter.aprsSerialName.isEmpty {
+                    HStack {
+                        Spacer()
+                        Text("SondeHub: '\(mapPresenter.aprsSerialName)' RadioSondyGo: '\(mapPresenter.bleSerialName)'")
+                            .font(.caption)
+                            .foregroundColor(.orange)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 4)
+                            .background(.ultraThinMaterial)
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                        Spacer()
+                    }
+                    .padding(.bottom, 4)
                 }
 
                 // Data panel
@@ -327,17 +335,17 @@ struct TrackingMapView: View {
         }
         .sheet(isPresented: $showSettings) {
             SettingsView()
-                .environmentObject(serviceCoordinator.bleCommunicationService)
-                .environmentObject(serviceCoordinator.persistenceService)
+                .environmentObject(mapPresenter.bleService)
+                .environmentObject(mapPresenter.persistenceService)
                 .environmentObject(userSettings)
         }
         .onChange(of: showSettings) { _, isOpen in
-            serviceCoordinator.suspendCameraUpdates = isOpen
+            mapPresenter.setCameraUpdatesSuspended(isOpen)
         }
     }
     
     private func updateMapToShowAllAnnotations() {
-        if serviceCoordinator.isHeadingMode {
+        if mapPresenter.isHeadingMode {
             return
         }
         // Map will automatically adjust using .automatic position
@@ -348,7 +356,7 @@ struct TrackingMapView: View {
         
         if isHeadingMode {
             // Switching TO heading mode - set initial position with saved zoom, then enable heading
-            guard let userLocation = serviceCoordinator.userLocation else {
+            guard let userLocation = mapPresenter.userLocation else {
                 appLog("🔍 ZOOM: Cannot switch to heading mode - no user location", category: .general, level: .error)
                 return
             }
@@ -370,7 +378,7 @@ struct TrackingMapView: View {
             
         } else {
             // Switching TO free mode - set initial position with saved zoom
-            guard let userLocation = serviceCoordinator.userLocation else {
+            guard let userLocation = mapPresenter.userLocation else {
                 appLog("🔍 ZOOM: Switch to free mode - using .automatic (no user location)", category: .general, level: .info)
                 position = .automatic
                 return
@@ -397,11 +405,20 @@ struct TrackingMapView: View {
         balloonTrackService: mockAppServices.balloonTrackService,
         landingPointTrackingService: mockAppServices.landingPointTrackingService
     )
+    let mockPresenter = MapPresenter(
+        coordinator: mockServiceCoordinator,
+        balloonTrackService: mockAppServices.balloonTrackService,
+        landingPointTrackingService: mockAppServices.landingPointTrackingService,
+        currentLocationService: mockAppServices.currentLocationService
+    )
     
     TrackingMapView()
-        .environmentObject(mockAppServices)
+        .environmentObject(mockPresenter)
         .environmentObject(mockAppServices.userSettings)
         .environmentObject(mockServiceCoordinator)
+        .environmentObject(mockAppServices.bleCommunicationService)
         .environmentObject(mockAppServices.balloonTrackService)
+        .environmentObject(mockAppServices.balloonPositionService)
         .environmentObject(mockAppServices.landingPointTrackingService)
+        .environmentObject(mockServiceCoordinator.predictionService)
 }

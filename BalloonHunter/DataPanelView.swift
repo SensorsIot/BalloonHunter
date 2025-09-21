@@ -141,7 +141,9 @@ struct DataPanelView: View {
     }
     
     private var distanceString: String {
-        return serviceCoordinator.formattedRouteDistance
+        guard let distanceMeters = serviceCoordinator.routeData?.distance else { return "--" }
+        let distanceKm = distanceMeters / 1000.0
+        return String(format: "%.1f", distanceKm)
     }
 
     private var signalStrengthString: String {

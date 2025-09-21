@@ -18,6 +18,7 @@ final class AppServices: ObservableObject {
     
     // MARK: - Core Services
     let bleCommunicationService: BLECommunicationService
+    let aprsTelemetryService: APRSTelemetryService
     let currentLocationService: CurrentLocationService
     
     // MARK: - Specialized Services
@@ -40,10 +41,11 @@ final class AppServices: ObservableObject {
         
         // 2. Initialize core services with dependencies
         self.bleCommunicationService = BLECommunicationService(persistenceService: persistenceService)
+        self.aprsTelemetryService = APRSTelemetryService(userSettings: userSettings)
         self.currentLocationService = CurrentLocationService()
         
         // 3. Initialize specialized services
-        self.balloonPositionService = BalloonPositionService(bleService: bleCommunicationService, currentLocationService: currentLocationService)
+        self.balloonPositionService = BalloonPositionService(bleService: bleCommunicationService, aprsService: aprsTelemetryService, currentLocationService: currentLocationService)
         self.balloonTrackService = BalloonTrackService(
             persistenceService: persistenceService, 
             balloonPositionService: balloonPositionService

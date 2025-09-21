@@ -119,7 +119,6 @@ final class ServiceCoordinator: ObservableObject {
     // Additional data for DataPanelView
     @Published var predictionData: PredictionData? = nil
     @Published var routeData: RouteData? = nil
-    @Published var formattedRouteDistance: String = "--" // Formatted distance for UI display
     @Published var balloonTrackHistory: [TelemetryData] = []
     @Published var connectionStatus: ConnectionStatus = .disconnected
     @Published var smoothedDescentRate: Double? = nil
@@ -127,9 +126,7 @@ final class ServiceCoordinator: ObservableObject {
     @Published var smoothedHorizontalSpeed: Double = 0.0
     @Published var isTelemetryStale: Bool = false
     // Flight/landing time strings provided directly by PredictionService; UI binds there
-    @Published var frequencyString: String = "0.000"
     @Published var deviceSettings: DeviceSettings?
-    @Published var displayDescentRateString: String = "--"
     
     // AFC tracking (moved from SettingsView for proper separation of concerns)
     @Published var afcFrequencies: [Int] = []
@@ -156,8 +153,12 @@ final class ServiceCoordinator: ObservableObject {
     @Published var isBuzzerMuted: Bool = false
     @Published var showAllAnnotations: Bool = false
     @Published var suspendCameraUpdates: Bool = false
+
+    // APRS sonde name mismatch display
+    @Published var bleSerialName: String = ""
+    @Published var aprsSerialName: String = ""
     
-    // Core services (initialized in init for MapState dependencies)  
+    // Core services (initialized in init for MapState dependencies)
     let currentLocationService: CurrentLocationService
     let bleCommunicationService: BLECommunicationService
     
@@ -202,10 +203,13 @@ final class ServiceCoordinator: ObservableObject {
     // App settings reference (for transport mode and other app-level settings)
     var appSettings: AppSettings?
 
-    // Transport mode computed property (delegates to AppSettings)
-    var transportMode: TransportationMode {
-        get { appSettings?.transportMode ?? .car }
-        set { appSettings?.transportMode = newValue }
+    // Transport mode kept in sync with AppSettings persistence
+    @Published var transportMode: TransportationMode = .car {
+        didSet {
+            if appSettings?.transportMode != transportMode {
+                appSettings?.transportMode = transportMode
+            }
+        }
     }
 
     // Adaptive position smoothing for landed balloons
@@ -316,6 +320,14 @@ final class ServiceCoordinator: ObservableObject {
 
     func setAppSettings(_ settings: AppSettings) {
         appSettings = settings
+        transportMode = settings.transportMode
+        settings.$transportMode
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] mode in
+                guard let self = self, self.transportMode != mode else { return }
+                self.transportMode = mode
+            }
+            .store(in: &cancellables)
         setupTransportModeSubscription()
         appLog("ServiceCoordinator: AppSettings reference set for transport mode persistence", category: .general, level: .debug)
     }
@@ -493,28 +505,7 @@ final class ServiceCoordinator: ObservableObject {
             appLog("ServiceCoordinator: Prediction timeout - falling back to other sources", category: .general, level: .info)
         }
         
-        // Priority 3: Parse from clipboard
-        await parseClipboardForLandingPoint()
-        
-        if landingPoint != nil {
-            appLog("ServiceCoordinator: Landing point set from clipboard", category: .general, level: .info)
-            return
-        }
-        
-        // Priority 4: Use persisted landing point (already loaded in loadPersistenceData())
-        if landingPoint != nil {
-            appLog("ServiceCoordinator: Landing point set from persistence", category: .general, level: .info)
-            return
-        }
-        
         appLog("ServiceCoordinator: No valid landing point available", category: .general, level: .info)
-    }
-    
-    private func parseClipboardForLandingPoint() async {
-        appLog("ServiceCoordinator: Attempting to parse landing point from clipboard", category: .general, level: .info)
-        
-        // Use existing clipboard parsing logic
-        let _ = setLandingPointFromClipboard()
     }
     
     private func setupInitialMapDisplay() async {
@@ -599,10 +590,8 @@ final class ServiceCoordinator: ObservableObject {
                 guard let self = self else { return }
                 if let r = rate {
                     self.smoothedDescentRate = r
-                    self.displayDescentRateString = String(format: "%.1f", abs(r))
                 } else {
                     self.smoothedDescentRate = nil
-                    self.displayDescentRateString = String(format: "%.1f", self.userSettings.descentRate)
                 }
             }
             .store(in: &cancellables)
@@ -614,9 +603,9 @@ final class ServiceCoordinator: ObservableObject {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] settings in
                 self?.deviceSettings = settings
-                self?.frequencyString = String(format: "%.3f", settings.frequency)
             }
             .store(in: &cancellables)
+
 
         // Subscribe to landed position smoother for display position
         landedPositionSmoother.$displayPosition
@@ -624,6 +613,21 @@ final class ServiceCoordinator: ObservableObject {
             .sink { [weak self] smoothedPos in
                 self?.balloonDisplayPosition = smoothedPos
                 self?.currentLocationService.updateBalloonDisplayPosition(smoothedPos)
+            }
+            .store(in: &cancellables)
+
+        // Subscribe to APRS sonde names for display
+        balloonPositionService.aprsService.$bleSerialName
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] bleName in
+                self?.bleSerialName = bleName ?? ""
+            }
+            .store(in: &cancellables)
+
+        balloonPositionService.aprsService.$aprsSerialName
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] aprsName in
+                self?.aprsSerialName = aprsName ?? ""
             }
             .store(in: &cancellables)
 
@@ -703,7 +707,6 @@ final class ServiceCoordinator: ObservableObject {
         balloonTelemetry = telemetry
         // Keep frequency visible without waiting for device settings
         if telemetry.frequency > 0 {
-            frequencyString = String(format: "%.3f", telemetry.frequency)
         }
 
         // Update AFC frequency tracking (moved from SettingsView for proper separation of concerns)
@@ -773,8 +776,23 @@ final class ServiceCoordinator: ObservableObject {
             updateMapWithBalloonPosition(telemetry)
         }
     }
-    
-    
+
+    // MARK: - APRS Sonde Name Display (for tracking view)
+
+    private func handleSondeNameMismatchDetection(_ mismatchDetected: Bool) {
+        if mismatchDetected {
+            // Get the sonde names from APRS service for display purposes
+            if let bleSerial = balloonPositionService.aprsService.bleSerialName,
+               let aprsSerial = balloonPositionService.aprsService.aprsSerialName {
+
+                bleSerialName = bleSerial
+                aprsSerialName = aprsSerial
+
+                appLog("ServiceCoordinator: Sonde name difference detected - BLE: \(bleSerial), APRS: \(aprsSerial)", category: .service, level: .info)
+            }
+        }
+    }
+
     // MARK: - Prediction Logic
     
     // Manual prediction trigger for UI (balloon annotation tap)
@@ -1082,12 +1100,10 @@ final class ServiceCoordinator: ObservableObject {
                     userRoute = MKPolyline(coordinates: cachedRoute.coordinates, count: cachedRoute.coordinates.count)
                     isRouteVisible = true
                     routeData = cachedRoute  // Fix: Set route data for arrival time
-                    updateFormattedRouteDistance()
                 } else {
                     userRoute = nil
                     isRouteVisible = false
                     routeData = nil
-                    updateFormattedRouteDistance()
                 }
                 return
             }
@@ -1108,7 +1124,6 @@ final class ServiceCoordinator: ObservableObject {
                 userRoute = MKPolyline(coordinates: routeData.coordinates, count: routeData.coordinates.count)
                 isRouteVisible = true
                 self.routeData = routeData
-                updateFormattedRouteDistance()
                 
                 // Cache the route
                 await routingCache.set(key: routeKey, value: routeData)
@@ -1197,8 +1212,7 @@ final class ServiceCoordinator: ObservableObject {
         // 2. Historic track data - load and add to current track if sonde matches
         // Note: This will be handled by BalloonTrackService when first telemetry arrives
         
-        // 4. Clipboard parsing removed from startup - now handled in determineLandingPoint() per FSD priority
-        // Priority 3 (clipboard) only runs if Priority 1 (telemetry) and Priority 2 (prediction) fail
+        // Landing point determination follows FSD 2-priority system in determineLandingPoint()
         
         appLog("ServiceCoordinator: Persistence data loading complete", category: .general, level: .info)
         
@@ -1285,100 +1299,6 @@ final class ServiceCoordinator: ObservableObject {
     
     // MARK: - Landing Point Management (moved from LandingPointService)
     
-    @discardableResult
-    func setLandingPointFromClipboard() -> Bool {
-        appLog("ServiceCoordinator: Attempting to set landing point from clipboard", category: .service, level: .info)
-        if let clipboardLanding = parseClipboardForLandingPoint() {
-            landingPoint = clipboardLanding
-            
-            landingPointTrackingService.recordLandingPrediction(
-                coordinate: clipboardLanding,
-                predictedAt: Date(),
-                landingEta: nil,
-                source: .manual
-            )
-            appLog("ServiceCoordinator: Successfully set landing point from clipboard and recorded in history", category: .service, level: .info)
-
-            // Set balloon as landed since we have a manual landing point from clipboard
-            balloonTrackService.setBalloonAsLanded(at: clipboardLanding)
-            appLog("ServiceCoordinator: Balloon set as landed due to clipboard landing point", category: .service, level: .info)
-
-            // Update DomainModel
-            // Landing point already set in ServiceCoordinator state above
-            
-            return true
-        }
-        return false
-    }
-    
-    private func parseClipboardForLandingPoint() -> CLLocationCoordinate2D? {
-        let clipboardString = UIPasteboard.general.string ?? ""
-        
-        appLog("ServiceCoordinator: Clipboard content: '\(clipboardString)' (\(clipboardString.count) chars)", category: .service, level: .info)
-        
-        guard !clipboardString.isEmpty else {
-            return nil
-        }
-        
-        // First validate that clipboard content looks like a URL
-        let trimmedString = clipboardString.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmedString.hasPrefix("http://") || trimmedString.hasPrefix("https://") else {
-            appLog("ServiceCoordinator: Clipboard content is not a URL (no http/https prefix)", category: .service, level: .debug)
-            return nil
-        }
-        
-        // Check if it's an OpenStreetMap URL (expected format per FSD)
-        guard trimmedString.contains("openstreetmap.org") else {
-            appLog("ServiceCoordinator: URL is not an OpenStreetMap URL as expected per FSD", category: .service, level: .debug)
-            return nil
-        }
-        
-        appLog("ServiceCoordinator: Attempting to parse clipboard URL: '\(trimmedString)'", category: .service, level: .debug)
-        
-        // Try to parse as URL with coordinates
-        if let url = URL(string: trimmedString),
-           let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
-           let queryItems = components.queryItems {
-            
-            var lat: Double? = nil
-            var lon: Double? = nil
-            
-            for item in queryItems {
-                switch item.name {
-                case "lat", "latitude":
-                    lat = Double(item.value ?? "")
-                case "lon", "lng", "longitude":
-                    lon = Double(item.value ?? "")
-                case "route":
-                    // Parse OpenStreetMap route format: "47.4738%2C7.75929%3B47.4987%2C7.667"
-                    // Second coordinate (after %3B which is ";") is the landing point
-                    if let routeValue = item.value {
-                        let decodedRoute = routeValue.removingPercentEncoding ?? routeValue
-                        let coordinates = decodedRoute.components(separatedBy: ";")
-                        if coordinates.count >= 2 {
-                            let landingCoordParts = coordinates[1].components(separatedBy: ",")
-                            if landingCoordParts.count == 2 {
-                                lat = Double(landingCoordParts[0])
-                                lon = Double(landingCoordParts[1])
-                                appLog("ServiceCoordinator: Parsed OpenStreetMap route format: \(landingCoordParts[0]), \(landingCoordParts[1])", category: .service, level: .debug)
-                            }
-                        }
-                    }
-                default:
-                    break
-                }
-            }
-            
-            if let latitude = lat, let longitude = lon {
-                appLog("ServiceCoordinator: ✅ Parsed coordinates from clipboard URL", category: .service, level: .info)
-                return CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
-            }
-        }
-        
-        appLog("ServiceCoordinator: Invalid URL format", category: .service, level: .debug)
-        appLog("ServiceCoordinator: ❌ Clipboard content could not be parsed as coordinates", category: .service, level: .debug)
-        return nil
-    }
 
     // MARK: - UI Support Methods
 
@@ -1401,6 +1321,7 @@ final class ServiceCoordinator: ObservableObject {
                 directionsMode = MKLaunchOptionsDirectionsModeCycling
             } else {
                 directionsMode = MKLaunchOptionsDirectionsModeWalking // Fallback for older iOS
+                appLog("ServiceCoordinator: Cycling directions require iOS 14+. Falling back to walking mode", category: .general, level: .info)
             }
         }
 
@@ -1474,15 +1395,6 @@ final class ServiceCoordinator: ObservableObject {
             appLog("🔍 ZOOM: \(description) - \(zoomKm)km (\(String(format: "%.3f", span.latitudeDelta))°) at [\(String(format: "%.4f", center.latitude)), \(String(format: "%.4f", center.longitude))]", category: .general, level: .info)
         } else {
             appLog("🔍 ZOOM: \(description) - \(zoomKm)km (\(String(format: "%.3f", span.latitudeDelta))°)", category: .general, level: .info)
-        }
-    }
-
-    private func updateFormattedRouteDistance() {
-        if let distanceMeters = routeData?.distance {
-            let distanceKm = distanceMeters / 1000.0
-            formattedRouteDistance = String(format: "%.1f", distanceKm)
-        } else {
-            formattedRouteDistance = "--"
         }
     }
 

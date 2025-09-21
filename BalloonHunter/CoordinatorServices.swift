@@ -43,11 +43,9 @@ in‑code markup for quick reference while working on the startup sequence.
      - Historic track data
      - Landing point (if available)
 
-6) Landing Point Determination (priorities)
+6) Landing Point Determination (per FSD - 2 priorities only)
    - Prio 1: If telemetry is received and the balloon is landed, set landing point to current balloon position.
    - Prio 2: If balloon is still in flight (telemetry available), use the predicted landing position.
-   - Prio 3: Parse a landing point from the clipboard (OpenStreetMap URL), if available.
-   - Prio 4: If none of the above apply, use the persisted landing point.
    - Otherwise: No landing point is available.
 
 7) Final Map Displayed
@@ -93,34 +91,36 @@ extension ServiceCoordinator {
             startupProgress = "3-5. Telemetry & Data"
         }
 
-        // Step 3: First Telemetry Package
+        // Step 3: APRS Startup Priming - call SondeHub API to get latest telemetry data
+        await primeAPRSStartupData()
+        // Step 4: First Telemetry Package
         await waitForFirstBLEPackageAndPublishTelemetryStatus()
-        // Step 4: Device Settings - handled opportunistically by BLE service; no blocking needed
-        // Step 5: Persistence Data
+        // Step 5: Device Settings - handled opportunistically by BLE service; no blocking needed
+        // Step 6: Persistence Data
         await loadAllPersistenceData()
 
         let phase2Time = Date().timeIntervalSince(phase2Start)
-        appLog("STARTUP: Steps 3-5 ✅ Telemetry → Settings → Data (\(String(format: "%.1f", phase2Time))s)", category: .general, level: .info)
+        appLog("STARTUP: Steps 3-6 ✅ APRS → Telemetry → Settings → Data (\(String(format: "%.1f", phase2Time))s)", category: .general, level: .info)
 
-        // Phase 3: Steps 6-7 (Landing Point → Final Map)
+        // Phase 3: Steps 7-8 (Landing Point → Final Map)
         let phase3Start = Date()
         await MainActor.run {
-            currentStartupStep = 6
-            startupProgress = "6-7. Landing & Display"
+            currentStartupStep = 7
+            startupProgress = "7-8. Landing & Display"
         }
 
-        // Step 6: Landing Point Determination
-        appLog("STARTUP: Step 6 - Starting landing point determination", category: .general, level: .info)
+        // Step 7: Landing Point Determination
+        appLog("STARTUP: Step 7 - Starting landing point determination", category: .general, level: .info)
         await determineLandingPointWithPriorities()
-        appLog("STARTUP: Step 6 - Landing point determination complete", category: .general, level: .info)
+        appLog("STARTUP: Step 7 - Landing point determination complete", category: .general, level: .info)
 
-        // Step 7: Final Map Display
-        appLog("STARTUP: Step 7 - Starting final map display", category: .general, level: .info)
+        // Step 8: Final Map Display
+        appLog("STARTUP: Step 8 - Starting final map display", category: .general, level: .info)
         await setupInitialMapDisplay()
-        appLog("STARTUP: Step 7 - Final map display complete", category: .general, level: .info)
+        appLog("STARTUP: Step 8 - Final map display complete", category: .general, level: .info)
 
         let phase3Time = Date().timeIntervalSince(phase3Start)
-        appLog("STARTUP: Steps 6-7 ✅ Landing Point → Final Map (\(String(format: "%.1f", phase3Time))s)", category: .general, level: .info)
+        appLog("STARTUP: Steps 7-8 ✅ Landing Point → Final Map (\(String(format: "%.1f", phase3Time))s)", category: .general, level: .info)
 
         // Mark startup as complete
         let totalTime = Date().timeIntervalSince(startTime)
@@ -211,7 +211,7 @@ extension ServiceCoordinator {
 
         // Load prediction parameters (already loaded during initialize)
         // Historic track data will be loaded by BalloonTrackService when first telemetry arrives
-        // Landing point loaded from persistence (without clipboard parsing)
+        // Landing point loaded from persistence
         loadPersistenceData()
 
         try? await Task.sleep(nanoseconds: 200_000_000) // 0.2 seconds for loading
@@ -271,35 +271,8 @@ extension ServiceCoordinator {
             appLog("Priority 2: Not applicable - no telemetry available", category: .general, level: .info)
         }
         
-        // Priority 3: Read and parse from clipboard
-        if setLandingPointFromClipboard() {
-            if let lp = landingPoint {
-                appLog(String(format: "Priority 3: SUCCESS - Landing set from clipboard at %.5f, %.5f",
-                              lp.latitude, lp.longitude), category: .general, level: .info)
-            } else {
-                appLog("Priority 3: SUCCESS - Landing set from clipboard", category: .general, level: .info)
-            }
-            return
-        }
-        
-        // Priority 4: Use persisted landing point
-        if let telemetry = balloonTelemetry, !telemetry.sondeName.isEmpty {
-            if let persistedLanding = landingPointTrackingService.lastLandingPrediction?.coordinate {
-                await MainActor.run {
-                    landingPoint = persistedLanding
-                }
-                appLog(String(format: "Priority 4: SUCCESS - Landing set from persistence for %@ at %.5f, %.5f",
-                              telemetry.sondeName, persistedLanding.latitude, persistedLanding.longitude),
-                       category: .general, level: .info)
-                return
-            }
-            appLog("Priority 4: FAILED - No persisted landing point for sonde \(telemetry.sondeName)", category: .general, level: .info)
-        } else {
-            appLog("Priority 4: FAILED - No sonde name available for persistence lookup", category: .general, level: .info)
-        }
-        
         // All priorities failed
-        appLog("ALL PRIORITIES FAILED - No landing point available", category: .general, level: .info)
+        appLog("BOTH PRIORITIES FAILED - No landing point available", category: .general, level: .info)
         await MainActor.run {
             landingPoint = nil
         }
@@ -319,5 +292,15 @@ extension ServiceCoordinator {
         appLog("🔍 ZOOM: TrackingMap displayed - will auto-trigger showAnnotations when ready", category: .general, level: .info)
 
         // TrackingMapView will call updateCameraToShowAllAnnotations() when map camera initializes
+    }
+
+    /// Prime APRS startup data (Step 3 of startup sequence)
+    private func primeAPRSStartupData() async {
+        appLog("STARTUP: Step 3 - Priming APRS startup data", category: .general, level: .info)
+
+        // Access APRS service through BalloonPositionService
+        await balloonPositionService.aprsService.primeStartupData()
+
+        appLog("STARTUP: Step 3 - APRS startup priming complete", category: .general, level: .info)
     }
 }
