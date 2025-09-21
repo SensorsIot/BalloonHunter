@@ -62,17 +62,9 @@ final class AppServices: ObservableObject {
         // 4. Service coordination handled by ServiceCoordinator
         
         // 5. Set up inter-service communication
-        setupServiceObservation()
-        
+        balloonPositionService.setBalloonTrackService(balloonTrackService)
+
         appLog("AppServices: Dependency injection setup complete", category: .general, level: .info)
-    }
-    
-    private func setupServiceObservation() {
-        // This replaces the EventBus subscriptions with direct service observation
-        // Services will observe each other's @Published properties directly
-        
-        // Note: Detailed service observation setup will be implemented as we migrate
-        // each service from EventBus to direct communication in subsequent phases
     }
     
     // MARK: - Service Lifecycle

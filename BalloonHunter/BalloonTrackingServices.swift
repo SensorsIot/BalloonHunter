@@ -10,6 +10,7 @@ enum TelemetryState: CustomStringConvertible, Equatable {
     case startup
     case liveBLEFlying
     case liveBLELanded
+    case waitingForAPRS  // Intermediate state when BLE lost, waiting for APRS response
     case aprsFallbackFlying
     case aprsFallbackLanded
     case noTelemetry
@@ -19,6 +20,7 @@ enum TelemetryState: CustomStringConvertible, Equatable {
         case .startup: return "startup"
         case .liveBLEFlying: return "liveBLEFlying"
         case .liveBLELanded: return "liveBLELanded"
+        case .waitingForAPRS: return "waitingForAPRS"
         case .aprsFallbackFlying: return "aprsFallbackFlying"
         case .aprsFallbackLanded: return "aprsFallbackLanded"
         case .noTelemetry: return "noTelemetry"
@@ -29,7 +31,7 @@ enum TelemetryState: CustomStringConvertible, Equatable {
         switch self {
         case .startup, .noTelemetry, .liveBLEFlying, .liveBLELanded:
             return false
-        case .aprsFallbackFlying, .aprsFallbackLanded:
+        case .waitingForAPRS, .aprsFallbackFlying, .aprsFallbackLanded:
             return true
         }
     }
@@ -304,6 +306,9 @@ final class BalloonPositionService: ObservableObject {
         case .liveBLELanded:
             return evaluateLiveBLELandedTransitions(inputs: inputs)
 
+        case .waitingForAPRS:
+            return evaluateWaitingForAPRSTransitions(inputs: inputs, timeInState: timeInCurrentState)
+
         case .aprsFallbackFlying:
             return evaluateAPRSFallbackFlyingTransitions(inputs: inputs, timeInState: timeInCurrentState)
 
@@ -341,6 +346,11 @@ final class BalloonPositionService: ObservableObject {
             aprsService.disablePolling()
             // Landed state - predictions should stop, landing point is live position
 
+        case .waitingForAPRS:
+            // BLE lost - start APRS polling and wait for response
+            aprsService.enablePolling()
+            appLog("BalloonPositionService: Starting APRS polling - waiting for telemetry response", category: .service, level: .info)
+
         case .aprsFallbackFlying:
             // APRS fallback while flying - enable polling and frequency monitoring
             aprsService.enablePolling()
@@ -371,6 +381,10 @@ final class BalloonPositionService: ObservableObject {
             // Already handled by existing bleStalenessThreshold
             break
 
+        case .waitingForAPRS:
+            // Waiting for APRS - use default thresholds
+            break
+
         case .aprsFallbackFlying, .aprsFallbackLanded:
             // APRS fallback - longer staleness threshold for network-based data
             // Already handled by existing aprsStalenessThreshold
@@ -395,6 +409,12 @@ final class BalloonPositionService: ObservableObject {
 
         case .liveBLELanded:
             // BLE landed - disable predictions, use live position as landing point
+            shouldEnablePredictions = false
+            shouldEnableLandingDetection = false
+            isInAPRSFallbackMode = false
+
+        case .waitingForAPRS:
+            // Waiting for APRS response - keep previous functionality disabled
             shouldEnablePredictions = false
             shouldEnableLandingDetection = false
             isInAPRSFallbackMode = false
@@ -450,14 +470,10 @@ final class BalloonPositionService: ObservableObject {
         if inputs.balloonPhase == .landed {
             return .liveBLELanded
         }
-        if !inputs.bleTelemetryIsAvailable && inputs.aprsTelemetryIsAvailable && inputs.balloonPhase == .landed {
-            return .aprsFallbackLanded
-        }
-        if !inputs.bleTelemetryIsAvailable && inputs.aprsTelemetryIsAvailable {
-            return .aprsFallbackFlying
-        }
         if !inputs.bleTelemetryIsAvailable {
-            return .noTelemetry
+            // BLE lost - start APRS and wait for response
+            appLog("BalloonPositionService: BLE lost while flying - starting APRS and waiting for response", category: .service, level: .info)
+            return .waitingForAPRS
         }
         return .liveBLEFlying
     }
@@ -467,9 +483,34 @@ final class BalloonPositionService: ObservableObject {
             return .liveBLEFlying
         }
         if !inputs.bleTelemetryIsAvailable {
-            return .noTelemetry // No APRS for landed balloons
+            // BLE lost - start APRS and wait for response
+            appLog("BalloonPositionService: BLE lost while landed - starting APRS and waiting for response", category: .service, level: .info)
+            return .waitingForAPRS
         }
         return .liveBLELanded
+    }
+
+    private func evaluateWaitingForAPRSTransitions(inputs: TelemetryInputs, timeInState: TimeInterval) -> TelemetryState {
+        // BLE recovery takes priority
+        if inputs.bleTelemetryIsAvailable {
+            appLog("BalloonPositionService: BLE recovered while waiting for APRS", category: .service, level: .info)
+            return inputs.balloonPhase == .landed ? .liveBLELanded : .liveBLEFlying
+        }
+
+        // APRS data arrived - transition to appropriate APRS fallback state
+        if inputs.aprsTelemetryIsAvailable {
+            appLog("BalloonPositionService: APRS data received - transitioning to APRS fallback", category: .service, level: .info)
+            return inputs.balloonPhase == .landed ? .aprsFallbackLanded : .aprsFallbackFlying
+        }
+
+        // Timeout after 30 seconds of waiting for APRS
+        if timeInState > 30.0 {
+            appLog("BalloonPositionService: APRS timeout after 30s - no telemetry available", category: .service, level: .error)
+            return .noTelemetry
+        }
+
+        // Stay in waiting state
+        return .waitingForAPRS
     }
 
     private func evaluateAPRSFallbackFlyingTransitions(inputs: TelemetryInputs, timeInState: TimeInterval) -> TelemetryState {
@@ -569,7 +610,7 @@ final class BalloonPositionService: ObservableObject {
         appLog("BalloonPositionService: Performing startup frequency sync from \(String(format: "%.2f", bleFreq)) MHz to \(String(format: "%.2f", aprsFreq)) MHz", category: .service, level: .info)
 
         // Perform automatic sync during startup (no user prompt needed)
-        let probeType = BLECommunicationService.ProbeType.from(string: telemetry.probeType ?? "RS41") ?? .rs41
+        let probeType = BLECommunicationService.ProbeType.from(string: telemetry.probeType.isEmpty ? "RS41" : telemetry.probeType) ?? .rs41
         bleService.setFrequency(aprsFreq, probeType: probeType)
 
         // Note: Display will update when RadioSondyGo confirms the new frequency via BLE device settings

@@ -187,7 +187,7 @@ final class PredictionService: ObservableObject {
         return f
     }()
     private let isoNoFrac = ISO8601DateFormatter()
-    
+
     // MARK: - Simplified Constructor (API-only mode)
     init() {
         // Initialize API session only
@@ -377,14 +377,12 @@ final class PredictionService: ObservableObject {
     }
     
     private func handlePredictionResult(_ predictionData: PredictionData, trigger: String) async {
-        latestPrediction = predictionData
         hasValidPrediction = true
         lastPredictionTime = Date()
         predictionStatus = "Prediction successful"
-        
-        // Update time calculations (moved from DataPanelView)
-        updateTimeCalculations()
-        appLog("PredictionService: Time strings set (landing=\(predictedLandingTimeString), flight=\(remainingFlightTimeString))", category: .service, level: .debug)
+
+        // Update prediction data and time calculations
+        updatePredictionAndTimeCalculations(predictionData)
         
         appLog("PredictionService: Prediction completed successfully from \(trigger)", category: .service, level: .info)
         
@@ -541,7 +539,7 @@ final class PredictionService: ObservableObject {
             return nil
         }()
 
-        return PredictionData(
+        let predictionData = PredictionData(
             path: pathCoords,
             burstPoint: burstPoint,
             landingPoint: landingPoint,
@@ -551,6 +549,11 @@ final class PredictionService: ObservableObject {
             flightTime: nil,
             metadata: nil
         )
+
+        // Update time calculations for direct API calls
+        updatePredictionAndTimeCalculations(predictionData)
+
+        return predictionData
     }
     
     private func updateTimeCalculations() {
@@ -572,7 +575,16 @@ final class PredictionService: ObservableObject {
             appLog("PredictionService: Remaining flight time is 0 (already past landing)", category: .service, level: .debug)
         }
     }
-    
+
+    // MARK: - Time Calculation Trigger
+
+    /// Updates time calculations whenever prediction data is set
+    private func updatePredictionAndTimeCalculations(_ prediction: PredictionData) {
+        latestPrediction = prediction
+        updateTimeCalculations()
+        appLog("PredictionService: Prediction and time calculations updated (landing=\(predictedLandingTimeString), flight=\(remainingFlightTimeString))", category: .service, level: .debug)
+    }
+
     // MARK: - Prediction Models & Errors
     
     struct SondehubPredictionResponse: Codable {

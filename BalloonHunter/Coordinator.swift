@@ -477,7 +477,7 @@ final class ServiceCoordinator: ObservableObject {
         if freqMismatch {
             appLog("ServiceCoordinator: Syncing RadioSondyGo frequency from APRS - \(String(format: "%.2f", bleFreq)) MHz → \(String(format: "%.2f", aprsFreq)) MHz", category: .general, level: .info)
 
-            let probeType = BLECommunicationService.ProbeType.from(string: aprsTelemetry.probeType ?? "RS41") ?? .rs41
+            let probeType = BLECommunicationService.ProbeType.from(string: aprsTelemetry.probeType.isEmpty ? "RS41" : aprsTelemetry.probeType) ?? .rs41
             bleCommunicationService.setFrequency(aprsFreq, probeType: probeType)
 
             // Note: Display will update when RadioSondyGo confirms the new frequency via BLE device settings
@@ -723,9 +723,18 @@ final class ServiceCoordinator: ObservableObject {
             // Update last prediction time
             lastPredictionTime = Date()
             
+            // Check if this is first prediction (before updating)
+            let wasFirstPrediction = isStartupComplete && landingPoint == nil
+
             // Update ServiceCoordinator directly with prediction data
             updateMapWithPrediction(predictionData)
-            
+
+            // Trigger map zoom for first prediction after startup
+            if wasFirstPrediction {
+                appLog("ServiceCoordinator: First prediction after startup - triggering map zoom", category: .general, level: .info)
+                triggerStartupMapZoom()
+            }
+
             appLog("ServiceCoordinator: Prediction completed successfully", category: .general, level: .info)
             
         } catch {
@@ -742,7 +751,7 @@ final class ServiceCoordinator: ObservableObject {
     func updateMapWithPrediction(_ prediction: PredictionData) {
         // Update prediction data
         predictionData = prediction
-        
+
         // Update prediction path (flight mode only)
         if isFlying, let path = prediction.path, !path.isEmpty {
             predictionPath = MKPolyline(coordinates: path, count: path.count)
@@ -1074,77 +1083,7 @@ final class ServiceCoordinator: ObservableObject {
         }
     }
 
-    private func scheduleFrequencySyncIfNeeded() {
-        // Skip during startup - automatic sync handled separately
-        guard isStartupComplete else { return }
-
-        guard aprsTelemetryIsAvailable,
-              let telemetry = balloonTelemetry else { return }
-
-        guard telemetry.frequency > 0 else { return }
-
-        guard bleCommunicationService.connectionStatus == .connected,
-              bleCommunicationService.isReadyForCommands else { return }
-
-        guard pendingFrequencySync == nil else { return }
-
-        if let lastPrompt = lastAprsSyncPromptTime,
-           Date().timeIntervalSince(lastPrompt) < 60 {
-            return
-        }
-
-        if let lastSync = lastAprsSyncCommandTime,
-           Date().timeIntervalSince(lastSync) < 60 {
-            return
-        }
-
-        let deviceSettings = bleCommunicationService.deviceSettings
-        guard let proposal = makeFrequencySyncProposal(from: telemetry, deviceSettings: deviceSettings) else { return }
-
-        pendingFrequencySync = proposal
-        lastAprsSyncPromptTime = Date()
-    }
-
-    private func makeFrequencySyncProposal(from telemetry: TelemetryData, deviceSettings: DeviceSettings) -> FrequencySyncProposal? {
-        let frequencyMismatch = abs(deviceSettings.frequency - telemetry.frequency) > 0.005
-        let aprsProbeTypeRaw = telemetry.probeType.uppercased()
-        let deviceProbeType = deviceSettings.probeType.uppercased()
-
-        let normalizedProbeType: String
-        if !aprsProbeTypeRaw.isEmpty {
-            normalizedProbeType = aprsProbeTypeRaw
-        } else if !deviceProbeType.isEmpty {
-            normalizedProbeType = deviceProbeType
-        } else {
-            normalizedProbeType = "RS41"
-        }
-
-        let typeMismatch = !aprsProbeTypeRaw.isEmpty && aprsProbeTypeRaw != deviceProbeType
-
-        guard frequencyMismatch || typeMismatch else { return nil }
-
-        return FrequencySyncProposal(frequency: telemetry.frequency, probeType: normalizedProbeType)
-    }
-
-    func applyPendingFrequencySync() {
-        guard let proposal = pendingFrequencySync else { return }
-        appLog("ServiceCoordinator: Applying APRS frequency sync (freq=\(String(format: "%.2f", proposal.frequency)) MHz, type=\(proposal.probeType))", category: .general, level: .info)
-        let probeType = BLECommunicationService.ProbeType.from(string: proposal.probeType) ?? .rs41
-        bleCommunicationService.setFrequency(proposal.frequency, probeType: probeType)
-
-        // Note: Display will update when RadioSondyGo confirms the new frequency via BLE device settings
-
-        lastAprsSyncCommandTime = Date()
-        pendingFrequencySync = nil
-    }
-
-    func dismissPendingFrequencySync() {
-        if pendingFrequencySync != nil {
-            appLog("ServiceCoordinator: APRS frequency sync dismissed by user", category: .general, level: .info)
-            pendingFrequencySync = nil
-            lastAprsSyncPromptTime = Date()
-        }
-    }
+    // Frequency sync prompt methods removed - automatic sync only
 
     func logZoomChange(_ description: String, span: MKCoordinateSpan, center: CLLocationCoordinate2D? = nil) {
         let zoomKm = Int(span.latitudeDelta * 111) // Approximate km conversion

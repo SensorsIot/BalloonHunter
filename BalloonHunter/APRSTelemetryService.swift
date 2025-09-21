@@ -28,11 +28,9 @@ typealias SondeHubSiteResponse = [String: SondeHubSondeData]
 final class APRSTelemetryService: ObservableObject {
 
     // MARK: - Published Properties (compatible with BLE service)
-    @Published var telemetryAvailabilityState: Bool = false
     @Published var latestTelemetry: TelemetryData? = nil
     @Published var connectionStatus: ConnectionStatus = .disconnected
     var lastTelemetryUpdateTime: Date? = nil
-    @Published var isHealthy: Bool = false
 
     // APRS-specific published state
     var currentStationId: String = "06610" // Default to Payerne
@@ -40,7 +38,6 @@ final class APRSTelemetryService: ObservableObject {
     var pollCadence: TimeInterval = 60.0
     private var apiCallCount: Int = 0
     var lastApiError: String? = nil
-    private var isProvidingTelemetry: Bool = false
 
     // Sonde name mismatch tracking (display only)
     @Published var bleSerialName: String? = nil
@@ -52,7 +49,6 @@ final class APRSTelemetryService: ObservableObject {
     // MARK: - Private State
     private var pollingTimer: Timer?
     private var isPollingActive: Bool = false
-    private var isBLETelemetryHealthy: Bool = false
     private var cancellables = Set<AnyCancellable>()
     private let session = URLSession.shared
 
@@ -77,7 +73,6 @@ final class APRSTelemetryService: ObservableObject {
 
         // Set initial connection status
         connectionStatus = .disconnected
-        isHealthy = false
 
         // Subscribe to station ID changes
         userSettings.$stationId
@@ -100,7 +95,6 @@ final class APRSTelemetryService: ObservableObject {
         isPollingActive = true
         pollCadence = Self.fastPollInterval
         connectionStatus = .connecting
-        isProvidingTelemetry = false
 
         appLog("APRSTelemetryService: Starting APRS polling every \(Int(pollCadence))s for station \(currentStationId)", category: .service, level: .info)
 
@@ -124,7 +118,6 @@ final class APRSTelemetryService: ObservableObject {
         pollingTimer = nil
 
         appLog("APRSTelemetryService: Stopped APRS polling (BLE telemetry resumed)", category: .service, level: .info)
-        isProvidingTelemetry = false
     }
 
     /// Update station ID and restart polling if active
@@ -147,26 +140,18 @@ final class APRSTelemetryService: ObservableObject {
         }
     }
 
-    /// Notify service about BLE telemetry health status
-    func updateBLETelemetryHealth(_ isHealthy: Bool, balloonIsLanded: Bool = false) {
-        let wasHealthy = isBLETelemetryHealthy
-        isBLETelemetryHealthy = isHealthy
 
-        if !wasHealthy && isHealthy {
-            // BLE telemetry resumed - stop APRS polling
+    /// Enable APRS polling (called by state machine)
+    func enablePolling() {
+        if !isPollingActive {
+            startPolling()
+        }
+    }
+
+    /// Disable APRS polling (called by state machine)
+    func disablePolling() {
+        if isPollingActive {
             stopPolling()
-        } else if wasHealthy && !isHealthy {
-            // BLE telemetry failed - start APRS polling only if balloon is not landed
-            if !balloonIsLanded {
-                startPolling()
-            } else {
-                appLog("APRSTelemetryService: Skipping APRS start - balloon is already landed", category: .service, level: .info)
-            }
-        } else if !wasHealthy && !isHealthy {
-            // Initial state or continued unhealthy state - ensure APRS polling is active only if balloon is not landed
-            if !isPollingActive && !balloonIsLanded {
-                startPolling()
-            }
         }
     }
 
@@ -248,8 +233,6 @@ final class APRSTelemetryService: ObservableObject {
             // Find the most recent sonde by timestamp
             guard let latestSonde = findLatestSonde(from: Array(siteResponse.values)) else {
                 appLog("APRSTelemetryService: No sondes found for station \(currentStationId)", category: .service, level: .info)
-                telemetryAvailabilityState = false
-                isProvidingTelemetry = false
                 return
             }
 
@@ -259,10 +242,8 @@ final class APRSTelemetryService: ObservableObject {
             // Update state
             latestTelemetry = telemetryData
             lastTelemetryUpdateTime = Date()
-            telemetryAvailabilityState = true
             lastSondeSerial = latestSonde.serial
             connectionStatus = .connected
-            isHealthy = true
             lastApiError = nil
 
             // Publish through telemetry stream (compatible with BLE service)
@@ -270,20 +251,15 @@ final class APRSTelemetryService: ObservableObject {
 
             appLog("APRSTelemetryService: Published telemetry for sonde \(latestSonde.serial) at \(String(format: "%.5f, %.5f", latestSonde.lat, latestSonde.lon))", category: .service, level: .info)
 
-            isProvidingTelemetry = true
             adjustPollingCadence(for: telemetryData)
 
         } catch APRSError.invalidPayload {
             appLog("APRSTelemetryService: Ignoring incomplete telemetry payload", category: .service, level: .info)
-            isProvidingTelemetry = false
         } catch {
             appLog("APRSTelemetryService: Failed to fetch telemetry: \(error.localizedDescription)", category: .service, level: .error)
 
-            telemetryAvailabilityState = false
             connectionStatus = .failed(error.localizedDescription)
             lastApiError = error.localizedDescription
-            isHealthy = false
-            isProvidingTelemetry = false
         }
     }
 

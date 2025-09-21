@@ -212,11 +212,16 @@ struct DataPanelView: View {
     }
 
     private func connectionIcon() -> (name: String, color: Color) {
-        if serviceCoordinator.aprsTelemetryIsAvailable {
-            return ("globe.americas.fill", .orange)  // More distinct APRS/internet icon
-        }
-        if bleService.connectionStatus == .connected {
+        // Show icon based on actual telemetry source being used
+        if balloonPositionService.lastTelemetrySource == .ble {
             return ("antenna.radiowaves.left.and.right", .green)
+        }
+        if balloonPositionService.lastTelemetrySource == .aprs {
+            return ("globe.americas.fill", .orange)
+        }
+        // No telemetry - show BLE connection status
+        if bleService.connectionStatus == .connected {
+            return ("antenna.radiowaves.left.and.right", .gray)
         }
         return ("antenna.radiowaves.left.and.right.slash", .red)
     }
