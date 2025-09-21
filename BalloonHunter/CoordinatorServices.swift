@@ -47,18 +47,14 @@ in‑code markup for quick reference while working on the startup sequence.
    - BalloonTrackService publishes landing state/position derived from telemetry and persistence.
    - Coordinator simply mirrors that state; no additional heuristics required.
 
-7) Automatic Frequency Sync
-   - If both BLE and APRS telemetry are available and frequencies differ, automatically sync RadioSondyGo frequency to match APRS data.
-   - No user prompt during startup per FSD optimization requirements.
-
-8) Final Map Displayed
+7) Final Map Displayed
    - Show the tracking map (with button row and data panel).
    - Initial map uses maximum zoom level to show all available overlays:
      - User position
      - Landing position (if available)
      - If a balloon is flying, the route and predicted path
 
-9) End of Setup
+8) End of Setup
    - Transition to steady‑state tracking: BLE telemetry updates, prediction scheduling (60 s),
      and route recalculation (on mode change and significant user movement).
 
@@ -66,6 +62,7 @@ in‑code markup for quick reference while working on the startup sequence.
  - Views remain presentation‑only; logic resides in services and this coordinator.
  - BalloonTrackService provides smoothed speeds, adjusted descent rate, and landed state.
  - PredictionService handles both API calls and automatic 60‑second scheduling.
+ - Automatic frequency sync: BalloonPositionService automatically syncs RadioSondyGo frequency when APRS telemetry becomes available during startup (no user prompt).
 */
 extension ServiceCoordinator {
     
@@ -126,10 +123,7 @@ extension ServiceCoordinator {
         // Complete telemetry state machine startup with all parameters populated
         balloonPositionService.completeStartup()
 
-        // Step 7: Automatic frequency sync if both BLE and APRS data available
-        await performStartupFrequencySync()
-
-        // Mark startup as complete AFTER automatic frequency sync
+        // Mark startup as complete (automatic frequency sync now handled by BalloonPositionService)
         let totalTime = Date().timeIntervalSince(startTime)
         await MainActor.run {
             isStartupComplete = true
@@ -257,36 +251,5 @@ extension ServiceCoordinator {
         appLog("STARTUP: Step 2 - APRS startup priming complete", category: .general, level: .info)
     }
 
-    /// Perform automatic frequency sync during startup if conditions are met
-    private func performStartupFrequencySync() async {
-        appLog("STARTUP: Step 7 - Checking for automatic frequency sync", category: .general, level: .info)
-
-        // Check if both BLE and APRS telemetry are available
-        guard bleCommunicationService.isReadyForCommands,
-              aprsTelemetryIsAvailable,
-              let aprsTelemetry = balloonPositionService.currentTelemetry,
-              aprsTelemetry.softwareVersion == "APRS" else {
-            appLog("STARTUP: Step 7 - Conditions not met for automatic frequency sync", category: .general, level: .info)
-            return
-        }
-
-        // Check if frequency sync is needed
-        let aprsFreq = aprsTelemetry.frequency
-        let bleFreq = bleCommunicationService.deviceSettings.frequency
-        let freqMismatch = abs(aprsFreq - bleFreq) > 0.01 // 0.01 MHz tolerance
-
-        guard freqMismatch, aprsFreq > 0 else {
-            appLog("STARTUP: Step 7 - Frequencies already match, no sync needed", category: .general, level: .info)
-            return
-        }
-
-        appLog("STARTUP: Step 7 - Performing automatic frequency sync from \(String(format: "%.2f", bleFreq)) MHz to \(String(format: "%.2f", aprsFreq)) MHz", category: .general, level: .info)
-
-        // Perform automatic sync during startup (no user prompt needed)
-        let probeType = BLECommunicationService.ProbeType.from(string: aprsTelemetry.probeType ?? "RS41") ?? .rs41
-        bleCommunicationService.setFrequency(aprsFreq, probeType: probeType)
-
-        appLog("STARTUP: Step 7 - Automatic frequency sync complete", category: .general, level: .info)
-    }
 
 }

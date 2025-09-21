@@ -66,6 +66,7 @@ final class BalloonPositionService: ObservableObject {
     // State machine
     @Published var currentTelemetryState: TelemetryState = .startup
     private var stateEntryTime: Date = Date()
+    private var startupTime: Date = Date()
     private var balloonTrackService: BalloonTrackService?
     private var isStartupComplete: Bool = false
 
@@ -198,6 +199,9 @@ final class BalloonPositionService: ObservableObject {
         }
 
         currentTelemetry = telemetryToStore
+
+        // Trigger startup frequency sync if needed
+        triggerStartupFrequencySyncIfNeeded()
 
         // Update current state
         currentPosition = CLLocationCoordinate2D(latitude: telemetryToStore.latitude,
@@ -538,6 +542,37 @@ final class BalloonPositionService: ObservableObject {
         isStartupComplete = true
         appLog("BalloonPositionService: Startup marked as complete - evaluating final state", category: .service, level: .info)
         evaluateTelemetryState()
+    }
+
+    /// Trigger automatic frequency sync during startup when APRS telemetry first becomes available
+    private func triggerStartupFrequencySyncIfNeeded() {
+        // Only during startup or shortly after
+        guard !isStartupComplete || Date().timeIntervalSince(startupTime) < 10 else { return }
+
+        // Only for APRS telemetry
+        guard let telemetry = currentTelemetry,
+              telemetry.softwareVersion == "APRS" else { return }
+
+        // Check if BLE is ready for commands
+        guard bleService.isReadyForCommands else { return }
+
+        // Check if frequency sync is needed
+        let aprsFreq = telemetry.frequency
+        let bleFreq = bleService.deviceSettings.frequency
+        let freqMismatch = abs(aprsFreq - bleFreq) > 0.01 // 0.01 MHz tolerance
+
+        guard freqMismatch, aprsFreq > 0 else {
+            appLog("BalloonPositionService: Frequencies already match, no startup sync needed", category: .service, level: .info)
+            return
+        }
+
+        appLog("BalloonPositionService: Performing startup frequency sync from \(String(format: "%.2f", bleFreq)) MHz to \(String(format: "%.2f", aprsFreq)) MHz", category: .service, level: .info)
+
+        // Perform automatic sync during startup (no user prompt needed)
+        let probeType = BLECommunicationService.ProbeType.from(string: telemetry.probeType ?? "RS41") ?? .rs41
+        bleService.setFrequency(aprsFreq, probeType: probeType)
+
+        appLog("BalloonPositionService: Startup frequency sync complete", category: .service, level: .info)
     }
 }
 
