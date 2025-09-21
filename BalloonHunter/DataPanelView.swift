@@ -222,7 +222,7 @@ struct DataPanelView: View {
     }
 
     private var frequencyString: String {
-        // Display ONLY frequency confirmed by the sonde, never source frequencies
+        // Display frequency sent to RadioSondyGo (if connected) or from live telemetry
 
         if serviceCoordinator.bleTelemetryIsAvailable,
            let telemetry = balloonPositionService.currentTelemetry,
@@ -230,15 +230,12 @@ struct DataPanelView: View {
             // BLE telemetry available - show frequency from live sonde telemetry
             return String(format: "%.2f MHz", telemetry.frequency)
         } else if bleService.connectionStatus == .connected {
-            // BLE connected - show confirmed device settings frequency from sonde
+            // BLE connected - show frequency sent to RadioSondyGo
             let frequency = bleService.deviceSettings.frequency
-            // Only show if we have actual device settings from sonde (not default)
-            if frequency != 434.0 {
-                return String(format: "%.2f MHz", frequency)
-            }
+            return String(format: "%.2f MHz", frequency)
         }
 
-        // No sonde frequency available
+        // No RadioSondyGo connection - no frequency to display
         return "--- MHz"
     }
 
