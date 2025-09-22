@@ -1150,8 +1150,6 @@ final class BalloonTrackService: ObservableObject {
         let isCurrentlyFlying = hasRecentTelemetry && !isLanded
 
         if wasPreviouslyFlying && isCurrentlyFlying {
-            let instH = telemetryData.horizontalSpeed * 3.6
-            let instV = telemetryData.verticalSpeed
             let avgV = smoothedVerticalSpeed
             let phase: String = {
                 if isLanded { return "Landed" }

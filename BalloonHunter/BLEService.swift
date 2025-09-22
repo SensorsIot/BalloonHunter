@@ -603,30 +603,6 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
             
         case "1":
             // Probe Telemetry
-            let type1FieldLabels = [
-                "messageType",
-                "probeType",
-                "frequencyMHz",
-                "sondeName",
-                "latitude",
-                "longitude",
-                "altitudeMeters",
-                "horizontalSpeedMps",
-                "verticalSpeedMps",
-                "rssiDbm",
-                "batPercentage",
-                "afcFrequency",
-                "burstKillerEnabled",
-                "burstKillerTimeSeconds",
-                "batVoltageMillivolts",
-                "buzmute",
-                "reserved1",
-                "reserved2",
-                "reserved3",
-                "softwareVersion",
-                "packetTerminator"
-            ]
-
             if components.count >= 20 {
                 // Single consolidated log message with key telemetry data
                 let keyInfo = [
@@ -713,31 +689,6 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
             
         case "3":
             // Device Configuration
-            let type3FieldLabels = [
-                "messageType",
-                "probeType",
-                "frequencyMHz",
-                "oledSDA",
-                "oledSCL",
-                "oledRST",
-                "ledPin",
-                "rs41Bandwidth",
-                "m20Bandwidth",
-                "m10Bandwidth",
-                "pilotBandwidth",
-                "dfmBandwidth",
-                "callSign",
-                "frequencyCorrection",
-                "batPin",
-                "batMinMillivolts",
-                "batMaxMillivolts",
-                "batType",
-                "lcdType",
-                "nameType",
-                "buzPin",
-                "softwareVersion",
-                "packetTerminator"
-            ]
             if components.count >= 22 {
                 // Consolidated Type 3 message with key config info
                 let keyInfo = [
