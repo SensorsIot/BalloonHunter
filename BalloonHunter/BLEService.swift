@@ -285,14 +285,9 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
             reason = "No telemetry ever received"
         }
 
-        // Log telemetry availability changes
-        // Note: Actual state management moved to BalloonPositionService
-        appLog("BLECommunicationService: Telemetry availability - \(isAvailable) (\(reason))", category: .service, level: .info)
-
-        if isAvailable {
-            appLog("BLECommunicationService: Telemetry GAINED: \(reason)", category: .ble, level: .info)
-        } else {
-            appLog("BLECommunicationService: Telemetry LOST: \(reason)", category: .ble, level: .info)
+        // Log telemetry availability changes only when status changes
+        if telemetryAvailabilityState != isAvailable {
+            appLog("BLECommunicationService: Telemetry \(isAvailable ? "GAINED" : "LOST"): \(reason)", category: .ble, level: .info)
         }
     }
 
@@ -577,7 +572,10 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
             let isTelemetryAvailable = messageType == "1"
             let reason = isTelemetryAvailable ? "Type 1 telemetry packet received" : "Non-telemetry packet received (Type \(messageType))"
             
-            appLog("BLECommunicationService: Telemetry availability - \(isTelemetryAvailable) (\(reason))", category: .service, level: .info)
+            // Log only when telemetry availability changes
+            if telemetryAvailabilityState != isTelemetryAvailable {
+                appLog("BLECommunicationService: Telemetry \(isTelemetryAvailable ? "GAINED" : "LOST"): \(reason)", category: .service, level: .info)
+            }
             
             // First packet processed
             
@@ -628,35 +626,21 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
                 "softwareVersion",
                 "packetTerminator"
             ]
-            let type1DebugLine = components.enumerated().map { index, value -> String in
-                let label = index < type1FieldLabels.count ? type1FieldLabels[index] : "field\(index)"
-                let displayValue = label == "rssiDbm" ? displayRssi(from: value) : value
-                return "\(label)=\(displayValue)"
-            }.joined(separator: " ")
-            appLog("🔍 BLE DBG (Type 1): \(type1DebugLine)", category: .ble, level: .debug)
+
             if components.count >= 20 {
-                let named = [
-                    "probeType=\(components[1])",
-                    "frequency=\(components[2])MHz",
-                    "sondeName=\(components[3])",
-                    "latitude=\(components[4])",
-                    "longitude=\(components[5])",
-                    "altitude=\(components[6])m",
-                    "horizontalSpeed=\(components[7])m/s",
-                    "verticalSpeed=\(components[8])m/s",
+                // Single consolidated log message with key telemetry data
+                let keyInfo = [
+                    components[1], // probeType
+                    "\(components[3])", // sondeName
+                    "lat=\(components[4])",
+                    "lon=\(components[5])",
+                    "alt=\(components[6])m",
+                    "v=\(components[8])m/s",
+                    "h=\(components[7])m/s",
                     "RSSI=\(displayRssi(from: components[9]))dBm",
-                    "batPercentage=\(components[10])%",
-                    "afcFrequency=\(components[11])",
-                    "burstKillerEnabled=\(components[12])",
-                    "burstKillerTime=\(components[13])s",
-                    "batVoltage=\(components[14])mV",
-                    "buzmute=\(components[15])",
-                    "reserved1=\(components[16])",
-                    "reserved2=\(components[17])",
-                    "reserved3=\(components[18])",
-                    "softwareVersion=\(components[19])"
+                    "bat=\(components[10])%"
                 ].joined(separator: " ")
-                appLog("📡 BLE MSG (Type 1): \(named)", category: .ble, level: .info)
+                appLog("📡 BLE: \(keyInfo)", category: .ble, level: .info)
                 // Plausibility checks
                 var warns: [String] = []
                 if let lat = Double(components[4]), !(lat >= -90 && lat <= 90) { warns.append("latitude out of range") }
@@ -705,25 +689,15 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
                 "softwareVersion",
                 "packetTerminator"
             ]
-            let type2DebugLine = components.enumerated().map { index, value -> String in
-                let label = index < type2FieldLabels.count ? type2FieldLabels[index] : "field\(index)"
-                let displayValue = label == "rssiDbm" ? displayRssi(from: value) : value
-                return "\(label)=\(displayValue)"
-            }.joined(separator: " ")
-            appLog("🔍 BLE DBG (Type 2): \(type2DebugLine)", category: .ble, level: .debug)
             if components.count >= 10 {
-                let named = [
-                    "probeType=\(components[1])",
-                    "frequency=\(components[2])MHz",
-                    "sondeName=\(components[3])",
+                // Consolidated Type 2 message with key info
+                let keyInfo = [
+                    components[1], // probeType
+                    "\(components[3])", // sondeName
                     "RSSI=\(displayRssi(from: components[4]))dBm",
-                    "batPercentage=\(components[5])%",
-                    "afcFrequency=\(components[6])",
-                    "batVoltage=\(components[7])mV",
-                    "buzmute=\(components[8])",
-                    "softwareVersion=\(components[9])"
+                    "bat=\(components[5])%"
                 ].joined(separator: " ")
-                appLog("🏷️ BLE MSG (Type 2): \(named)", category: .ble, level: .info)
+                appLog("🏷️ BLE: \(keyInfo)", category: .ble, level: .info)
                 // Plausibility checks (limited fields)
                 var warns: [String] = []
                 if let rssi = adjustedRssiValue(from: components[4]), rssi > -10 { warns.append("RSSI unusually high (>-10 dBm)") }
@@ -764,36 +738,15 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
                 "softwareVersion",
                 "packetTerminator"
             ]
-            let type3DebugLine = components.enumerated().map { index, value -> String in
-                let label = index < type3FieldLabels.count ? type3FieldLabels[index] : "field\(index)"
-                return "\(label)=\(value)"
-            }.joined(separator: " ")
-            appLog("🔍 BLE DBG (Type 3): \(type3DebugLine)", category: .ble, level: .debug)
             if components.count >= 22 {
-                let named = [
-                    "probeType=\(components[1])",
-                    "frequency=\(components[2])MHz",
-                    "oledSDA=\(components[3])",
-                    "oledSCL=\(components[4])",
-                    "oledRST=\(components[5])",
-                    "ledPin=\(components[6])",
-                    "RS41Bandwidth=\(components[7])",
-                    "M20Bandwidth=\(components[8])",
-                    "M10Bandwidth=\(components[9])",
-                    "PILOTBandwidth=\(components[10])",
-                    "DFMBandwidth=\(components[11])",
+                // Consolidated Type 3 message with key config info
+                let keyInfo = [
+                    components[1], // probeType
+                    "freq=\(components[2])MHz",
                     "callSign=\(components[12])",
-                    "frequencyCorrection=\(components[13])",
-                    "batPin=\(components[14])",
-                    "batMin=\(components[15])",
-                    "batMax=\(components[16])",
-                    "batType=\(components[17])",
-                    "lcdType=\(components[18])",
-                    "nameType=\(components[19])",
-                    "buzPin=\(components[20])",
-                    "softwareVersion=\(components[21])"
+                    "sw=\(components[21])"
                 ].joined(separator: " ")
-                appLog("⚙️ BLE MSG (Type 3): \(named)", category: .ble, level: .info)
+                appLog("⚙️ BLE: \(keyInfo)", category: .ble, level: .info)
                 // Plausibility checks for pins and fields
                 var warns: [String] = []
                 let intIn = { (i: Int) -> Int? in Int(components[i]) }

@@ -84,6 +84,10 @@ final class BalloonPositionService: ObservableObject {
     private var currentUserLocation: LocationData?
     private var lastTelemetryTime: Date?
     private var lastLoggedBurstKillerTime: Int?
+    private var processingCount: Int = 0
+    private var landingLogCount: Int = 0
+    private var flightStatusLogCount: Int = 0
+    private var speedCheckLogCount: Int = 0
     private var cancellables = Set<AnyCancellable>()
     private let bleStalenessThreshold: TimeInterval = 3.0 // 3 seconds for BLE
     private let aprsStalenessThreshold: TimeInterval = 30.0 // 30 seconds for APRS
@@ -169,7 +173,11 @@ final class BalloonPositionService: ObservableObject {
 
         let now = Date()
 
-        appLog("BalloonPositionService: Processing \(source) telemetry for sonde \(telemetry.sondeName)", category: .service, level: .info)
+        // Throttle repetitive telemetry processing logs - only log every 10 packets
+        processingCount += 1
+        if processingCount % 10 == 1 {
+            appLog("BalloonPositionService: Processing \(source) telemetry (\(processingCount)) for \(telemetry.sondeName)", category: .service, level: .info)
+        }
         if telemetry.burstKillerTime > 0 && lastLoggedBurstKillerTime != telemetry.burstKillerTime {
             appLog("BalloonPositionService: burstKillerTime received = \(telemetry.burstKillerTime)", category: .service, level: .debug)
             lastLoggedBurstKillerTime = telemetry.burstKillerTime
@@ -771,7 +779,11 @@ final class BalloonTrackService: ObservableObject {
                 let hDiff = ((derivedHorizontalMS ?? hTele) - hTele) * 3.6
                 let vDiff = (derivedVerticalMS ?? vTele) - vTele
                 if abs(hDiff) > 3.0 || abs(vDiff) > 0.5 {
-                    appLog(String(format: "BalloonTrackService: Speed check — h(track)=%.2f km/h vs h(tele)=%.2f km/h, v(track)=%.2f m/s vs v(tele)=%.2f m/s", (derivedHorizontalMS ?? 0)*3.6, hTele*3.6, (derivedVerticalMS ?? 0), vTele), category: .service, level: .debug)
+                    // Log speed check every 25 packets to reduce verbosity
+                    speedCheckLogCount += 1
+                    if speedCheckLogCount % 25 == 1 {
+                        appLog(String(format: "📊 Speed check (\(speedCheckLogCount)): track h=%.1f v=%.1f vs tele h=%.1f v=%.1f", (derivedHorizontalMS ?? 0)*3.6, (derivedVerticalMS ?? 0), hTele*3.6, vTele), category: .service, level: .debug)
+                    }
                 }
             }
         }
@@ -1077,10 +1089,12 @@ final class BalloonTrackService: ObservableObject {
         // Statistical confidence-based landing detection
         let (landingConfidence, isLandedNow) = calculateLandingConfidence(window30: window30, smoothedHorizontalSpeedKmh: smoothedHorizontalSpeedKmh)
 
-        // Debug landing detection criteria (only log when we have meaningful data)
-        if window30.count >= 3 && altSpread30 < 1000 && radius30 < 10000 {
-            appLog(String(format: "🎯 LANDING: points=%d altSpread=%.1fm radius=%.1fm speed=%.1fkm/h confidence=%.1f%% → landed=%@",
-                          window30.count, altSpread30, radius30, smoothedHorizontalSpeedKmh, landingConfidence * 100, isLandedNow ? "YES" : "NO"),
+        // Log landing detection only every 30 packets or when status changes significantly
+        landingLogCount += 1
+        let shouldLogLanding = (landingLogCount % 30 == 1) || (landingConfidence > 0.8) || isLandedNow
+        if window30.count >= 3 && altSpread30 < 1000 && radius30 < 10000 && shouldLogLanding {
+            appLog(String(format: "🎯 LANDING (\(landingLogCount)): pts=%d alt=%.0fm r=%.0fm spd=%.1fkm/h conf=%.1f%% → %@",
+                          window30.count, altSpread30, radius30, smoothedHorizontalSpeedKmh, landingConfidence * 100, isLandedNow ? "LANDED" : "flying"),
                    category: .general, level: .debug)
         }
 
@@ -1139,11 +1153,12 @@ final class BalloonTrackService: ObservableObject {
                 if telemetryData.verticalSpeed >= 0 { return "Ascending" }
                 return telemetryData.altitude < 10_000 ? "Descending <10k" : "Descending"
             }()
-            appLog(
-                "BalloonTrackService: Balloon FLYING - phase=\(phase), hSpeed(avg)=\(String(format: "%.2f", smoothedHorizontalSpeedKmh)) km/h, hSpeed(inst)=\(String(format: "%.2f", instH)) km/h, vSpeed(avg)=\(String(format: "%.2f", avgV)) m/s, vSpeed(inst)=\(String(format: "%.2f", instV)) m/s",
-                category: .service,
-                level: .debug
-            )
+            // Log flight status every 20 packets to reduce verbosity
+            flightStatusLogCount += 1
+            if flightStatusLogCount % 20 == 1 {
+                appLog("🎈 Balloon \(phase): h=\(String(format: "%.1f", smoothedHorizontalSpeedKmh))km/h v=\(String(format: "%.1f", avgV))m/s (\(flightStatusLogCount))",
+                       category: .service, level: .debug)
+            }
         }
         
         // Periodic debug metrics while not landed (compile-time gated)

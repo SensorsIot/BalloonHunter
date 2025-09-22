@@ -51,6 +51,7 @@ final class APRSTelemetryService: ObservableObject {
     private var isPollingActive: Bool = false
     private var cancellables = Set<AnyCancellable>()
     private let session = URLSession.shared
+    private var hasLoggedSondeMismatch: Bool = false
 
     // MARK: - Dependencies
     private let userSettings: UserSettings
@@ -182,9 +183,10 @@ final class APRSTelemetryService: ObservableObject {
     func updateBLESondeName(_ sondeName: String) {
         bleSerialName = sondeName
 
-        // Log mismatch for debugging (no resolution needed)
-        if let aprsSerial = aprsSerialName, aprsSerial != sondeName {
+        // Log mismatch once per session (no resolution needed)
+        if let aprsSerial = aprsSerialName, aprsSerial != sondeName, !hasLoggedSondeMismatch {
             appLog("APRSTelemetryService: Sonde name difference - BLE: \(sondeName), APRS: \(aprsSerial)", category: .service, level: .info)
+            hasLoggedSondeMismatch = true
         }
     }
 
