@@ -235,6 +235,7 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
     private var lastBLEMessageTime: Date = Date.distantPast
 
     var isBLETelemetryStale: Bool = false
+    private var previousTelemetryAvailable: Bool = false
     @Published var latestTelemetry: TelemetryData? = nil
     @Published var deviceSettings: DeviceSettings = .default
     @Published var connectionStatus: ConnectionStatus = .disconnected
@@ -286,8 +287,9 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
         }
 
         // Log telemetry availability changes only when status changes
-        if telemetryAvailabilityState != isAvailable {
+        if previousTelemetryAvailable != isAvailable {
             appLog("BLECommunicationService: Telemetry \(isAvailable ? "GAINED" : "LOST"): \(reason)", category: .ble, level: .info)
+            previousTelemetryAvailable = isAvailable
         }
     }
 
@@ -572,10 +574,8 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
             let isTelemetryAvailable = messageType == "1"
             let reason = isTelemetryAvailable ? "Type 1 telemetry packet received" : "Non-telemetry packet received (Type \(messageType))"
             
-            // Log only when telemetry availability changes
-            if telemetryAvailabilityState != isTelemetryAvailable {
-                appLog("BLECommunicationService: Telemetry \(isTelemetryAvailable ? "GAINED" : "LOST"): \(reason)", category: .service, level: .info)
-            }
+            // Log first packet telemetry status
+            appLog("BLECommunicationService: First packet - \(reason)", category: .service, level: .info)
             
             // First packet processed
             
