@@ -159,6 +159,11 @@ final class BalloonPositionService: ObservableObject {
     }
     
     private func handleTelemetryUpdate(_ telemetry: TelemetryData, source: String) {
+        // Debug: Always log when APRS telemetry arrives
+        if source == "APRS" {
+            appLog("BalloonPositionService: APRS telemetry received for \(telemetry.sondeName) - BLE available: \(bleTelemetryIsAvailable)", category: .service, level: .info)
+        }
+
         // Only process APRS telemetry when BLE telemetry is not available (arbitration)
         if source == "APRS" && bleTelemetryIsAvailable {
             appLog("BalloonPositionService: APRS telemetry received but BLE telemetry is available - ignoring", category: .service, level: .debug)
@@ -688,6 +693,7 @@ final class BalloonPositionService: ObservableObject {
         let aprsLandingAgeThreshold = 120.0 // 2 minutes
 
         if isAprsTelemetry && telemetryAge > aprsLandingAgeThreshold {
+            balloonPhase = .landed
             appLog("BalloonPositionService: APRS age-based landing detected - balloon marked as LANDED", category: .service, level: .info)
             return
         }
@@ -803,10 +809,16 @@ final class BalloonTrackService: ObservableObject {
            incomingName != currentBalloonName {
             appLog("BalloonTrackService: New sonde detected - \(incomingName), switching from \(currentBalloonName ?? "none")", category: .service, level: .info)
 
-            // Always start fresh when new sonde detected (clear landing point track)
-            self.currentBalloonTrack = []
+            // Load persisted track for this sonde if available
+            let persistedTrack = persistenceService.loadTrackForCurrentSonde(sondeName: incomingName)
+            if let track = persistedTrack {
+                self.currentBalloonTrack = track
+                appLog("BalloonTrackService: Loaded persisted track for \(incomingName) with \(self.currentBalloonTrack.count) points", category: .service, level: .info)
+            } else {
+                self.currentBalloonTrack = []
+                appLog("BalloonTrackService: No persisted track found - starting fresh track for \(incomingName)", category: .service, level: .info)
+            }
             self.landingPosition = nil
-            appLog("BalloonTrackService: Starting fresh track for \(incomingName) - landing point track cleared", category: .service, level: .info)
 
             // Clean up old tracks if switching sondes
             if let currentName = currentBalloonName,
@@ -847,12 +859,10 @@ final class BalloonTrackService: ObservableObject {
                 let vTele = telemetryData.verticalSpeed
                 let hDiff = ((derivedHorizontalMS ?? hTele) - hTele) * 3.6
                 let vDiff = (derivedVerticalMS ?? vTele) - vTele
-                if abs(hDiff) > 3.0 || abs(vDiff) > 0.5 {
-                    // Log speed check every 25 packets to reduce verbosity
+                if abs(hDiff) > 30.0 || abs(vDiff) > 2.0 {
+                    // Log immediately when significant speed discrepancy detected
                     speedCheckLogCount += 1
-                    if speedCheckLogCount % 25 == 1 {
-                        appLog(String(format: "📊 Speed check (\(speedCheckLogCount), every 25th): track h=%.1f v=%.1f vs tele h=%.1f v=%.1f", (derivedHorizontalMS ?? 0)*3.6, (derivedVerticalMS ?? 0), hTele*3.6, vTele), category: .service, level: .debug)
-                    }
+                    appLog(String(format: "⚠️ Speed anomaly (\(speedCheckLogCount)): track h=%.1f v=%.1f vs tele h=%.1f v=%.1f (diff: h=%.1f v=%.1f)", (derivedHorizontalMS ?? 0)*3.6, (derivedVerticalMS ?? 0), hTele*3.6, vTele, hDiff, vDiff), category: .service, level: .info)
                 }
             }
         }
