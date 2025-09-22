@@ -236,6 +236,7 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
 
     var isBLETelemetryStale: Bool = false
     private var previousTelemetryAvailable: Bool = false
+    private var telemetryLogCount: Int = 0
     @Published var latestTelemetry: TelemetryData? = nil
     @Published var deviceSettings: DeviceSettings = .default
     @Published var connectionStatus: ConnectionStatus = .disconnected
@@ -604,19 +605,22 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
         case "1":
             // Probe Telemetry
             if components.count >= 20 {
-                // Single consolidated log message with key telemetry data
-                let keyInfo = [
-                    components[1], // probeType
-                    "\(components[3])", // sondeName
-                    "lat=\(components[4])",
-                    "lon=\(components[5])",
-                    "alt=\(components[6])m",
-                    "v=\(components[8])m/s",
-                    "h=\(components[7])m/s",
-                    "RSSI=\(displayRssi(from: components[9]))dBm",
-                    "bat=\(components[10])%"
-                ].joined(separator: " ")
-                appLog("📡 BLE: \(keyInfo)", category: .ble, level: .info)
+                // Throttle telemetry logging to every 5th packet to reduce verbosity
+                telemetryLogCount += 1
+                if telemetryLogCount % 5 == 1 {
+                    let keyInfo = [
+                        components[1], // probeType
+                        "\(components[3])", // sondeName
+                        "lat=\(components[4])",
+                        "lon=\(components[5])",
+                        "alt=\(components[6])m",
+                        "v=\(components[8])m/s",
+                        "h=\(components[7])m/s",
+                        "RSSI=\(displayRssi(from: components[9]))dBm",
+                        "bat=\(components[10])%"
+                    ].joined(separator: " ")
+                    appLog("📡 BLE (\(telemetryLogCount)): \(keyInfo)", category: .ble, level: .info)
+                }
                 // Plausibility checks
                 var warns: [String] = []
                 if let lat = Double(components[4]), !(lat >= -90 && lat <= 90) { warns.append("latitude out of range") }
