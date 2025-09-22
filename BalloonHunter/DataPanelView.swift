@@ -61,7 +61,7 @@ struct DataPanelView: View {
                     GridRow {
                         Text("V: \(String(format: "%.1f", balloonTrackService.motionMetrics.smoothedVerticalSpeedMS)) m/s")
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .foregroundColor(balloonTrackService.motionMetrics.rawVerticalSpeedMS >= 0 ? .green : .red)
+                            .foregroundColor(balloonTrackService.motionMetrics.smoothedVerticalSpeedMS >= 0 ? .green : .red)
                         Text("H: \(String(format: "%.1f", balloonTrackService.motionMetrics.smoothedHorizontalSpeedMS * 3.6)) km/h")
                             .frame(maxWidth: .infinity, alignment: .leading)
                         Text("Dist: \(distanceString) km")
@@ -122,7 +122,7 @@ struct DataPanelView: View {
     }
     
     private var flightStatusString: String {
-        switch balloonTrackService.balloonPhase {
+        switch balloonPositionService.balloonPhase {
         case .landed: return "Landed"
         case .ascending: return "Ascending"
         case .descendingAbove10k, .descendingBelow10k: return "Descending"
@@ -131,7 +131,7 @@ struct DataPanelView: View {
     }
 
     private var flightStatusIconName: String {
-        switch balloonTrackService.balloonPhase {
+        switch balloonPositionService.balloonPhase {
         case .landed: return "target"
         case .ascending: return "arrow.up.circle.fill"
         case .descendingAbove10k, .descendingBelow10k: return "arrow.down.circle.fill"
@@ -140,7 +140,7 @@ struct DataPanelView: View {
     }
 
     private var flightStatusTint: Color {
-        switch balloonTrackService.balloonPhase {
+        switch balloonPositionService.balloonPhase {
         case .landed: return .purple
         case .ascending: return .green
         case .descendingBelow10k: return .red  // Low altitude descent - critical

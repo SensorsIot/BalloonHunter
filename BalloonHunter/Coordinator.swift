@@ -103,6 +103,7 @@ final class ServiceCoordinator: ObservableObject {
     private var lastUserLocationUpdateTime = Date.distantPast
     private var lastAprsSyncCommandTime: Date?
     private var lastAprsSyncPromptTime: Date?
+    private var userLocationLogCount: Int = 0
 
     // Simple timing constants (replace complex mode machine)
     private let routeUpdateInterval: TimeInterval = 60  // Always 60 seconds
@@ -140,12 +141,12 @@ final class ServiceCoordinator: ObservableObject {
 
     // MARK: - Flight State Computed Properties
     private var isFlying: Bool {
-        return balloonTrackService.balloonPhase != .landed &&
-               balloonTrackService.balloonPhase != .unknown
+        return balloonPositionService.balloonPhase != .landed &&
+               balloonPositionService.balloonPhase != .unknown
     }
 
     private var isLanded: Bool {
-        return balloonTrackService.balloonPhase == .landed
+        return balloonPositionService.balloonPhase == .landed
     }
 
     private var shouldShowNavigation: Bool {
@@ -179,7 +180,7 @@ final class ServiceCoordinator: ObservableObject {
         balloonTrackService: BalloonTrackService,
         landingPointTrackingService: LandingPointTrackingService
     ) {
-        appLog("ServiceCoordinator: Initializing simplified architecture with injected services", category: .general, level: .info)
+        // ServiceCoordinator initialized (logged at AppServices level)
         
         // Use injected services instead of creating new ones
         self.bleCommunicationService = bleCommunicationService
@@ -195,7 +196,7 @@ final class ServiceCoordinator: ObservableObject {
 
         // Removed: lastLandingPrediction subscription - no longer using persisted landing points as fallback
 
-        appLog("ServiceCoordinator: Simplified architecture initialized", category: .general, level: .info)
+        // Architecture setup complete
     }
     
     func initialize() {
@@ -359,7 +360,7 @@ final class ServiceCoordinator: ObservableObject {
                 self.smoothedVerticalSpeed = metrics.smoothedVerticalSpeedMS
                 self.smoothedHorizontalSpeed = metrics.smoothedHorizontalSpeedMS
                 self.smoothedDescentRate = metrics.adjustedDescentRateMS
-                self.predictionUsesSmoothedDescent = metrics.adjustedDescentRateMS != nil
+                // predictionUsesSmoothedDescent is controlled by PredictionService logic only
             }
             .store(in: &cancellables)
 
@@ -381,9 +382,9 @@ final class ServiceCoordinator: ObservableObject {
             .assign(to: &self.$aprsTelemetryIsAvailable)
 
         // Subscribe to balloon phase updates for landing handling
-        balloonTrackService.$balloonPhase
+        balloonPositionService.$balloonPhase
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] phase in
+            .sink { [weak self] (phase: BalloonPhase) in
                 guard let self = self else { return }
                 if phase == .landed, let position = self.balloonTrackService.landingPosition {
                     // Advanced landing detection triggered - update landing point
@@ -438,7 +439,7 @@ final class ServiceCoordinator: ObservableObject {
             }
             .store(in: &cancellables)
 
-        appLog("ServiceCoordinator: Setup direct telemetry, location, and BLE connection subscriptions", category: .general, level: .debug)
+        // Direct subscriptions setup complete
     }
 
     // MARK: - Frequency Sync Handlers
@@ -557,14 +558,17 @@ final class ServiceCoordinator: ObservableObject {
 
         guard let locationData = locationData else { return }
 
-        appLog(String(format: "User: lat=%.5f lon=%.5f alt=%.0f hAcc=%.1f vAcc=%.1f heading=%.0f",
-                       locationData.latitude,
-                       locationData.longitude,
-                       locationData.altitude,
-                       locationData.horizontalAccuracy,
-                       locationData.verticalAccuracy,
-                       locationData.heading),
-               category: .general, level: .debug)
+        // Throttle user location logging to avoid spam
+        userLocationLogCount += 1
+        if userLocationLogCount % 10 == 1 {
+            appLog(String(format: "User (\(userLocationLogCount), every 10th): lat=%.5f lon=%.5f alt=%.0f acc=%.1f/%.1f",
+                           locationData.latitude,
+                           locationData.longitude,
+                           locationData.altitude,
+                           locationData.horizontalAccuracy,
+                           locationData.verticalAccuracy),
+                   category: .general, level: .debug)
+        }
         
         // Direct ServiceCoordinator update - no parallel state needed
         
@@ -612,10 +616,10 @@ final class ServiceCoordinator: ObservableObject {
         }
         let timeSinceLastAttempt = Date().timeIntervalSince(lastPredictionAttemptTime)
         let shouldTrigger = timeSinceLastAttempt > predictionInterval
-        appLog(String(format: "ServiceCoordinator: shouldRequestPrediction? sinceLastAttempt=%.1fs interval=%.0fs -> %@",
+        appLog(String(format: "ServiceCoordinator: Timer prediction check: %.1fs/%.0fs -> %@",
                       timeSinceLastAttempt,
                       predictionInterval,
-                      shouldTrigger ? "YES" : "NO"),
+                      shouldTrigger ? "TRIGGERED" : "waiting"),
                category: .general, level: .debug)
         
         return shouldTrigger
@@ -643,7 +647,6 @@ final class ServiceCoordinator: ObservableObject {
                     appLog("ServiceCoordinator: Timer tick - no telemetry yet", category: .general, level: .debug)
                     return
                 }
-                appLog("ServiceCoordinator: Timer tick - evaluating prediction trigger", category: .general, level: .debug)
                 if self.shouldRequestPrediction(telemetry) {
                     await self.executePrediction(telemetry: telemetry, measuredDescentRate: self.smoothedDescentRate, force: false)
                 }
@@ -660,7 +663,7 @@ final class ServiceCoordinator: ObservableObject {
     
     private func executePrediction(telemetry: TelemetryData, measuredDescentRate: Double?, force: Bool) async {
         // Skip predictions for landed balloons
-        if balloonTrackService.balloonPhase == .landed {
+        if balloonPositionService.balloonPhase == .landed {
             appLog("ServiceCoordinator: Skipping prediction - balloon is already landed", category: .general, level: .info)
             return
         }
@@ -894,7 +897,7 @@ final class ServiceCoordinator: ObservableObject {
             }
         }
         
-        appLog("ServiceCoordinator: Calculating new route", category: .general, level: .info)
+        // Calculating route (logged on completion)
         
         // Calculate route using Apple Maps
         do {

@@ -244,8 +244,8 @@ final class MapPresenter: ObservableObject {
             }
             .store(in: &cancellables)
 
-        balloonTrackService.$balloonPhase
-            .sink { [weak self] phase in
+        coordinator.balloonPositionService.$balloonPhase
+            .sink { [weak self] (phase: BalloonPhase) in
                 self?.balloonPhase = phase
                 self?.refreshAnnotations()
             }

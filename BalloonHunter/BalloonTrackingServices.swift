@@ -67,6 +67,9 @@ final class BalloonPositionService: ObservableObject {
 
     // State machine
     @Published var currentTelemetryState: TelemetryState = .startup
+
+    // Balloon flight state (moved from BalloonTrackService)
+    @Published var balloonPhase: BalloonPhase = .unknown
     private var stateEntryTime: Date = Date()
     private var startupTime: Date = Date()
     private var balloonTrackService: BalloonTrackService?
@@ -86,7 +89,6 @@ final class BalloonPositionService: ObservableObject {
     private var lastLoggedBurstKillerTime: Int?
     private var processingCount: Int = 0
     private var landingLogCount: Int = 0
-    private var flightStatusLogCount: Int = 0
     private var speedCheckLogCount: Int = 0
     private var cancellables = Set<AnyCancellable>()
     private let bleStalenessThreshold: TimeInterval = 3.0 // 3 seconds for BLE
@@ -105,17 +107,9 @@ final class BalloonPositionService: ObservableObject {
         // BalloonPositionService initialized
     }
 
-    // Set reference to BalloonTrackService for balloon phase access
+    // Set reference to BalloonTrackService for landing detection
     func setBalloonTrackService(_ balloonTrackService: BalloonTrackService) {
         self.balloonTrackService = balloonTrackService
-
-        // Subscribe to balloon phase changes to trigger state evaluation
-        balloonTrackService.$balloonPhase
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in
-                self?.evaluateTelemetryState()
-            }
-            .store(in: &cancellables)
 
         // Trigger initial state evaluation
         evaluateTelemetryState()
@@ -176,7 +170,7 @@ final class BalloonPositionService: ObservableObject {
         // Throttle repetitive telemetry processing logs - only log every 10 packets
         processingCount += 1
         if processingCount % 10 == 1 {
-            appLog("BalloonPositionService: Processing \(source) telemetry (\(processingCount)) for \(telemetry.sondeName)", category: .service, level: .info)
+            appLog("BalloonPositionService: Processing \(source) telemetry (\(processingCount), every 10th) for \(telemetry.sondeName)", category: .service, level: .info)
         }
         if telemetry.burstKillerTime > 0 && lastLoggedBurstKillerTime != telemetry.burstKillerTime {
             appLog("BalloonPositionService: burstKillerTime received = \(telemetry.burstKillerTime)", category: .service, level: .debug)
@@ -209,6 +203,9 @@ final class BalloonPositionService: ObservableObject {
         }
 
         currentTelemetry = telemetryToStore
+
+        // Update balloon phase based on new telemetry
+        updateBalloonPhase()
 
         // Trigger startup frequency sync if needed
         triggerStartupFrequencySyncIfNeeded()
@@ -284,12 +281,10 @@ final class BalloonPositionService: ObservableObject {
     // MARK: - Telemetry State Machine
 
     private func evaluateTelemetryState() {
-        guard let balloonTrackService = balloonTrackService else { return }
-
         let inputs = TelemetryInputs(
             bleTelemetryIsAvailable: bleTelemetryIsAvailable,
             aprsTelemetryIsAvailable: aprsTelemetryIsAvailable,
-            balloonPhase: balloonTrackService.balloonPhase
+            balloonPhase: balloonPhase
         )
 
         let newState = determineNextState(inputs: inputs)
@@ -625,6 +620,92 @@ final class BalloonPositionService: ObservableObject {
 
         appLog("BalloonPositionService: Startup frequency sync complete", category: .service, level: .info)
     }
+
+    // MARK: - Landing Detection (moved from BalloonTrackService)
+
+    /// Calculate landing detection based on net movement across packets
+    private func calculateLandingDetection() -> Bool {
+        guard let balloonTrackService = balloonTrackService else { return false }
+
+        // Start evaluation at packet 5 (need 5 packets: 0,1,2,3,4)
+        guard balloonTrackService.currentBalloonTrack.count >= 5 else { return false }
+
+        // Dynamic window logic:
+        // Packets 5-19: expand from packet 0 to current packet
+        // Packet 20+: sliding window of most recent 20 packets
+        let availablePackets = balloonTrackService.currentBalloonTrack.count
+        let windowSize = min(20, availablePackets)
+        let recentPoints = Array(balloonTrackService.currentBalloonTrack.suffix(windowSize))
+
+        guard let startPoint = recentPoints.first, let endPoint = recentPoints.last else {
+            return false
+        }
+
+        // Calculate time window for speed calculation
+        let timeWindow = endPoint.timestamp.timeIntervalSince(startPoint.timestamp)
+        guard timeWindow > 0 else { return false }
+
+        // Calculate net movement distance across entire window (3D displacement)
+        let latToMeters = 111320.0 // meters per degree latitude
+        let lonToMeters = latToMeters * cos(endPoint.latitude * .pi / 180)
+
+        let dx = (endPoint.longitude - startPoint.longitude) * lonToMeters
+        let dy = (endPoint.latitude - startPoint.latitude) * latToMeters
+        let dz = endPoint.altitude - startPoint.altitude
+
+        let netDistance = sqrt(dx * dx + dy * dy + dz * dz) // meters
+        let netSpeedMS = netDistance / timeWindow // m/s
+        let netSpeedKmh = netSpeedMS * 3.6 // km/h for logging
+
+        // Simple thresholds
+        let landingThresholdKmh = 3.0 // 3 km/h
+        let landingThresholdMS = landingThresholdKmh / 3.6 // 0.83 m/s
+        let altitudeThresholdM = 3000.0
+
+        // Simple boolean logic: speed < 3 km/h AND altitude < 3000m
+        let isLanded = (netSpeedMS < landingThresholdMS) && (endPoint.altitude < altitudeThresholdM)
+
+        // Comprehensive single-line logging with all parameters
+        appLog(String(format: "🎯 LANDING [%d]: %.1fm @%.1fkm/h alt=%.0fm win=%.1fs spd<%.1f alt<%.0f → %@",
+                      windowSize, netDistance, netSpeedKmh, endPoint.altitude, timeWindow,
+                      landingThresholdKmh, altitudeThresholdM,
+                      isLanded ? "LANDED" : "FLYING"),
+               category: .general, level: .debug)
+
+        return isLanded
+    }
+
+    /// Update balloon phase based on telemetry and landing detection
+    private func updateBalloonPhase() {
+        guard let currentTelemetry = currentTelemetry else {
+            balloonPhase = .unknown
+            return
+        }
+
+        // Check for old APRS data (age-based landing)
+        let telemetryAge = Date().timeIntervalSince(currentTelemetry.timestamp)
+        let isAprsTelemetry = currentTelemetry.softwareVersion == "APRS"
+        let aprsLandingAgeThreshold = 120.0 // 2 minutes
+
+        if isAprsTelemetry && telemetryAge > aprsLandingAgeThreshold {
+            appLog("BalloonPositionService: APRS age-based landing detected - balloon marked as LANDED", category: .service, level: .info)
+            return
+        }
+
+        // BLE landing detection with 5-packet requirement
+        let landingDetected = calculateLandingDetection()
+
+        if landingDetected {
+            balloonPhase = .landed
+        } else {
+            // Determine flight phase based on vertical speed
+            if currentTelemetry.verticalSpeed >= 0 {
+                balloonPhase = .ascending
+            } else {
+                balloonPhase = currentTelemetry.altitude < 10_000 ? .descendingBelow10k : .descendingAbove10k
+            }
+        }
+    }
 }
 
 // MARK: - Balloon Track Service
@@ -645,7 +726,6 @@ final class BalloonTrackService: ObservableObject {
     
     // Landing detection
     @Published var landingPosition: CLLocationCoordinate2D?
-    @Published var balloonPhase: BalloonPhase = .unknown
     
     // Smoothed telemetry data (moved from DataPanelView for proper separation of concerns)
     var smoothedHorizontalSpeed: Double = 0
@@ -664,18 +744,6 @@ final class BalloonTrackService: ObservableObject {
     // Logging throttle counters
     private var speedCheckLogCount: Int = 0
     private var landingLogCount: Int = 0
-    private var flightStatusLogCount: Int = 0
-    
-    // Landing detection - smoothing buffers
-    private var verticalSpeedBuffer: [Double] = []
-    private var horizontalSpeedBuffer: [Double] = []
-    private var landingPositionBuffer: [CLLocationCoordinate2D] = []
-    private let verticalSpeedBufferSize = 20
-    private let horizontalSpeedBufferSize = 20
-    private let landingPositionBufferSize = 100
-    private let landingConfidenceClearThreshold = 0.40
-    private let landingConfidenceClearSamplesRequired = 3
-    private var landingConfidenceFalsePositiveCount = 0
     private let aprsLandingAgeThreshold: TimeInterval = 120
 
     // Adjusted descent rate smoothing buffer (FSD: 20 values)
@@ -700,7 +768,6 @@ final class BalloonTrackService: ObservableObject {
     private let tauVertical: Double = 3.0    // seconds (fast EMA)
     private let tauSlowHorizontal: Double = 25.0 // seconds (slow EMA)
     private let tauSlowVertical: Double = 30.0   // seconds (slow EMA)
-    private var lastMetricsLog: Date? = nil
     
     init(persistenceService: PersistenceService, balloonPositionService: BalloonPositionService) {
         self.persistenceService = persistenceService
@@ -736,21 +803,18 @@ final class BalloonTrackService: ObservableObject {
            incomingName != currentBalloonName {
             appLog("BalloonTrackService: New sonde detected - \(incomingName), switching from \(currentBalloonName ?? "none")", category: .service, level: .info)
 
-            let persistedTrack = persistenceService.loadTrackForCurrentSonde(sondeName: incomingName)
+            // Always start fresh when new sonde detected (clear landing point track)
+            self.currentBalloonTrack = []
+            self.landingPosition = nil
+            appLog("BalloonTrackService: Starting fresh track for \(incomingName) - landing point track cleared", category: .service, level: .info)
 
+            // Clean up old tracks if switching sondes
             if let currentName = currentBalloonName,
                currentName != incomingName {
                 appLog("BalloonTrackService: Switching from different sonde (\(currentName)) - purging old tracks", category: .service, level: .info)
                 persistenceService.purgeAllTracks()
             }
 
-            if let track = persistedTrack {
-                self.currentBalloonTrack = track
-                appLog("BalloonTrackService: Loaded persisted track for \(incomingName) with \(self.currentBalloonTrack.count) points", category: .service, level: .info)
-            } else {
-                self.currentBalloonTrack = []
-                appLog("BalloonTrackService: No persisted track found - starting fresh track for \(incomingName)", category: .service, level: .info)
-            }
             telemetryPointCounter = 0
             currentBalloonName = incomingName
             emaHorizontalMS = 0
@@ -787,7 +851,7 @@ final class BalloonTrackService: ObservableObject {
                     // Log speed check every 25 packets to reduce verbosity
                     speedCheckLogCount += 1
                     if speedCheckLogCount % 25 == 1 {
-                        appLog(String(format: "📊 Speed check (\(speedCheckLogCount)): track h=%.1f v=%.1f vs tele h=%.1f v=%.1f", (derivedHorizontalMS ?? 0)*3.6, (derivedVerticalMS ?? 0), hTele*3.6, vTele), category: .service, level: .debug)
+                        appLog(String(format: "📊 Speed check (\(speedCheckLogCount), every 25th): track h=%.1f v=%.1f vs tele h=%.1f v=%.1f", (derivedHorizontalMS ?? 0)*3.6, (derivedVerticalMS ?? 0), hTele*3.6, vTele), category: .service, level: .debug)
                     }
                 }
             }
@@ -807,8 +871,7 @@ final class BalloonTrackService: ObservableObject {
         // Calculate effective descent rate from track history
         updateEffectiveDescentRate()
 
-        // Update landing detection
-        let landingLatched = updateLandingDetection(telemetryData)
+        // Landing detection now handled by BalloonPositionService
 
         // CSV logging (all builds)
         DebugCSVLogger.shared.logTelemetry(telemetryData)
@@ -838,33 +901,9 @@ final class BalloonTrackService: ObservableObject {
             if landingPosition == nil {
                 landingPosition = aprsCoordinate
             }
-            balloonPhase = .landed
             appLog("BalloonTrackService: APRS age-based landing detected - balloon marked as LANDED at [\(String(format: "%.4f", aprsCoordinate.latitude)), \(String(format: "%.4f", aprsCoordinate.longitude))]", category: .service, level: .info)
-        } else if landingLatched {
-            balloonPhase = .landed
-        } else {
-            let verticalTrend = smoothedVerticalSpeed
-            if verticalTrend >= 0 {
-                balloonPhase = .ascending
-            } else {
-                balloonPhase = trackPoint.altitude < 10_000 ? .descendingBelow10k : .descendingAbove10k
-            }
         }
 
-        if balloonPhase == .landed {
-            smoothedHorizontalSpeed = 0
-            smoothedVerticalSpeed = 0
-            adjustedDescentRate = nil
-            adjustedDescentHistory.removeAll()
-            emaHorizontalMS = 0
-            emaVerticalMS = 0
-            slowEmaHorizontalMS = 0
-            slowEmaVerticalMS = 0
-            hasEma = false
-            hasSlowEma = false
-            hWindow.removeAll()
-            vWindow.removeAll()
-        }
 
         publishMotionMetrics(rawHorizontal: telemetryData.horizontalSpeed,
                               rawVertical: telemetryData.verticalSpeed)
@@ -990,206 +1029,14 @@ final class BalloonTrackService: ObservableObject {
         }
     }
     
-    @discardableResult
-    private func updateLandingDetection(_ telemetryData: TelemetryData) -> Bool {
-        // Update speed buffers for smoothing (prefer track-derived values)
-        if let last = currentBalloonTrack.last {
-            verticalSpeedBuffer.append(last.verticalSpeed)
-        } else {
-            verticalSpeedBuffer.append(telemetryData.verticalSpeed)
-        }
-        if verticalSpeedBuffer.count > verticalSpeedBufferSize {
-            verticalSpeedBuffer.removeFirst()
-        }
-        
-        if let last = currentBalloonTrack.last {
-            horizontalSpeedBuffer.append(last.horizontalSpeed)
-        } else {
-            horizontalSpeedBuffer.append(telemetryData.horizontalSpeed)
-        }
-        if horizontalSpeedBuffer.count > horizontalSpeedBufferSize {
-            horizontalSpeedBuffer.removeFirst()
-        }
-        
-        // Update position buffer for landing position smoothing
-        let currentPosition = CLLocationCoordinate2D(latitude: telemetryData.latitude, longitude: telemetryData.longitude)
-        landingPositionBuffer.append(currentPosition)
-        if landingPositionBuffer.count > landingPositionBufferSize {
-            landingPositionBuffer.removeFirst()
-        }
-        
-        // Check if we have telemetry signal (within last 3 seconds)
-        let hasRecentTelemetry = Date().timeIntervalSince(telemetryData.timestamp) < 3.0
-
-        // Build time windows for stationarity metrics
-        let now = Date()
-        let window30 = currentBalloonTrack.filter { now.timeIntervalSince($0.timestamp) <= 30.0 }
-
-        // Altitude stationarity (spread)
-        func altSpread(_ pts: [BalloonTrackPoint]) -> Double {
-            guard let minA = pts.map({ $0.altitude }).min(), let maxA = pts.map({ $0.altitude }).max() else { return .greatestFiniteMagnitude }
-            return maxA - minA
-        }
-
-        // Horizontal stationarity (95th percentile distance from centroid)
-        func p95Radius(_ pts: [BalloonTrackPoint]) -> Double {
-            guard !pts.isEmpty else { return .greatestFiniteMagnitude }
-            let latMean = pts.map({ $0.latitude }).reduce(0, +) / Double(pts.count)
-            let lonMean = pts.map({ $0.longitude }).reduce(0, +) / Double(pts.count)
-            func dist(_ lat1: Double, _ lon1: Double, _ lat2: Double, _ lon2: Double) -> Double {
-                let R = 6371000.0
-                let a1 = lat1 * .pi/180, b1 = lon1 * .pi/180
-                let a2 = lat2 * .pi/180, b2 = lon2 * .pi/180
-                let dA = a2 - a1, dB = b2 - b1
-                let a = sin(dA/2)*sin(dA/2) + cos(a1)*cos(a2)*sin(dB/2)*sin(dB/2)
-                let c = 2 * atan2(sqrt(a), sqrt(1-a))
-                return R * c
-            }
-            let d = pts.map { dist($0.latitude, $0.longitude, latMean, lonMean) }.sorted()
-            let idx = min(d.count-1, Int(ceil(0.95 * Double(d.count))) - 1)
-            return d[max(0, idx)]
-        }
-
-        let altSpread30 = altSpread(window30)
-        let radius30 = p95Radius(window30)
-        
-        // Use smoothed horizontal speed (km/h) for an additional guard
-        let smoothedHorizontalSpeedKmh = horizontalSpeedBuffer.count >= 10 ? (horizontalSpeedBuffer.reduce(0, +) / Double(horizontalSpeedBuffer.count)) * 3.6 : telemetryData.horizontalSpeed * 3.6
-
-        // Calculate statistical confidence for landing detection
-        func calculateLandingConfidence(window30: [BalloonTrackPoint], smoothedHorizontalSpeedKmh: Double) -> (confidence: Double, isLanded: Bool) {
-            guard window30.count >= 3 else { return (0.0, false) }
-
-            // 1. Altitude stability - account for poor GPS altitude accuracy (±10-15m typical)
-            let altitudes = window30.map { $0.altitude }
-            let altMean = altitudes.reduce(0, +) / Double(altitudes.count)
-            let altVariance = altitudes.map { pow($0 - altMean, 2) }.reduce(0, +) / Double(altitudes.count)
-            let altStdDev = sqrt(altVariance)
-            let altConfidence = max(0, 1.0 - altStdDev / 12.0) // 12m = 0% confidence, 0m = 100% (reflects GPS altitude inaccuracy)
-
-            // 2. Position stability (movement radius confidence)
-            let firstPos = CLLocation(latitude: window30[0].latitude, longitude: window30[0].longitude)
-            let maxDistance = window30.map { point in
-                let pos = CLLocation(latitude: point.latitude, longitude: point.longitude)
-                return firstPos.distance(from: pos)
-            }.max() ?? 0
-            let posConfidence = max(0, 1.0 - maxDistance / 20.0) // 20m = 0%, 0m = 100%
-
-            // 3. Speed stability (velocity confidence) - more lenient thresholds
-            let avgHSpeed = window30.map { $0.horizontalSpeed }.reduce(0, +) / Double(window30.count)
-            let avgVSpeed = window30.map { abs($0.verticalSpeed) }.reduce(0, +) / Double(window30.count)
-            let avgTotalSpeed = max(avgHSpeed, avgVSpeed)
-            let speedConfidence = max(0, 1.0 - avgTotalSpeed / 2.0) // 2 m/s = 0%, 0 m/s = 100% (more lenient)
-
-            // 4. Sample size confidence (more samples = higher confidence)
-            let sampleConfidence = min(1.0, Double(window30.count) / 8.0) // 8+ samples = 100%
-
-            // Combined confidence - prioritize horizontal position (more accurate than altitude)
-            let totalConfidence = (altConfidence * 0.2 + posConfidence * 0.4 + speedConfidence * 0.3 + sampleConfidence * 0.1)
-
-            // Landing decision: 75% confidence threshold (reduced from 80% for better responsiveness)
-            return (totalConfidence, totalConfidence >= 0.75)
-        }
-
-        // Statistical confidence-based landing detection
-        let (landingConfidence, isLandedNow) = calculateLandingConfidence(window30: window30, smoothedHorizontalSpeedKmh: smoothedHorizontalSpeedKmh)
-
-        // Log landing detection only every 30 packets or when status changes significantly
-        landingLogCount += 1
-        let shouldLogLanding = (landingLogCount % 30 == 1) || (landingConfidence > 0.8) || isLandedNow
-        if window30.count >= 3 && altSpread30 < 1000 && radius30 < 10000 && shouldLogLanding {
-            appLog(String(format: "🎯 LANDING (\(landingLogCount)): pts=%d alt=%.0fm r=%.0fm spd=%.1fkm/h conf=%.1f%% → %@",
-                          window30.count, altSpread30, radius30, smoothedHorizontalSpeedKmh, landingConfidence * 100, isLandedNow ? "LANDED" : "flying"),
-                   category: .general, level: .debug)
-        }
-
-        let wasLanded = balloonPhase == .landed
-        let wasPreviouslyFlying = balloonPhase != .landed && balloonPhase != .unknown
-        var isLanded = wasLanded
-
-        if !wasLanded && isLandedNow {
-            // Balloon just landed
-            isLanded = true
-            landingConfidenceFalsePositiveCount = 0
-
-            // Use smoothed (100) position for landing point
-            if landingPositionBuffer.count >= 50 { // Use at least 50 points for reasonable smoothing
-                let avgLat = landingPositionBuffer.map { $0.latitude }.reduce(0, +) / Double(landingPositionBuffer.count)
-                let avgLon = landingPositionBuffer.map { $0.longitude }.reduce(0, +) / Double(landingPositionBuffer.count)
-                landingPosition = CLLocationCoordinate2D(latitude: avgLat, longitude: avgLon)
-            } else {
-                landingPosition = currentPosition
-            }
-
-            let altSpreadStr = altSpread30.isFinite ? String(format: "%.2f", altSpread30) : "∞"
-            let radiusStr = radius30.isFinite ? String(format: "%.1f", radius30) : "∞"
-            appLog("BalloonTrackService: Balloon LANDED — altSpread30=\(altSpreadStr)m, radius30=\(radiusStr)m", category: .service, level: .info)
-
-        } else if isLanded {
-            let belowSampleThreshold = window30.count < 3
-            if belowSampleThreshold || landingConfidence < landingConfidenceClearThreshold {
-                landingConfidenceFalsePositiveCount += 1
-            } else {
-                landingConfidenceFalsePositiveCount = 0
-            }
-
-            if landingConfidenceFalsePositiveCount >= landingConfidenceClearSamplesRequired {
-                isLanded = false
-                landingPosition = nil
-                landingConfidenceFalsePositiveCount = 0
-                appLog(
-                    "BalloonTrackService: Landing CLEARED — confidence=\(String(format: "%.1f", landingConfidence * 100))%%, points=\(window30.count)",
-                    category: .service,
-                    level: .info
-                )
-            }
-        } else {
-            landingConfidenceFalsePositiveCount = 0
-        }
-
-        let isCurrentlyFlying = hasRecentTelemetry && !isLanded
-
-        if wasPreviouslyFlying && isCurrentlyFlying {
-            let avgV = smoothedVerticalSpeed
-            let phase: String = {
-                if isLanded { return "Landed" }
-                if telemetryData.verticalSpeed >= 0 { return "Ascending" }
-                return telemetryData.altitude < 10_000 ? "Descending <10k" : "Descending"
-            }()
-            // Log flight status every 20 packets to reduce verbosity
-            flightStatusLogCount += 1
-            if flightStatusLogCount % 20 == 1 {
-                appLog("🎈 Balloon \(phase): h=\(String(format: "%.1f", smoothedHorizontalSpeedKmh))km/h v=\(String(format: "%.1f", avgV))m/s (\(flightStatusLogCount))",
-                       category: .service, level: .debug)
-            }
-        }
-        
-        // Periodic debug metrics while not landed (compile-time gated)
-        #if DEBUG
-        if !isLanded && window30.count >= 10 {
-            let nowT = Date()
-            if lastMetricsLog == nil || nowT.timeIntervalSince(lastMetricsLog!) > 10.0 {
-                lastMetricsLog = nowT
-                let altSpreadStr = altSpread30.isFinite ? String(format: "%.2f", altSpread30) : "∞"
-                let radiusStr = radius30.isFinite ? String(format: "%.1f", radius30) : "∞"
-                appLog("BalloonTrackService: Metrics — altSpread30=\(altSpreadStr)m, radius30=\(radiusStr)m, hSpeed(avg)=\(String(format: "%.2f", smoothedHorizontalSpeedKmh)) km/h", category: .service, level: .debug)
-            }
-        }
-        #endif
-        
-        return isLanded
-    }
 
     private func publishMotionMetrics(rawHorizontal: Double, rawVertical: Double) {
-        let smoothedH = balloonPhase == .landed ? 0 : smoothedHorizontalSpeed
-        let smoothedV = balloonPhase == .landed ? 0 : smoothedVerticalSpeed
-        let adjusted = balloonPhase == .landed ? Double?(0.0) : adjustedDescentRate
         motionMetrics = BalloonMotionMetrics(
             rawHorizontalSpeedMS: rawHorizontal,
             rawVerticalSpeedMS: rawVertical,
-            smoothedHorizontalSpeedMS: smoothedH,
-            smoothedVerticalSpeedMS: smoothedV,
-            adjustedDescentRateMS: adjusted
+            smoothedHorizontalSpeedMS: smoothedHorizontalSpeed,
+            smoothedVerticalSpeedMS: smoothedVerticalSpeed,
+            adjustedDescentRateMS: adjustedDescentRate
         )
     }
     
@@ -1215,7 +1062,6 @@ final class BalloonTrackService: ObservableObject {
     // Exposed helper to mark the balloon as landed at a given coordinate
     func setBalloonAsLanded(at coordinate: CLLocationCoordinate2D) {
         landingPosition = coordinate
-        balloonPhase = .landed
         appLog("BalloonTrackService: Balloon manually set as LANDED at \(String(format: "%.5f, %.5f", coordinate.latitude, coordinate.longitude))", category: .service, level: .info)
     }
 

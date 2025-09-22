@@ -619,7 +619,7 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
                         "RSSI=\(displayRssi(from: components[9]))dBm",
                         "bat=\(components[10])%"
                     ].joined(separator: " ")
-                    appLog("📡 BLE (\(telemetryLogCount)): \(keyInfo)", category: .ble, level: .info)
+                    appLog("📡 BLE (\(telemetryLogCount), every 5th): \(keyInfo)", category: .ble, level: .info)
                 }
                 // Plausibility checks
                 var warns: [String] = []
