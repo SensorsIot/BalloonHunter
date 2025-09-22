@@ -660,6 +660,11 @@ final class BalloonTrackService: ObservableObject {
     // Track management
     private var telemetryPointCounter = 0
     private let saveInterval = 10 // Save every 10 telemetry points
+
+    // Logging throttle counters
+    private var speedCheckLogCount: Int = 0
+    private var landingLogCount: Int = 0
+    private var flightStatusLogCount: Int = 0
     
     // Landing detection - smoothing buffers
     private var verticalSpeedBuffer: [Double] = []
