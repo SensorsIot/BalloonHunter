@@ -57,7 +57,7 @@ import OSLog
 // MARK: - BLE Data Models
 
 struct DeviceSettings: Codable {
-    var frequency: Double = 434.0
+    var frequency: Double = 403.5
     var bandwidth: Double = 125.0
     var spreadingFactor: Int = 7
     var codingRate: Int = 5
@@ -270,7 +270,7 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
             }
         }
         
-        appLog("BLE: BLECommunicationService initialization complete", category: .ble, level: .info)
+        // BLE service initialized (logged at AppServices level)
         publishHealthEvent(.healthy, message: "BLE service initialized")
     }
 
@@ -656,19 +656,6 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
             
         case "2":
             // Name Only
-            let type2FieldLabels = [
-                "messageType",
-                "probeType",
-                "frequencyMHz",
-                "sondeName",
-                "rssiDbm",
-                "batPercentage",
-                "afcFrequency",
-                "batVoltageMillivolts",
-                "buzmute",
-                "softwareVersion",
-                "packetTerminator"
-            ]
             if components.count >= 10 {
                 // Consolidated Type 2 message with key info
                 let keyInfo = [

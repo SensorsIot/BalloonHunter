@@ -31,15 +31,17 @@ The app treats BLE (MySondyGo) telemetry as authoritative whenever it is availab
 2. **Live BLE telemetry – balloon landed**  
    - Landing detection latches `.landed`, averages the buffered coordinates for a stable landing point, and zeroes all motion metrics.  
    - `ServiceCoordinator` mirrors the landing point to the map, disables further prediction requests, and the data panel/route display switch to recovery mode. 
-   - APRS polling remains stopped if if it also detect the balloon is landed. Otherwise it continues if no BLE telemetry is available
+   - APRS polling remains stopped.
 3. **APRS fallback with fresh timestamp (balloon flying)**  
-   - APRS triggered immediately when BLE telemetry becomes stale. Afterwards, APRS data stays on the 15 s cadence until BLE recovers.
+   - APRS triggered immediately when BLE telemetry is not available. Afterwards, APRS data stays on the 15 s cadence until BLE recovers.
    - Track and motion metrics update exactly as they would for BLE packets, keeping the coordinator UI responsive while the balloon is still airborne. 
    - When BLE recovers, APRS is stopped again.
+   - If RadioSondyGo is connected (BLE connected), the app regularly checks its frequency/sonde type and issues a command to change its frequency/sondetype to the one reported from APRS.
 4. **APRS fallback with old timestamp (balloon landed)**  
    - APRS triggered immediately when BLE telemetry becomes stale. The polling cadence steps down to every 5 minutes once the latest packet is older than 120 s (indicating a landed balloon).  
    - Motion metrics are zero, the landing point is updated with the last APRS packet, and prediction requests remain disabled.  
    - If the last packet becomes older than 30 minutes, APRS polling stops altogether until fresh telemetry arrives or BLE recovers.
+   - If RadioSondyGo is connected (BLE connected), the app regularly checks its frequency/sonde type and issues a command to change its frequency/sondetype to the one reported from APRS.
 5. **No telemetry available**  
    - On startup (before any BLE/APRS data) or after both feeds go silent, the UI shows placeholders (e.g., `"--"` distance, `"--:--"` arrival) while the red telemetry-stale frame alerts the user.  
    - The flight state is set to unknown 
@@ -366,10 +368,11 @@ Discover and connect to MySondyGo devices over Bluetooth Low Energy, subscribe t
 ### APRS Telemetry Service
 
 **Purpose**  
-Provide SondeHub-driven telemetry frames whenever BLE data is unavailable so downstream services can keep running without special cases.
+Provide SondeHub-driven telemetry frames whenever BLE telemetry data is unavailable. It is also used to program the correct frequendy/sonde type in RadioSondyGo.
 
 #### Input Triggers
 
+- Startup
 - Scheduler tick (5 s when BLE telemetry is stale, 60 s health-check cadence otherwise).
 - Notification from the coordinator that BLE telemetry has resumed (stop polling).
 - Station-ID changes in settings (e.g., switching to a different launch site).
@@ -676,10 +679,10 @@ The `ServiceCoordinator` is responsible for determining the single, authoritativ
 
     1.  **When `balloonPhase` is `.landed`**:
         *   The `landingPoint` is set to the value of `balloonTrackService.landingPosition`. This is considered the most accurate position, as it is calculated by averaging the most recent telemetry coordinates after the balloon has stopped moving.
-
+    
     2.  **When `balloonPhase` is `.ascending`, `.descendingAbove10k`, or `.descendingBelow10k`**:
         *   The `landingPoint` is set to the value of `predictionData.landingPoint` from the latest successful prediction made by the `PredictionService`.
-
+    
     3.  **When `balloonPhase` is `.unknown` (e.g., at startup before telemetry is received)**:
     *   The `landingPoint` is `nil`. It will be populated once the first prediction is made or the balloon's landing is confirmed.
 2. **Telemetry pipeline** — `BalloonTrackService` ingests BLE/APRS telemetry, performs smoothing, while `BalloonPositionService` maintains the authoritative `balloonPhase` (including forcing `.landed` when APRS packets are older than 120 s), and publishes both raw and smoothed motion metrics plus landing positions. The coordinator mirrors these updates to drive map overlays, Apple Maps tracking, proximity flags, and prediction cadence.
@@ -715,7 +718,7 @@ The coordinator runs `performCompleteStartupSequence()` in 6 sequential steps wi
 5.  **Step 5: Landing Point**
     *   The progress label is updated to "Step 5: Landing Point".
     *   The ServiceCoordinator determines the landing point that is displayed on the map and used for route calculations.
-  It selects the most appropriate coordinate based on the balloon's current flight phase
+    It selects the most appropriate coordinate based on the balloon's current flight phase
 6.  **Step 6: Map Display**
     *   The progress label is updated to "Step 6: Map Display".
     *   `setupInitialMapDisplay()` is called to reveal the map, overlays, and data panel.

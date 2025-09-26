@@ -39,7 +39,7 @@ final class PersistenceService: ObservableObject {
         // Load burst killer cache
         self.burstKillerRecords = Self.loadBurstKillerRecords()
 
-        appLog("PersistenceService: Tracks loaded from UserDefaults. Total tracks: \(internalTracks.count)", category: .service, level: .info)
+        appLog("PersistenceService: Initialized - tracks: \(internalTracks.count), histories: \(internalLandingHistories.count)", category: .service, level: .info)
     }
     
     // MARK: - User Settings
@@ -97,7 +97,7 @@ final class PersistenceService: ObservableObject {
     func saveBalloonTrack(sondeName: String, track: [BalloonTrackPoint]) {
         internalTracks[sondeName] = track
         saveAllTracks()
-        appLog("PersistenceService: Saved balloon track for sonde '\(sondeName)'.", category: .service, level: .debug)
+        appLog("PersistenceService: Saved track for '\(sondeName)' (\(track.count) points)", category: .service, level: .debug)
     }
     
     func loadTrackForCurrentSonde(sondeName: String) -> [BalloonTrackPoint]? {
@@ -135,7 +135,7 @@ final class PersistenceService: ObservableObject {
         // Try Documents directory first (survives development installs)
         if let data = loadFromDocumentsDirectory(filename: "BalloonTracks.json"),
            let tracks = try? decoder.decode([String: [BalloonTrackPoint]].self, from: data) {
-            appLog("PersistenceService: Loaded tracks from Documents directory", category: .service, level: .debug)
+            // Loaded tracks successfully
             return tracks
         }
         
@@ -199,7 +199,7 @@ final class PersistenceService: ObservableObject {
 
         if let data = loadFromDocumentsDirectory(filename: "LandingPointHistories.json"),
            let histories = try? decoder.decode([String: [LandingPredictionPoint]].self, from: data) {
-            appLog("PersistenceService: Loaded landing histories from Documents directory", category: .service, level: .debug)
+            // Loaded landing histories successfully
             return histories
         }
 
@@ -233,7 +233,7 @@ final class PersistenceService: ObservableObject {
             let documentsURL = try FileManager.default.url(for: .documentDirectory, in: .userDomainMask, appropriateFor: nil, create: false)
             let fileURL = documentsURL.appendingPathComponent(filename)
             try data.write(to: fileURL)
-            appLog("PersistenceService: Saved \(filename) to Documents directory", category: .service, level: .debug)
+            // File saved successfully (logged at higher level)
         } catch {
             appLog("PersistenceService: Failed to save \(filename) to Documents directory: \(error)", category: .service, level: .error)
         }
@@ -256,7 +256,7 @@ final class PersistenceService: ObservableObject {
             let documentsURL = try FileManager.default.url(for: .documentDirectory, in: .userDomainMask, appropriateFor: nil, create: false)
             let fileURL = documentsURL.appendingPathComponent(filename)
             let data = try Data(contentsOf: fileURL)
-            appLog("PersistenceService: Loaded \(filename) from Documents directory", category: .service, level: .debug)
+            // File loaded successfully
             return data
         } catch {
             appLog("PersistenceService: Failed to load \(filename) from Documents directory: \(error)", category: .service, level: .debug)

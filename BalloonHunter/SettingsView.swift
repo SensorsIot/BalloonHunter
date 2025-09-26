@@ -398,22 +398,23 @@ struct SettingsView: View {
             }
             .navigationTitle(titleForTab(selectedTab))
             .toolbar {
-                ToolbarItemGroup(placement: .navigationBarLeading) {
+                ToolbarItem(placement: .navigationBarTrailing) {
                     if selectedTab == 0 { // Sonde
-                        Button("Revert") { revertSondeSettings() }
-                            .disabled(!bleService.isReadyForCommands)
-                    }
-                }
-                ToolbarItemGroup(placement: .navigationBarTrailing) {
-                    if selectedTab == 0 { // Sonde
-                        Button("Prediction Settings") { isShowingPredictionSettings = true }
-                        Button("Device Settings") { isShowingDeviceSettings = true }
-                            .disabled(!bleService.isReadyForCommands)
-                        Button("Tune") { selectedTab = 1 }
-                            .disabled(!bleService.isReadyForCommands)
+                        HStack {
+                            Button("Prediction Settings") { isShowingPredictionSettings = true }
+                            Spacer()
+                            Button("Device Settings") { isShowingDeviceSettings = true }
+                                .disabled(!bleService.isReadyForCommands)
+                            Spacer()
+                            Button("Tune") { selectedTab = 1 }
+                                .disabled(!bleService.isReadyForCommands)
+                        }
                     } else { // Tune
-                        Button("Reset") {
-                            saveTuneSettings(correctionValue: 0)
+                        HStack(spacing: 16) {
+                            Button("Done") { selectedTab = 0 }
+                            Button("Reset") {
+                                saveTuneSettings(correctionValue: 0)
+                            }
                         }
                     }
                 }
@@ -578,6 +579,12 @@ struct SettingsView: View {
                     }
                     .frame(maxWidth: .infinity)
                 }
+
+                Section {
+                    Button("Revert") { revertSondeSettings() }
+                        .disabled(!bleService.isReadyForCommands)
+                        .frame(maxWidth: .infinity)
+                }
             }
         }
         .tabItem { Label("Sonde", systemImage: "antenna.radiowaves.left.and.right") }
@@ -674,6 +681,7 @@ struct NumericTextField: View {
 // MARK: - Prediction Settings View (Sheet)
 struct PredictionSettingsView: View {
     @EnvironmentObject var userSettings: UserSettings
+    @EnvironmentObject var persistenceService: PersistenceService
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -728,6 +736,13 @@ struct PredictionSettingsView: View {
                     Button("Done") { dismiss() }
                 }
             }
+            .onDisappear {
+                savePredictionSettings()
+            }
         }
+    }
+
+    private func savePredictionSettings() {
+        persistenceService.save(userSettings: userSettings)
     }
 }

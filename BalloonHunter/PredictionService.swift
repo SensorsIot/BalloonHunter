@@ -500,11 +500,9 @@ final class PredictionService: ObservableObject {
         guard let url = components.url else { throw PredictionError.invalidRequest }
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
-        appLog(String(format: "PredictionService: Request URL: %@", url.absoluteString), category: .service, level: .debug)
-        appLog(String(format: "PredictionService: Params lat=%.4f lon=%.4f alt=%.1f ascent=%.2f burst=%.1f descent=%.2f descends=%@",
+        appLog(String(format: "PredictionService: API request lat=%.4f lon=%.4f alt=%.0fm ↑%.1f ↓%.1f burst=%.0fm",
                       telemetry.latitude, telemetry.longitude, telemetry.altitude,
-                      userSettings.ascentRate, burstAlt, descentRate,
-                      telemetry.verticalSpeed < 0 ? "YES" : "NO"),
+                      userSettings.ascentRate, descentRate, burstAlt),
                category: .service, level: .debug)
         return request
     }

@@ -24,37 +24,52 @@ BalloonHunter is an iOS weather balloon tracking app built in SwiftUI that conne
 ## Architecture Overview
 
 ### High-Level Architecture
-The app follows a simplified service-coordinator pattern with direct subscriptions replacing the previous complex EventBus architecture:
+The app follows a modular service-coordinator architecture with clean separation of responsibilities:
 
 ```
-Services (Data Sources) → ServiceCoordinator (Coordinator) → Views (SwiftUI)
+Services (Domain Logic) ← ServiceCoordinator (Orchestrator) → Views (Presentation)
      ↓                           ↓                         ↓
-BLEService, LocationService → Published Properties → TrackingMapView, DataPanelView
+BLEService, PredictionService → Published Properties → TrackingMapView, DataPanelView
 ```
+
+#### Architecture Principles (from FSD)
+- **Separation of Concerns**: Business logic lives in services and coordinator; SwiftUI views remain declarative consumers of published state
+- **Coordinator as Orchestrator**: ServiceCoordinator listens to service publishers, applies cross-cutting rules, and republishes merged state
+- **Modular Services**: Each domain (location, tracking, prediction, persistence) lives in separate files with co-located caches
+- **Combine-Driven Data Flow**: Services publish via `@Published`; coordinator/presenter subscribe, transform, and re-publish
+- **Environment-Driven UI**: Views observe coordinator/presenter/settings through `@EnvironmentObject`; actions bubble up through intent methods
+- **Presenter Layer**: MapPresenter handles complex map-specific transformations, keeping views as pure SwiftUI layout
 
 ### Key Components
 
-#### Core Services (in Services.swift)
-- **BLECommunicationService**: Manages Bluetooth connectivity to MySondyGo devices
-- **CurrentLocationService**: Handles user location tracking with CoreLocation
-- **PredictionService**: Calculates balloon trajectory and landing predictions using Tawhiri API
-- **RouteCalculationService**: Generates navigation routes using Apple Maps
-- **PersistenceService**: Manages Core Data storage for tracks, settings, and landing points
+#### Core Services (Modular Design)
+- **BLECommunicationService** (BLEService.swift): BLE discovery, connection, packet parsing for MySondyGo devices
+- **CurrentLocationService** (LocationServices.swift): GPS tracking, distance calculations, proximity detection
+- **BalloonPositionService** (BalloonTrackingServices.swift): Telemetry state machine with 7 states (startup, liveBLE, APRS fallback, etc.)
+- **BalloonTrackService** (BalloonTrackingServices.swift): Track smoothing, motion metrics, landing detection
+- **PredictionService** (PredictionService.swift): Tawhiri API integration with caching (co-located PredictionCache)
+- **RouteCalculationService** (RoutingServices.swift): Apple Maps integration with RoutingCache
+- **PersistenceService** (PersistenceService.swift): Core Data persistence, document directory management
 
 #### Service Coordination
-- **ServiceCoordinator**: Central coordinator that manages service interactions and publishes combined state
-- **AppServices**: Factory class that initializes and provides service instances
-- **UserSettings**: ObservableObject for user preferences (ascent/descent rates, burst altitude)
+- **ServiceCoordinator** (ServiceCoordinator.swift): Orchestrates services, manages startup sequence, publishes merged app state
+- **MapPresenter** (MapPresenter.swift): Map-specific state transformations, overlay generation, user intent handling
+- **AppServices** (AppServices.swift): Dependency injection container for service initialization
+- **UserSettings** (Settings.swift): User preferences (ascent/descent rates, burst altitude, transport mode)
 
-#### Data Models
-- **TelemetryData**: Contains balloon position, altitude, speeds, and sensor data
-- **PredictionData**: Trajectory prediction results including landing point and burst point
-- **RouteData**: Navigation route with coordinates, distance, and travel time
-- **LocationData**: User position data from GPS
+#### Data Models (CoreModels.swift)
+- **TelemetryData**: Balloon position, altitude, speeds, sensor data, timestamps
+- **PredictionData**: Trajectory paths, burst/landing points, flight time calculations
+- **RouteData**: Navigation routes with coordinates, distance, travel time
+- **BalloonTrackPoint**: Historical track data with motion metrics
+- **DeviceSettings**: MySondyGo device configuration and status
 
-#### Caching System
-- **PredictionCache**: Caches prediction results to reduce API calls
-- **RoutingCache**: Caches route calculations for performance
+#### Telemetry State Machine
+BalloonPositionService implements a formal 7-state machine for telemetry source management:
+- **startup** → **liveBLEFlying** → **liveBLELanded** (primary BLE path)
+- **waitingForAPRS** → **aprsFallbackFlying** → **aprsFallbackLanded** (fallback path)
+- **noTelemetry** (when both sources unavailable)
+- 30-second debouncing prevents oscillation between BLE/APRS sources
 
 ### Key Views
 - **BalloonHunterApp**: Main app entry point with service initialization
@@ -66,42 +81,53 @@ BLEService, LocationService → Published Properties → TrackingMapView, DataPa
 ## Development Guidelines
 
 ### Service Integration Pattern
-When adding new functionality, follow the established service pattern:
+**PREFER DIRECT COMMUNICATION**: Use ServiceCoordinator only when it adds clear architectural value.
+
+#### Direct Service-to-View Communication (Preferred)
+For simple data flows, connect services directly to views:
 1. Create service in `Services.swift` with `@Published` properties
-2. Inject service into `ServiceCoordinator` via `AppServices`
-3. Subscribe to service updates in `ServiceCoordinator.setupDirectSubscriptions()`
-4. Update published state in ServiceCoordinator
-5. Bind to state in SwiftUI views via `@EnvironmentObject`
+2. Inject service into views via `@EnvironmentObject`
+3. Views observe service state directly
+4. Use when: Single service owns the data, no cross-service coordination needed
+
+#### ServiceCoordinator Communication (Use Sparingly)
+Only use ServiceCoordinator when it provides clear value:
+1. Cross-service coordination (e.g., startup sequences)
+2. Complex state combining multiple services
+3. Operations requiring multiple services working together
+4. Application-wide state management
+
+**AVOID**: Using ServiceCoordinator as a simple data passthrough for single-service decisions
 
 ### Separation of Concerns Architecture
 **CRITICAL PRINCIPLE**: True separation of concerns with views handling only presentation logic and services managing all business operations.
 
 #### Data Flow Requirements
 - Services publish data changes via Combine `@Published` properties
-- ServiceCoordinator subscribes to service changes and consolidates state
-- Views observe ServiceCoordinator state only (no direct service access)
-- All UI updates must go through ServiceCoordinator published properties
+- **Direct Flow**: Views can observe services directly for simple single-service data
+- **Coordinated Flow**: ServiceCoordinator consolidates state only when cross-service coordination is needed
+- Choose the simplest pattern that meets the architectural requirements
 
 #### View Layer Responsibilities (Presentation Only)
 - Display UI elements and handle user interactions
-- Observe and react to ServiceCoordinator state changes
+- Observe and react to service state changes (directly or via ServiceCoordinator)
 - NO business logic, calculations, data processing, or service calls
 - NO timer management, data validation, or persistence operations
-- Use @EnvironmentObject to access ServiceCoordinator state only
+- Use @EnvironmentObject to access service or ServiceCoordinator state as appropriate
 
 #### Service Layer Responsibilities (Business Logic)
 - All data processing, calculations, and business rules
 - API calls, BLE communication, and external service interactions
 - Data validation, transformation, and persistence operations
 - Timer management and background task coordination
-- Cross-service communication through ServiceCoordinator
+- Direct service-to-service communication when possible, ServiceCoordinator when needed
 
-#### ServiceCoordinator Responsibilities (Coordination)
-- Manages all service interactions and lifecycle
-- Controls startup sequence and application flow
-- Consolidates and publishes combined state for views
-- Handles complex operations requiring multiple services
-- Exposes high-level methods to reduce view complexity
+#### ServiceCoordinator Responsibilities (Coordination Only)
+- Manages service lifecycle and startup sequences
+- Coordinates complex operations requiring multiple services
+- Consolidates state only when combining multiple services adds value
+- **NOT a data passthrough**: Avoid storing single-service decisions
+- Focus on true coordination, not simple state forwarding
 
 ### BLE Communication
 - MySondyGo devices communicate via custom BLE protocol with 4 message types (0-3)

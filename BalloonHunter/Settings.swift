@@ -12,7 +12,7 @@ extension Notification.Name {
 
 @MainActor
 final class UserSettings: ObservableObject, Codable {
-    @Published var burstAltitude: Double = 30000
+    @Published var burstAltitude: Double = 35000
     @Published var ascentRate: Double = 5.0
     @Published var descentRate: Double = 5.0
     @Published var stationId: String = "06610" // Default to Payerne
