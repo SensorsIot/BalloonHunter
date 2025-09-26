@@ -62,3 +62,11 @@ Log*.txt
 scripts/ci*
 *.yml
 *.yaml
+
+# Test Directories and Schemes (removed - using Xcode directly)
+*Tests/
+*Tests.xctest
+*test*
+*Test*
+xctestplans/
+*Tests.xcscheme
