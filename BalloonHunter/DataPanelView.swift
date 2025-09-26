@@ -80,7 +80,13 @@ struct DataPanelView: View {
                     // Row 4: Adjusted descent rate (per FSD requirement) - spans all 3 columns
                     GridRow {
                         let descentRate = serviceCoordinator.smoothedDescentRate
-                        let descentValue = String(format: "%.1f", abs(descentRate ?? userSettings.descentRate))
+                        let descentValue: String = {
+                            if balloonPositionService.balloonPhase == .ascending {
+                                return "0.0"
+                            } else {
+                                return String(format: "%.1f", abs(descentRate ?? userSettings.descentRate))
+                            }
+                        }()
                         let burstKillerExpiry = burstKillerExpiryString()
                         Text("Descent Rate: \(descentValue) m/s  •  Burst killer: \(burstKillerExpiry)")
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -242,6 +248,12 @@ struct DataPanelView: View {
     }
 
     private var batteryPercentageString: String {
+        // Prioritize BLE device status (Type 0) when ready for commands
+        if bleService.telemetryState.canReceiveCommands,
+           let deviceStatus = bleService.deviceStatus {
+            return "\(deviceStatus.batteryPercentage)"
+        }
+        // Fallback to telemetry data battery percentage
         if let val = balloonPositionService.currentTelemetry?.batteryPercentage {
             return "\(val)"
         }

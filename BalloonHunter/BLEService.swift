@@ -25,6 +25,7 @@ Manages Bluetooth communication with **MySondyGo** devices.
 - `@Published var telemetryState: BLETelemetryState` — Unified BLE telemetry state (.BLEnotconnected, .readyForCommands, .BLEtelemetryIsReady)
 - `@Published var latestTelemetry: TelemetryData?` — Latest parsed telemetry
 - `@Published var deviceSettings: DeviceSettings` — MySondyGo device configuration
+- `@Published var deviceStatus: DeviceStatusData?` — Type 0 device status (battery %, voltage, signal strength)
 - `@Published var connectionStatus: ConnectionStatus` — `.connected`, `.disconnected`, `.connecting`
 - `@Published var lastMessageType: String?` — `"0"`, `"1"`, `"2"`, `"3"`
 - `PassthroughSubject<TelemetryData, Never>()` — Real-time telemetry stream
@@ -188,6 +189,7 @@ struct DeviceSettings: Codable {
 
 struct DeviceStatusData {
     let batteryVoltage: Double
+    let batteryPercentage: Int
     let temperature: Double
     let signalStrength: Int
     let timestamp: Date
@@ -239,6 +241,7 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
     private var telemetryLogCount: Int = 0
     @Published var latestTelemetry: TelemetryData? = nil
     @Published var deviceSettings: DeviceSettings = .default
+    @Published var deviceStatus: DeviceStatusData? = nil
     @Published var connectionStatus: ConnectionStatus = .disconnected
     var lastMessageType: String? = nil
     @Published var telemetryData = PassthroughSubject<TelemetryData, Never>()
@@ -608,11 +611,12 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
         case "0":
             // Device Basic Info and Status
             if let status = parseType0Message(components) {
+                deviceStatus = status
                 // Show all available packet data for Type 0 messages
                 let packetInfo = components.enumerated().map { (index, value) in
                     return "[\(index)]=\(value)"
                 }.joined(separator: " ")
-                appLog("📊 BLE PARSED (Type 0): Device status - battery=\(String(format: "%.2f", status.batteryVoltage))V signal=\(status.signalStrength)dBm | Raw: \(packetInfo)", category: .ble, level: .info)
+                appLog("📊 BLE PARSED (Type 0): Device status - battery=\(String(format: "%.2f", status.batteryVoltage))V (\(status.batteryPercentage)%) signal=\(status.signalStrength)dBm | Raw: \(packetInfo)", category: .ble, level: .info)
             } else {
                 // Show raw packet even if parsing failed
                 let packetInfo = components.enumerated().map { (index, value) in
@@ -767,10 +771,11 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
             return nil
         }
         guard components.count >= 8 else { return nil }
-        
+
         let rssiValue = adjustedRssiValue(from: components[3]) ?? (Double(components[3]) ?? 0.0)
         return DeviceStatusData(
             batteryVoltage: Double(components[5]) ?? 0.0,
+            batteryPercentage: Int(components[4]) ?? 0,
             temperature: 0.0, // Not provided in this message type
             signalStrength: Int(rssiValue),
             timestamp: Date()
