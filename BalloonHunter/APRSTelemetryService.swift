@@ -160,28 +160,7 @@ final class APRSTelemetryService: ObservableObject {
         }
     }
 
-    /// Called during startup to prime APRS data (Step 2 of startup sequence)
-    func primeStartupData() async {
-        appLog("APRSTelemetryService: Priming startup data for station \(currentStationId)", category: .service, level: .info)
-
-        do {
-            let siteResponse = try await fetchSiteData()
-
-            guard let latestSonde = findLatestSonde(from: Array(siteResponse.values)) else {
-                appLog("APRSTelemetryService: No sondes found for startup priming", category: .service, level: .info)
-                return
-            }
-
-            // Store the APRS serial for mismatch detection
-            aprsSerialName = latestSonde.serial
-            lastSondeSerial = latestSonde.serial
-
-            appLog("APRSTelemetryService: Startup priming complete - found sonde \(latestSonde.serial)", category: .service, level: .info)
-
-        } catch {
-            appLog("APRSTelemetryService: Startup priming failed: \(error.localizedDescription)", category: .service, level: .error)
-        }
-    }
+    // Removed: primeStartupData - startup now uses standard startPolling() for immediate telemetry
 
     /// Update BLE sonde name for display purposes
     func updateBLESondeName(_ sondeName: String) {

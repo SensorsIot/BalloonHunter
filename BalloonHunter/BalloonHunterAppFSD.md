@@ -175,9 +175,104 @@ Each state defines explicit exit criteria and associated functionality upon ente
   - Environment-Driven UI: Views observe the coordinator, presenter, and settings objects through @EnvironmentObject. User actions (toggle heading, trigger prediction, open Maps) bubble up through intent methods defined on the presenter/coordinator instead of mutating state locally.
   - Persistence & Caching: PersistenceService handles all disk IO (tracks, landing history, user/device prefs), and caching actors prevent redundant prediction/route work. Both are injected once through AppServices, reinforcing a single source of truth.
 
+#### Direct vs Coordinated Communication Patterns
+
+The app uses a hybrid architecture that supports both direct service communication and ServiceCoordinator orchestration. The choice depends on the complexity and scope of the operation:
+
+**✅ Use Direct Service Communication When:**
+- Single service owns the data exclusively
+- Simple one-to-one data binding needed
+- View needs immediate service state access
+- No cross-service coordination required
+- Performance-critical data updates
+
+**Examples:**
+```swift
+// ✅ Direct: Single service data display
+@EnvironmentObject var balloonPositionService: BalloonPositionService
+Text("Altitude: \(balloonPositionService.altitude)")
+
+// ✅ Direct: Service-specific operations
+balloonPositionService.manualLocationUpdate()
+```
+
+**✅ Use ServiceCoordinator When:**
+- Multiple services must work together
+- Complex state combining different sources
+- Application-wide state management needed
+- Startup sequences and lifecycle events
+- Cross-cutting concerns (logging, caching, routing)
+
+**Examples:**
+```swift
+// ✅ Coordinated: Cross-service operations
+serviceCoordinator.triggerCompleteStartupSequence()
+serviceCoordinator.openInAppleMaps() // Uses location + routing + settings
+
+// ✅ Coordinated: Multi-service state
+@Published var consolidatedFlightData: FlightData // Combines BLE + APRS + predictions
+```
+
+**Decision Matrix:**
+| Scenario | Pattern | Reasoning |
+|----------|---------|-----------|
+| Display telemetry data | Direct | Single service ownership |
+| Trigger predictions | Direct | PredictionService operation |
+| Startup sequence | Coordinated | Multiple services coordination |
+| Route calculation | Coordinated | Requires location + settings |
+| Map camera updates | Direct via MapPresenter | Map-specific coordination |
+
+**Anti-Patterns to Avoid:**
+- Using ServiceCoordinator as simple data passthrough for single-service decisions
+- Creating unnecessary coordination layers when direct access is simpler
+- Views making direct service calls when coordination is needed
+
 ### File Structure
 
 Do not open a new file without asking the user
+
+#### Complete Service Layer Organization (22 Swift Files)
+
+The codebase is organized into logical layers with clear separation of responsibilities:
+
+**Infrastructure Layer:**
+- `AppServices.swift` - Dependency injection container and service lifecycle management
+- `CoreModels.swift` - Shared data structures, enums, and logging utilities
+- `PersistenceService.swift` - Core Data persistence, file storage, and document management
+
+**Communication Layer:**
+- `BLEService.swift` - MySondyGo BLE protocol implementation and device communication
+- `APRSTelemetryService.swift` - SondeHub API integration and APRS data management
+- `LocationServices.swift` - GPS tracking, location services, and proximity detection
+
+**Processing Layer:**
+- `BalloonTrackingServices.swift` - Telemetry state machine, position tracking, and motion analysis
+- `PredictionService.swift` - Tawhiri API integration with sophisticated caching (co-located PredictionCache)
+- `RoutingServices.swift` - Apple Maps integration with performance-optimized RoutingCache
+
+**Coordination Layer:**
+- `Coordinator.swift` - ServiceCoordinator orchestration and cross-service state management
+- `CoordinatorServices.swift` - Startup sequence and complex coordination operations
+- `MapPresenter.swift` - Map-specific presentation logic and hybrid service access
+
+**UI Layer:**
+- `BalloonHunterApp.swift` - App entry point and environment object injection
+- `TrackingMapView.swift` - Primary map interface (70% of screen) with 8 annotation types
+- `DataPanelView.swift` - Telemetry display panel (30% of screen) with 2-table layout
+- `SettingsView.swift` - Configuration interface with tabbed device settings
+
+**Utility Layer:**
+- `Settings.swift` - UserSettings and AppSettings with persistence management
+- `DebugCSVLogger.swift` - Development telemetry logging and debugging support
+
+**Service Communication Matrix:**
+| Service | Access Pattern | Coordinator Integration |
+|---------|---------------|------------------------|
+| BLECommunicationService | Direct + Coordinated | Startup, frequency sync |
+| BalloonPositionService | Direct | State machine updates |
+| PredictionService | Direct | Timer control only |
+| CurrentLocationService | Coordinated | Route calculations |
+| PersistenceService | Direct | Background operations |
 
 #### BalloonHunterApp.swift:
 
@@ -193,7 +288,7 @@ The central architectural component that coordinates all services, manages appli
 
 #### CoordinatorServices.swift:
 
-An extension to ServiceCoordinator that specifically contains the detailed 8-step startup sequence logic, keeping the main ServiceCoordinator file cleaner.
+An extension to ServiceCoordinator that specifically contains the detailed 8-step startup sequence logic, keeping the main ServiceCoordinator file cleaner. Includes parallel APRS priming, state machine initialization, and startup map zoom functionality.
 
 #### CoreModels.swift:
 
@@ -209,7 +304,52 @@ Contains `BalloonPositionService`, `BalloonTrackService`, and `LandingPointTrack
 
 #### RoutingServices.swift:
 
-Bundles `RouteCalculationService` with the `RoutingCache` actor. Route planning and caching logic now live together so the coordinator can request routes without touching unrelated services.
+**Apple Maps Integration with Performance Optimization:**
+
+Comprehensive routing service with sophisticated caching and proximity-aware behavior:
+
+**Cache Strategy:**
+```swift
+private func generateCacheKey(start: CLLocationCoordinate2D,
+                             end: CLLocationCoordinate2D,
+                             mode: TransportationMode) -> String {
+    let startKey = "\(round(start.latitude * 100)/100)-\(round(start.longitude * 100)/100)"
+    let endKey = "\(round(end.latitude * 100)/100)-\(round(end.longitude * 100)/100)"
+    return "route-\(startKey)-\(endKey)-\(mode.rawValue)"
+}
+```
+
+**Proximity Rules:**
+- **200m Threshold**: Route visibility automatically hidden when user within 200m of landed balloon
+- **Recalculation Triggers**: User movement >100m, transport mode change, landing point updates
+- **Performance Optimization**: Cache prevents redundant Apple Maps API calls
+
+**Transport Mode Support:**
+```swift
+enum TransportationMode: String, CaseIterable {
+    case car = "car"
+    case bike = "bike"
+
+    var directionsMode: String {
+        switch self {
+        case .car: return MKLaunchOptionsDirectionsModeDriving
+        case .bike: return MKLaunchOptionsDirectionsModeCycling
+        }
+    }
+}
+```
+
+**Advanced Features:**
+- **Bike Mode Optimization**: 30% time reduction for conservative Apple Maps walking estimates
+- **Straight-line Fallback**: Ensures UI always has path display even without Apple Maps coverage
+- **Cache Performance**: TTL-based expiration, LRU eviction, coordinate quantization
+- **iOS Version Handling**: Cycling directions on iOS 14+, walking fallback for older versions
+
+**Integration Points:**
+- **Apple Maps Hand-off**: Direct navigation launch with transport mode preservation
+- **Map Overlay**: Green route line (3px) with real-time updates
+- **Data Panel**: ETA and distance calculations for recovery planning
+- **Notification System**: Updated destination handling for background navigation
 
 #### PersistenceService.swift:
 
@@ -221,15 +361,140 @@ Contains the `BLECommunicationService`, which is responsible for all Bluetooth L
 
 #### MapPresenter.swift:
 
-An observable presenter that aggregates map-related state from the coordinator and services. Views bind to it for overlays, distance text, and intent methods (toggle heading, open Maps, etc.).
+**Hybrid Architecture Pattern**: MapPresenter uses both direct service access and ServiceCoordinator integration strategically:
+
+- **Direct Service Access**: Single-service data that's map-specific (balloon position, track points, landing points)
+- **Coordinated Access**: Cross-service operations requiring multiple services (prediction paths, user routes)
+- **Map-Specific Coordination**: Aggregates, transforms, and republishes map state without duplicating coordinator logic
+
+**Implementation Pattern:**
+```swift
+@MainActor
+final class MapPresenter: ObservableObject {
+    // DIRECT ACCESS: Single-service data
+    private let balloonPositionService: BalloonPositionService
+    private let balloonTrackService: BalloonTrackService
+
+    // COORDINATED ACCESS: Cross-service operations
+    private let coordinator: ServiceCoordinator
+
+    // MAP-SPECIFIC STATE: Transformed for map display
+    @Published private(set) var annotations: [MapAnnotationItem] = []
+    @Published private(set) var region: MKCoordinateRegion?
+
+    private func bindServices() {
+        // Direct subscription to single services
+        balloonPositionService.$landingPoint
+            .sink { [weak self] point in
+                self?.landingPoint = point
+                self?.refreshAnnotations() // Map-specific transformation
+            }
+            .store(in: &cancellables)
+
+        // Coordinated access for complex operations
+        coordinator.$predictionPath
+            .sink { [weak self] path in
+                self?.predictionPath = path
+            }
+            .store(in: &cancellables)
+    }
+}
+```
+
+**Responsibilities:**
+- Map annotation generation and management
+- Camera position and zoom level coordination
+- Map overlay state transformation (track lines, prediction paths, routes)
+- User intent handling (toggle heading mode, trigger predictions, open Apple Maps)
+- Distance calculations and formatting for map display
 
 #### TrackingMapView.swift:
 
-The main map view. It renders live overlays (balloon track, SondeHub landing history, prediction path, routes), reflects the user’s controls, and hosts the SondeHub serial confirmation popup when required.
+**Primary Map Interface (70% of Screen):**
+
+Comprehensive map view with sophisticated overlay system and user controls:
+
+**Layout Structure:**
+```swift
+VStack(spacing: 0) {
+    // Top control panel with horizontal scroll
+    ScrollView(.horizontal) {
+        HStack(spacing: 12) {
+            Button("Settings") // Gear icon
+            Picker("Transport Mode") // Car/Bike segmented control
+            Button("All/Point") // Show all annotations or set landing point
+            Button("Heading Mode") // Location/compass toggle
+            Button("Buzzer") // Speaker mute control
+            Button("Apple Maps") // External navigation (when landing point available)
+        }
+    }
+
+    // Map with 8 annotation types (70% height)
+    Map(position: $position, interactionModes: mapPresenter.isHeadingMode ? .zoom : .all) {
+        // 1. Balloon Track: Historic track as thin red line (2px)
+        // 2. Balloon Predicted Path: Thick blue line (4px, flying mode only)
+        // 3. Planned Route: Green path from user to landing point (3px)
+        // 4. Landing History: Purple polyline connecting Sondehub estimates (2px)
+        // 5. User Position: Runner icon (figure.run) with blue circle background
+        // 6. Balloon Live Position: balloon.fill icon, color-coded by phase
+        // 7. Burst Point: burst.fill icon, orange (ascending mode only)
+        // 8. Landing Point: target icon, purple background (when available)
+    }
+
+    // Distance overlay (landing mode only)
+    if isLanded {
+        DistanceOverlayView(distanceMeters: mapPresenter.distanceToBalloon)
+    }
+}
+```
+
+**Color Coding System:**
+- **Green**: Ascending balloon phase
+- **Orange**: Descending above 10k altitude
+- **Red**: Descending below 10k altitude
+- **Purple**: Landed balloon phase
+- **Blue**: Prediction paths and user position
+- **Gray**: Unknown phase
+
+**Interactive Features:**
+- Heading mode: User location tracking with compass orientation
+- Free mode: Full pan/zoom interaction
+- Map controls: Compass, scale, user location button
+- Zoom preservation between mode switches
 
 #### DataPanelView.swift:
 
-A SwiftUI view that displays the two tables of telemetry and calculated data at the bottom of the main screen.
+**Telemetry Display Panel (30% of Screen):**
+
+Two-table layout providing comprehensive real-time data display:
+
+**Left Table - Live Telemetry:**
+```
+Row 1: Serial Name    | Altitude (m)     | Timestamp
+Row 2: Position       | Speed (m/s)      | Course (°)
+Row 3: Environment    | Signal (dBm)     | Battery (%)
+Row 4: Descent Rate   | Distance (km)    | Status
+```
+
+**Right Table - Predictions & Route:**
+```
+Row 1: Burst Alt (m)  | Landing Time     | Route Info
+Row 2: Flight Time    | Distance (km)    | ETA
+Row 3: Prediction     | Transport Mode   | Status
+Row 4: Cache Stats    | Last Updated     | Version
+```
+
+**Data Sources:**
+- **ServiceCoordinator**: Consolidated cross-service data (route, predictions)
+- **Direct Service Access**: Single-service data for performance
+- **Real-time Updates**: Combine-driven reactive updates
+- **Formatted Strings**: Pre-formatted by services for display consistency
+
+**Layout Implementation:**
+- Grid-based responsive layout adapting to screen size
+- Automatic text scaling for accessibility
+- Color-coded status indicators
+- Smooth animation transitions for data changes
 
 #### SettingsView.swift:
 
@@ -237,7 +502,44 @@ Contains the UI for all settings, including the main "Sonde Settings" and the ta
 
 #### PredictionService.swift:
 
-Implements the SondeHub prediction workflow (manual and scheduled), including API orchestration, caching integration, and publishing `PredictionData` back to the coordinator and UI. The prediction cache actor now lives inside this file.
+**Tawhiri API Integration with Advanced Caching:**
+
+Implements sophisticated trajectory prediction using the Tawhiri API with performance-optimized caching:
+
+**Caching Strategy:**
+```swift
+// 5-minute time bucket caching with coordinate rounding
+private func generateCacheKey(lat: Double, lon: Double, altitude: Double, time: Date) -> String {
+    let roundedLat = round(lat * 100) / 100  // 0.01° precision (~1km)
+    let roundedLon = round(lon * 100) / 100
+    let roundedAlt = round(altitude / 1000) * 1000  // 1km precision
+    let timeBucket = Int(time.timeIntervalSince1970 / 300) * 300  // 5-min buckets
+    return "pred-\(roundedLat)-\(roundedLon)-\(roundedAlt)-\(timeBucket)"
+}
+```
+
+**Dual Descent Rate Logic:**
+- **Below 10,000m**: Uses smoothed rate from actual balloon data for accuracy
+- **Above 10,000m**: Uses user-configured descent rate settings
+- Automatic switching provides optimal prediction accuracy throughout flight
+
+**State Machine Control:**
+- Predictions enabled only in flying states (ascending, descending)
+- 60-second automatic prediction timer controlled by telemetry state machine
+- Manual prediction triggers available via user interface
+- Timer paused during landed state to conserve API quota
+
+**Cache Performance:**
+- TTL-based expiration (5-minute default)
+- LRU eviction for memory management
+- Hit/miss metrics tracking for optimization
+- Coordinate quantization reduces cache misses
+
+**API Integration:**
+- Request throttling and error handling
+- Graceful degradation for network failures
+- Response validation and plausibility checking
+- Time calculation strings published directly for UI consumption
 
 #### DebugCSVLogger.swift:
 
@@ -707,34 +1009,58 @@ The `ServiceCoordinator` is responsible for determining the single, authoritativ
 
 ## Startup
 
-The coordinator runs `performCompleteStartupSequence()` in 6 sequential steps with optimized parallel execution where possible.
+The coordinator runs `performCompleteStartupSequence()` in 8 sequential steps with optimized parallel execution where possible.
 
-1.  **Step 1: Services**
+1.  **Step 1: Service Initialization (0-100ms)**
     *   The progress label is set to "Step 1: Services".
-    *   Service initialization is confirmed as complete.
+    *   AppServices dependency injection and core service instantiation
+    *   Initial property setup across all services
 
-2.  **Step 2: BLE & APRS (Parallel)**
+2.  **Step 2: BLE Connection + APRS Priming (100ms-5s) [PARALLEL]**
     *   The progress label is updated to "Step 2: BLE & APRS".
-    *   **BLE Connection**: The system waits up to 5 seconds for Bluetooth to power on and then attempts to connect to a MySondyGo device for up to 5 more seconds.
-    *   **APRS Priming**: In parallel, the `ServiceCoordinator` calls the `primeStartupData()` method to fetch the latest telemetry data.
-    *   The sequence continues when both operations complete or their respective timeouts are reached.
+    *   **BLE Connection**: MySondyGo device scanning and connection (5-second timeout)
+    *   **APRS Priming**: Initial telemetry fetch from SondeHub for station evaluation
+    *   **Location Services**: GPS activation for user positioning
+    *   Both operations run in parallel for efficiency
 
-3.  **Step 3: Telemetry**
+3.  **Step 3: First Telemetry Package (5s+)**
     *   The progress label is updated to "Step 3: Telemetry".
-    *   The system waits up to 3 seconds for the first BLE packet to establish initial telemetry availability.
+    *   Wait for first BLE packet (any type 0-3) to establish device readiness
+    *   Evaluate APRS data availability and freshness
+    *   Determine initial telemetry source preference
 
-4.  **Step 4: Data**
-    *   The progress label is updated to "Step 4: Data".
-    *   User settings, historic track data, and landing histories are loaded from `PersistenceService`.
+4.  **Step 4: State Machine Startup**
+    *   The progress label is updated to "Step 4: State Machine".
+    *   Evaluate BLE vs APRS availability and determine initial state
+    *   Transition state machine to appropriate initial state (startup → target state)
+    *   Configure prediction timers and APRS polling based on state
+    *   Apply frequency synchronization if needed
 
-5.  **Step 5: Landing Point**
-    *   The progress label is updated to "Step 5: Landing Point".
-    *   The ServiceCoordinator determines the landing point that is displayed on the map and used for route calculations.
-    It selects the most appropriate coordinate based on the balloon's current flight phase
-6.  **Step 6: Map Display**
-    *   The progress label is updated to "Step 6: Map Display".
-    *   `setupInitialMapDisplay()` is called to reveal the map, overlays, and data panel.
-    *   The startup logo is hidden, `isStartupComplete` is set to `true`, and the app transitions into its steady-state tracking mode.
+5.  **Step 5: Persistence Data Loading**
+    *   The progress label is updated to "Step 5: Loading Data".
+    *   Load balloon tracks from Core Data persistence
+    *   Load device settings and user preferences
+    *   Load landing point history from previous sessions
+
+6.  **Step 6: Landing Point Determination**
+    *   The progress label is updated to "Step 6: Landing Point".
+    *   State machine determines landing point using 4-priority system:
+        1. Live balloon position if landed (BLE landing detection)
+        2. Predicted landing position (Tawhiri API)
+        3. APRS position (age-based landing detection)
+        4. Persisted landing point from previous session
+
+7.  **Step 7: Final Map Display**
+    *   The progress label is updated to "Step 7: Map Display".
+    *   Switch from startup logo to TrackingMapView
+    *   Load all map annotations and overlays
+    *   Display main tracking interface
+
+8.  **Step 8: Startup Map Zoom**
+    *   Calculate bounding box for all map elements (user, balloon, track, predictions)
+    *   Trigger automatic camera fit to show all annotations
+    *   Mark startup as complete and ready for user interaction
+    *   Set `isStartupComplete = true` and transition to steady-state tracking mode
 
 ## Tracking View
 
@@ -1034,6 +1360,36 @@ Debugging should be according the services. It should contain
 # Appendix: 
 
 ## Messages from RadioSondyGo
+
+**MySondyGo BLE Protocol Implementation Details:**
+
+The app implements a robust BLE communication system with comprehensive message validation and error handling:
+
+**Message Parsing Strategy:**
+- All messages use forward-slash (/) delimited format
+- Message validation includes field count verification and type checking
+- Plausibility checks prevent invalid data from corrupting the system
+- Failed parsing attempts are logged with raw field data for debugging
+
+**Validation Rules:**
+- **Coordinates**: Latitude [-90, 90], Longitude [-180, 180]
+- **Altitude**: Reasonable range checks for balloon telemetry
+- **Speeds**: Horizontal ≤ 150 m/s, Vertical ≤ 100 m/s
+- **Battery**: Percentage [0, 100], Voltage [2500, 5000] mV
+- **Signal**: RSSI typically negative dBm values
+
+**Command Protocol:**
+```
+Frequency Change: o{f=403.50/tipo=1}o
+Device Configuration: o{conf}o
+Mute Control: o{mute=1}o
+```
+
+**Error Handling:**
+- Parse failures log ⚠️ warnings with field details
+- Invalid coordinates (0,0) are automatically discarded
+- Missing or malformed fields trigger graceful degradation
+- Connection timeouts use 5-second limits per startup requirements
 
 ### Type 0 (No probe received)
 

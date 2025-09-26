@@ -2,12 +2,18 @@
 claude.md
 claude*
 CLAUDE.md
+.claude/
 gemini.md
 gemini*
-.claude
+GEMINI.md
 AGENTS.md
 agents.md
 CODEX.md
+codex.md
+
+# Keep official project documentation
+!BalloonHunter/BalloonHunterAppFSD.md
+!README.md
 
 # Xcode
 *.xcuserdata
@@ -42,3 +48,11 @@ fastlane/test_output
 
 # macOS
 .DS_Store
+
+# Development artifacts
+*.xcuserstate
+xcuserdata/
+*.log
+*.txt
+default.csv
+Log*.txt

@@ -70,16 +70,8 @@ final class ServiceCoordinator: ObservableObject {
     let currentLocationService: CurrentLocationService
     let bleCommunicationService: BLECommunicationService
     
-    // Phase 3: Prediction Service (lazy to avoid retain cycle)
-    // Full-featured PredictionService with scheduling capabilities
-    lazy var predictionService: PredictionService = {
-        return PredictionService(
-            predictionCache: self.predictionCache,
-            serviceCoordinator: self,
-            userSettings: self.userSettings,
-            balloonTrackService: self.balloonTrackService
-        )
-    }()
+    // Phase 3: Prediction Service (injected from AppServices)
+    let predictionService: PredictionService
     
     // REQUIRED: Services that generate the events and manage data (injected from AppServices)
     let balloonPositionService: BalloonPositionService
@@ -174,6 +166,7 @@ final class ServiceCoordinator: ObservableObject {
         persistenceService: PersistenceService,
         predictionCache: PredictionCache,
         routingCache: RoutingCache,
+        predictionService: PredictionService,
         balloonPositionService: BalloonPositionService,
         balloonTrackService: BalloonTrackService,
         landingPointTrackingService: LandingPointTrackingService
@@ -186,15 +179,24 @@ final class ServiceCoordinator: ObservableObject {
         self.persistenceService = persistenceService
         self.predictionCache = predictionCache
         self.routingCache = routingCache
+        self.predictionService = predictionService
         self.balloonPositionService = balloonPositionService
         self.balloonTrackService = balloonTrackService
         self.landingPointTrackingService = landingPointTrackingService
+
+        // Set up circular reference for PredictionService
+        configurePredictionService()
 
         setupDirectSubscriptions()
 
         // Architecture setup complete
     }
-    
+
+    private func configurePredictionService() {
+        predictionService.setServiceCoordinator(self)
+        predictionService.configureSharedDependencies(predictionCache: predictionCache, userSettings: userSettings)
+    }
+
     func initialize() {
         appLog("========================================", category: .general, level: .info)
         // Start core services

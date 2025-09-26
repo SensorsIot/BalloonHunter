@@ -229,7 +229,20 @@ final class PredictionService: ObservableObject {
         // PredictionService initialized with scheduling
         publishHealthEvent(.healthy, message: "Prediction service initialized")
     }
-    
+
+    // MARK: - Configuration
+
+    func setServiceCoordinator(_ coordinator: ServiceCoordinator) {
+        self.serviceCoordinator = coordinator
+        appLog("PredictionService: ServiceCoordinator configured", category: .service, level: .info)
+    }
+
+    func configureSharedDependencies(predictionCache: PredictionCache, userSettings: UserSettings) {
+        // Note: In API-only mode, we can't replace the let properties, but we can work with the existing ones
+        // This method is for future enhancement if needed
+        appLog("PredictionService: Shared dependencies noted (API-only mode uses internal instances)", category: .service, level: .info)
+    }
+
     // MARK: - Service Lifecycle
     
     func startAutomaticPredictions() {

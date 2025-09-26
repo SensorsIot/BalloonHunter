@@ -402,6 +402,7 @@ struct TrackingMapView: View {
         persistenceService: mockAppServices.persistenceService,
         predictionCache: mockAppServices.predictionCache,
         routingCache: mockAppServices.routingCache,
+        predictionService: mockAppServices.predictionService,
         balloonPositionService: mockAppServices.balloonPositionService,
         balloonTrackService: mockAppServices.balloonTrackService,
         landingPointTrackingService: mockAppServices.landingPointTrackingService
@@ -409,6 +410,7 @@ struct TrackingMapView: View {
     let mockPresenter = MapPresenter(
         coordinator: mockServiceCoordinator,
         balloonTrackService: mockAppServices.balloonTrackService,
+        balloonPositionService: mockAppServices.balloonPositionService,
         landingPointTrackingService: mockAppServices.landingPointTrackingService,
         currentLocationService: mockAppServices.currentLocationService,
         aprsTelemetryService: mockAppServices.aprsTelemetryService

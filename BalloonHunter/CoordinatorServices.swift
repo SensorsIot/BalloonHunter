@@ -97,31 +97,38 @@ extension ServiceCoordinator {
         await waitForFirstBLEPackageAndPublishTelemetryStatus()
         appLog("STARTUP: Step 3 - First telemetry package processed", category: .general, level: .info)
 
-        // Step 4: Persistence Data
+        // Step 4: Wait for APRS data and complete state machine startup
         await MainActor.run {
             currentStartupStep = 4
-            startupProgress = "Step 4: Data"
+            startupProgress = "Step 4: State Machine"
         }
-        await loadAllPersistenceData()
-        appLog("STARTUP: Step 4 - Persistence data loaded", category: .general, level: .info)
+        await waitForInitialAPRSData()
+        appLog("STARTUP: Step 4 - Starting state machine with BLE and APRS sources evaluated", category: .general, level: .info)
+        balloonPositionService.completeStartup()
+        appLog("STARTUP: Step 4 - State machine startup complete", category: .general, level: .info)
 
-        // Step 5: Landing Point (APRS data available from parallel Step 2)
+        // Step 5: Persistence Data
         await MainActor.run {
             currentStartupStep = 5
-            startupProgress = "Step 5: Landing Point"
+            startupProgress = "Step 5: Data"
         }
-        appLog("STARTUP: Step 5 - Landing point provided by BalloonTrackService/persistence", category: .general, level: .info)
+        await loadAllPersistenceData()
+        appLog("STARTUP: Step 5 - Persistence data loaded", category: .general, level: .info)
 
-        // Step 6: Final Map Display
+        // Step 6: Landing Point (state machine now provides landing detection)
         await MainActor.run {
             currentStartupStep = 6
-            startupProgress = "Step 6: Map Display"
+            startupProgress = "Step 6: Landing Point"
+        }
+        appLog("STARTUP: Step 6 - Landing point determined by state machine", category: .general, level: .info)
+
+        // Step 7: Final Map Display
+        await MainActor.run {
+            currentStartupStep = 7
+            startupProgress = "Step 7: Map Display"
         }
         await setupInitialMapDisplay()
-        appLog("STARTUP: Step 6 - Final map display complete", category: .general, level: .info)
-
-        // Complete telemetry state machine startup with all parameters populated
-        balloonPositionService.completeStartup()
+        appLog("STARTUP: Step 7 - Final map display complete", category: .general, level: .info)
 
         // Mark startup as complete (automatic frequency sync now handled by BalloonPositionService)
         let totalTime = Date().timeIntervalSince(startTime)
@@ -239,17 +246,34 @@ extension ServiceCoordinator {
         // TrackingMapView will call updateCameraToShowAllAnnotations() when map camera initializes
     }
 
-    /// Prime APRS startup data (Step 2 of startup sequence)
+    /// Start APRS service immediately during startup (Step 2 of startup sequence)
     private func primeAPRSStartupData() async {
-        appLog("STARTUP: Step 2 - Priming APRS startup data", category: .general, level: .info)
+        appLog("STARTUP: Step 2 - Starting APRS service for immediate telemetry", category: .general, level: .info)
 
-        // Access APRS service through BalloonPositionService
-        await balloonPositionService.aprsService.primeStartupData()
+        // Start APRS polling immediately - no separate priming step
+        balloonPositionService.aprsService.startPolling()
 
-        // Trigger state evaluation after priming to enable APRS fallback if needed
-        balloonPositionService.triggerStateEvaluation()
+        appLog("STARTUP: Step 2 - APRS service started (will wait for data before state machine)", category: .general, level: .info)
+    }
 
-        appLog("STARTUP: Step 2 - APRS startup priming complete", category: .general, level: .info)
+    /// Wait for initial APRS data before completing state machine startup
+    private func waitForInitialAPRSData() async {
+        appLog("STARTUP: Waiting for initial APRS data before state machine completion", category: .general, level: .info)
+
+        // Wait up to 3 seconds for first APRS data to arrive
+        let timeout = Date().addingTimeInterval(3.0)
+
+        while Date() < timeout {
+            // Check if APRS has provided any telemetry data
+            if balloonPositionService.aprsService.latestTelemetry != nil {
+                appLog("STARTUP: Initial APRS data received - proceeding with state machine", category: .general, level: .info)
+                return
+            }
+
+            try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 second checks
+        }
+
+        appLog("STARTUP: No APRS data within timeout - proceeding with state machine", category: .general, level: .info)
     }
 
 

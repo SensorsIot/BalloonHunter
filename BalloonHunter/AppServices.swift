@@ -22,6 +22,7 @@ final class AppServices: ObservableObject {
     let currentLocationService: CurrentLocationService
     
     // MARK: - Specialized Services
+    let predictionService: PredictionService
     let balloonPositionService: BalloonPositionService
     let balloonTrackService: BalloonTrackService
     let landingPointTrackingService: LandingPointTrackingService
@@ -43,14 +44,18 @@ final class AppServices: ObservableObject {
         self.bleCommunicationService = BLECommunicationService(persistenceService: persistenceService)
         self.aprsTelemetryService = APRSTelemetryService(userSettings: userSettings)
         self.currentLocationService = CurrentLocationService()
-        
-        // 3. Initialize specialized services
+
+        // 3. Initialize prediction service in API-only mode initially
+        self.predictionService = PredictionService()
+
+        // 4. Initialize specialized services
         self.balloonPositionService = BalloonPositionService(bleService: bleCommunicationService,
                                                              aprsService: aprsTelemetryService,
                                                              currentLocationService: currentLocationService,
-                                                             persistenceService: persistenceService)
+                                                             persistenceService: persistenceService,
+                                                             predictionService: predictionService)
         self.balloonTrackService = BalloonTrackService(
-            persistenceService: persistenceService, 
+            persistenceService: persistenceService,
             balloonPositionService: balloonPositionService
         )
         self.landingPointTrackingService = LandingPointTrackingService(
@@ -58,9 +63,7 @@ final class AppServices: ObservableObject {
             balloonTrackService: balloonTrackService
         )
         // LandingPointService and RouteCalculationService creation moved to ServiceCoordinator
-        
-        // 4. Service coordination handled by ServiceCoordinator
-        
+
         // 5. Set up inter-service communication
         balloonPositionService.setBalloonTrackService(balloonTrackService)
 

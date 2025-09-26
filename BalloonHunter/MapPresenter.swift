@@ -38,6 +38,7 @@ final class MapPresenter: ObservableObject {
 
     private let coordinator: ServiceCoordinator
     private let balloonTrackService: BalloonTrackService
+    private let balloonPositionService: BalloonPositionService
     private let landingPointTrackingService: LandingPointTrackingService
     private let currentLocationService: CurrentLocationService
     private let aprsTelemetryService: APRSTelemetryService
@@ -47,12 +48,14 @@ final class MapPresenter: ObservableObject {
     init(
         coordinator: ServiceCoordinator,
         balloonTrackService: BalloonTrackService,
+        balloonPositionService: BalloonPositionService,
         landingPointTrackingService: LandingPointTrackingService,
         currentLocationService: CurrentLocationService,
         aprsTelemetryService: APRSTelemetryService
     ) {
         self.coordinator = coordinator
         self.balloonTrackService = balloonTrackService
+        self.balloonPositionService = balloonPositionService
         self.landingPointTrackingService = landingPointTrackingService
         self.currentLocationService = currentLocationService
         self.aprsTelemetryService = aprsTelemetryService
@@ -165,7 +168,7 @@ final class MapPresenter: ObservableObject {
             }
             .store(in: &cancellables)
 
-        coordinator.$landingPoint
+        balloonPositionService.$landingPoint
             .sink { [weak self] point in
                 self?.landingPoint = point
                 self?.refreshAnnotations()

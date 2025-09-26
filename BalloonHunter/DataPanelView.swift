@@ -259,6 +259,7 @@ struct DataPanelView: View {
         persistenceService: mockAppServices.persistenceService,
         predictionCache: mockAppServices.predictionCache,
         routingCache: mockAppServices.routingCache,
+        predictionService: mockAppServices.predictionService,
         balloonPositionService: mockAppServices.balloonPositionService,
         balloonTrackService: mockAppServices.balloonTrackService,
         landingPointTrackingService: mockAppServices.landingPointTrackingService

@@ -266,11 +266,7 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
         }
         
         // Periodic diagnostic timer to help debug BLE issues
-        Timer.scheduledTimer(withTimeInterval: 10.0, repeats: true) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                self?.printBLEDiagnostics()
-            }
-        }
+        // Removed: BLE diagnostics timer - state logging moved to state machine
         
         // BLE service initialized (logged at AppServices level)
         publishHealthEvent(.healthy, message: "BLE service initialized")
@@ -1251,10 +1247,7 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
         }
     }
     
-    /// Debug method to print current BLE state (production mode - essential info only)
-    func printBLEDiagnostics() {
-        appLog("BLE: State=\(bluetoothStateString(centralManager.state)) Status=\(connectionStatus) TelemetryState=\(telemetryState)", category: .ble, level: .info)
-    }
+    // Removed: printBLEDiagnostics - state information now logged in state machine transitions
     
     // Helper function to convert probe type integer to string
     private func convertProbeTypeIntToString(_ probeTypeInt: Int) -> String {
