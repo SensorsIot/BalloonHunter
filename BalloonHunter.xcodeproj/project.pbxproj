@@ -7,7 +7,6 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		473FAF832E4B0F5E00D53910 /* BalloonHunter.xcdatamodeld in Sources */ = {isa = PBXBuildFile; fileRef = 473FAF812E4B0F5E00D53910 /* BalloonHunter.xcdatamodeld */; };
 		A7F0E0012E5C000000000001 /* BalloonHunterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7F0DFF32E5BFFFF00000001 /* BalloonHunterTests.swift */; };
 		A7F0E0022E5C000000000001 /* PredictionCacheTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7F0DFF42E5BFFFF00000001 /* PredictionCacheTests.swift */; };
 		A7F0E0032E5C000000000001 /* BLEDeviceSettingsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7F0DFF52E5BFFFF00000001 /* BLEDeviceSettingsTests.swift */; };
@@ -91,7 +90,6 @@
 		477118042E3B511A00C79172 = {
 			isa = PBXGroup;
 			children = (
-				473FAF812E4B0F5E00D53910 /* BalloonHunter.xcdatamodeld */,
 				4771180F2E3B511A00C79172 /* BalloonHunter */,
 				A7F0DFF62E5BFFFF00000001 /* BalloonHunterTests */,
 				A7F0E01A2E5C000500000001 /* BalloonHunterUITests */,
@@ -253,7 +251,6 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				473FAF832E4B0F5E00D53910 /* BalloonHunter.xcdatamodeld in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -632,18 +629,6 @@
 		};
 /* End XCConfigurationList section */
 
-/* Begin XCVersionGroup section */
-		473FAF812E4B0F5E00D53910 /* BalloonHunter.xcdatamodeld */ = {
-			isa = XCVersionGroup;
-			children = (
-				473FAF822E4B0F5E00D53910 /* BalloonHunter.xcdatamodel */,
-			);
-			currentVersion = 473FAF822E4B0F5E00D53910 /* BalloonHunter.xcdatamodel */;
-			path = BalloonHunter.xcdatamodeld;
-			sourceTree = "<group>";
-			versionGroupType = wrapper.xcdatamodel;
-		};
-/* End XCVersionGroup section */
 	};
 	rootObject = 477118052E3B511A00C79172 /* Project object */;
 }

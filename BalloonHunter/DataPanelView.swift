@@ -58,10 +58,12 @@ struct DataPanelView: View {
                     }
                     // Row 2: Vertical speed, Horizontal speed, Distance
                     GridRow {
-                        Text("V: \(String(format: "%.1f", balloonTrackService.motionMetrics.smoothedVerticalSpeedMS)) m/s")
+                        let verticalSpeed = balloonPositionService.balloonPhase == .landed ? 0.0 : balloonTrackService.motionMetrics.smoothedVerticalSpeedMS
+                        let horizontalSpeed = balloonPositionService.balloonPhase == .landed ? 0.0 : balloonTrackService.motionMetrics.smoothedHorizontalSpeedMS * 3.6
+                        Text("V: \(String(format: "%.1f", verticalSpeed)) m/s")
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .foregroundColor(balloonTrackService.motionMetrics.smoothedVerticalSpeedMS >= 0 ? .green : .red)
-                        Text("H: \(String(format: "%.1f", balloonTrackService.motionMetrics.smoothedHorizontalSpeedMS * 3.6)) km/h")
+                            .foregroundColor(verticalSpeed >= 0 ? .green : .red)
+                        Text("H: \(String(format: "%.1f", horizontalSpeed)) km/h")
                             .frame(maxWidth: .infinity, alignment: .leading)
                         Text("Dist: \(distanceString) km")
                             .frame(maxWidth: .infinity, alignment: .leading)
