@@ -357,24 +357,33 @@ final class PredictionService: ObservableObject {
     }
     
     private func calculateEffectiveDescentRate(telemetry: TelemetryData) -> Double {
-        let isDescending = telemetry.verticalSpeed < 0
-        if telemetry.altitude < 10000,
-           let smoothedRate = serviceCoordinator?.smoothedDescentRate,
-           smoothedRate != 0,
-           isDescending {
+        guard let serviceCoordinator = serviceCoordinator else {
+            let val = userSettings.descentRate
+            appLog("PredictionService: Using settings descent rate: \(String(format: "%.2f", val)) m/s (no service coordinator)", category: .service, level: .info)
+            return val
+        }
+
+        let balloonPhase = serviceCoordinator.balloonPositionService.balloonPhase
+
+        // Use smoothed descent rate only when descending below 10k with valid smoothed data
+        if balloonPhase == .descendingBelow10k,
+           let smoothedRate = serviceCoordinator.smoothedDescentRate,
+           smoothedRate != 0 {
             let val = abs(smoothedRate)
-            appLog("PredictionService: Using smoothed descent rate: \(String(format: "%.2f", val)) m/s (below 10000m)", category: .service, level: .info)
+            appLog("PredictionService: Using smoothed descent rate: \(String(format: "%.2f", val)) m/s (descendingBelow10k)", category: .service, level: .info)
             Task { @MainActor in
-                self.serviceCoordinator?.predictionUsesSmoothedDescent = true
+                serviceCoordinator.predictionUsesSmoothedDescent = true
             }
             return val
         } else {
             let val = userSettings.descentRate
-            if isDescending {
-                appLog("PredictionService: Using settings descent rate: \(String(format: "%.2f", val)) m/s (above 10000m or no smoothed rate)", category: .service, level: .info)
-            }
+            let reason = balloonPhase == .descendingAbove10k ? "descendingAbove10k" :
+                        balloonPhase == .ascending ? "ascending" :
+                        balloonPhase == .landed ? "landed" :
+                        balloonPhase == .unknown ? "unknown" : "no smoothed rate"
+            appLog("PredictionService: Using settings descent rate: \(String(format: "%.2f", val)) m/s (\(reason))", category: .service, level: .info)
             Task { @MainActor in
-                self.serviceCoordinator?.predictionUsesSmoothedDescent = false
+                serviceCoordinator.predictionUsesSmoothedDescent = false
             }
             return val
         }
