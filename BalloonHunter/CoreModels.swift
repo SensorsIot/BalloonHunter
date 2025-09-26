@@ -24,6 +24,25 @@ enum TelemetrySource: String, Codable {
     case aprs
 }
 
+enum BLETelemetryState: String, Codable, CaseIterable {
+    case BLEnotconnected = "BLEnotconnected"
+    case readyForCommands = "readyForCommands"
+    case BLEtelemetryIsReady = "BLEtelemetryIsReady"
+
+    // Computed properties for cleaner UI bindings
+    var isConnected: Bool {
+        return self != .BLEnotconnected
+    }
+
+    var canReceiveCommands: Bool {
+        return self == .readyForCommands || self == .BLEtelemetryIsReady
+    }
+
+    var hasTelemetry: Bool {
+        return self == .BLEtelemetryIsReady
+    }
+}
+
 struct TelemetryData {
     var sondeName: String = ""
     var probeType: String = ""
@@ -41,6 +60,7 @@ struct TelemetryData {
     var batteryPercentage: Int = 0
     var signalStrength: Int = 0
     var timestamp: Date = Date()
+    var apiCallTimestamp: Date? = nil
     var buzmute: Bool = false
     var afcFrequency: Int = 0
     var burstKillerEnabled: Bool = false

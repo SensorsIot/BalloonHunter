@@ -22,14 +22,14 @@ Manages Bluetooth communication with **MySondyGo** devices.
 ---
 
 ### Data Published
-- `@Published var telemetryAvailabilityState: Bool` — Whether telemetry is available  
-- `@Published var latestTelemetry: TelemetryData?` — Latest parsed telemetry  
-- `@Published var deviceSettings: DeviceSettings` — MySondyGo device configuration  
-- `@Published var connectionStatus: ConnectionStatus` — `.connected`, `.disconnected`, `.connecting`  
-- `@Published var lastMessageType: String?` — `"0"`, `"1"`, `"2"`, `"3"`  
-- `PassthroughSubject<TelemetryData, Never>()` — Real-time telemetry stream  
-- `@Published var lastTelemetryUpdateTime: Date?` — Last update timestamp  
-- `@Published var isReadyForCommands: Bool` — Whether the device can receive commands
+- `@Published var telemetryState: BLETelemetryState` — Unified BLE telemetry state (.BLEnotconnected, .readyForCommands, .BLEtelemetryIsReady)
+- `@Published var latestTelemetry: TelemetryData?` — Latest parsed telemetry
+- `@Published var deviceSettings: DeviceSettings` — MySondyGo device configuration
+- `@Published var connectionStatus: ConnectionStatus` — `.connected`, `.disconnected`, `.connecting`
+- `@Published var lastMessageType: String?` — `"0"`, `"1"`, `"2"`, `"3"`
+- `PassthroughSubject<TelemetryData, Never>()` — Real-time telemetry stream
+- `@Published var lastTelemetryUpdateTime: Date?` — Last update timestamp
+- `@Published var lastMessageTimestamp: Date?` — Last message receipt timestamp
 
 ---
 
@@ -243,7 +243,9 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
     var lastMessageType: String? = nil
     @Published var telemetryData = PassthroughSubject<TelemetryData, Never>()
     var lastTelemetryUpdateTime: Date? = nil
-    @Published var isReadyForCommands = false
+    // Unified telemetry state
+    @Published var telemetryState: BLETelemetryState = .BLEnotconnected
+    @Published var lastMessageTimestamp: Date? = nil
     let centralManagerPoweredOn = PassthroughSubject<Void, Never>()
 
     
@@ -287,6 +289,12 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
             reason = "No telemetry ever received"
         }
 
+        // Update telemetry state based on staleness
+        if !isAvailable && telemetryState == .BLEtelemetryIsReady {
+            telemetryState = .readyForCommands
+            appLog("BLECommunicationService: Telemetry state downgraded due to staleness: \(reason)", category: .ble, level: .info)
+        }
+
         // Log telemetry availability changes only when status changes
         if previousTelemetryAvailable != isAvailable {
             appLog("BLECommunicationService: Telemetry \(isAvailable ? "GAINED" : "LOST"): \(reason)", category: .ble, level: .info)
@@ -305,6 +313,8 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
         case .poweredOff:
             appLog("BLE: Bluetooth is powered off - please enable Bluetooth in Settings", category: .ble, level: .error)
             connectionStatus = .disconnected
+            telemetryState = .BLEnotconnected
+            lastMessageTimestamp = Date()
             publishHealthEvent(.unhealthy("Bluetooth powered off"), message: "Bluetooth powered off")
         case .resetting:
             appLog("BLE: Bluetooth is resetting - waiting for completion", category: .ble, level: .info)
@@ -377,9 +387,11 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
         let deviceName = peripheral.name ?? "Unknown"
         appLog("🟢 BLE: SUCCESSFULLY CONNECTED to \(deviceName)", category: .ble, level: .info)
         // Connection established
-        
+
         connectionStatus = .connected
-        
+        // telemetryState remains .BLEnotconnected until first packet received
+        lastMessageTimestamp = Date()
+
         // Starting service discovery
         peripheral.discoverServices([UART_SERVICE_UUID])
         publishHealthEvent(.healthy, message: "BLE connected successfully")
@@ -392,6 +404,8 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
         appLog("🔴 BLE: Connection error: \(errorMessage)", category: .ble, level: .error)
         
         connectionStatus = .disconnected
+        telemetryState = .BLEnotconnected
+        lastMessageTimestamp = Date()
         publishHealthEvent(.unhealthy("BLE connection failed: \(errorMessage)"), message: "BLE connection failed: \(errorMessage)")
     }
 
@@ -409,7 +423,8 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
         // Disconnected
         
         connectionStatus = .disconnected
-        isReadyForCommands = false
+        telemetryState = .BLEnotconnected
+        lastMessageTimestamp = Date()
         publishHealthEvent(.degraded("BLE disconnected"), message: "BLE disconnected")
         
         // Auto-reconnect if disconnected unexpectedly
@@ -489,7 +504,7 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
 
         // Check if we have both characteristics configured
         if writeCharacteristic != nil {
-            // Note: isReadyForCommands will be set when first valid BLE packet is received
+            // Note: telemetryState will be updated when first valid BLE packet is received
             appLog("🟢 BLE: TX characteristic configured - waiting for first BLE packet", category: .ble, level: .info)
             publishHealthEvent(.healthy, message: "BLE characteristics configured")
             
@@ -562,11 +577,19 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
             self.lastMessageType = messageType
         }
         
-        // Set isReadyForCommands when first valid BLE packet is received
-        if !isReadyForCommands {
-            isReadyForCommands = true
+        // Update telemetry state based on packet type and current state
+        lastMessageTimestamp = Date()
+
+        if telemetryState == .BLEnotconnected {
+            telemetryState = .readyForCommands
             appLog("🟢 BLE: Ready for commands - first valid BLE packet received (Type \(messageType))", category: .ble, level: .info)
             publishHealthEvent(.healthy, message: "BLE ready for commands")
+        }
+
+        // Upgrade to telemetry ready if this is a Type 1 (telemetry) packet
+        if messageType == "1" && telemetryState == .readyForCommands {
+            telemetryState = .BLEtelemetryIsReady
+            appLog("🟢 BLE: Telemetry ready - Type 1 packet received", category: .ble, level: .info)
         }
         
         // Check if this is the first packet and publish telemetry availability event
@@ -1135,7 +1158,7 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
     }
 
     func sendCommand(command: String) {
-        if !isReadyForCommands {
+        if !telemetryState.canReceiveCommands {
             return
         }
         guard let peripheral = connectedPeripheral else {
@@ -1230,7 +1253,7 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
     
     /// Debug method to print current BLE state (production mode - essential info only)
     func printBLEDiagnostics() {
-        appLog("BLE: State=\(bluetoothStateString(centralManager.state)) Status=\(connectionStatus) Ready=\(isReadyForCommands)", category: .ble, level: .info)
+        appLog("BLE: State=\(bluetoothStateString(centralManager.state)) Status=\(connectionStatus) TelemetryState=\(telemetryState)", category: .ble, level: .info)
     }
     
     // Helper function to convert probe type integer to string

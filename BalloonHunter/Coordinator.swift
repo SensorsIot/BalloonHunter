@@ -46,9 +46,7 @@ final class ServiceCoordinator: ObservableObject {
     // AFC tracking (moved from SettingsView for proper separation of concerns)
     @Published var afcFrequencies: [Int] = []
     @Published var afcMovingAverage: Int = 0
-    @Published var bleTelemetryIsAvailable: Bool = false
     @Published var aprsTelemetryIsAvailable: Bool = false
-    // Frequency sync prompt removed - automatic sync handles everything
 
     // Startup sequence state
     @Published var startupProgress: String = "Initializing services..."
@@ -194,8 +192,6 @@ final class ServiceCoordinator: ObservableObject {
 
         setupDirectSubscriptions()
 
-        // Removed: lastLandingPrediction subscription - no longer using persisted landing points as fallback
-
         // Architecture setup complete
     }
     
@@ -269,11 +265,11 @@ final class ServiceCoordinator: ObservableObject {
         
         // Try to establish connection with 5-second timeout as per revised FSD
         let connectionTimeout = Date().addingTimeInterval(5) // 5 seconds to find and connect
-        while !bleCommunicationService.isReadyForCommands && Date() < connectionTimeout {
+        while !bleCommunicationService.telemetryState.canReceiveCommands && Date() < connectionTimeout {
             try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 second checks
         }
         
-        if bleCommunicationService.isReadyForCommands {
+        if bleCommunicationService.telemetryState.canReceiveCommands {
             appLog("ServiceCoordinator: Connection established, ready for commands", category: .general, level: .info)
             return (connected: true, hasMessage: true)
         } else {
@@ -373,10 +369,6 @@ final class ServiceCoordinator: ObservableObject {
             }
             .store(in: &cancellables)
 
-        balloonPositionService.$bleTelemetryIsAvailable
-            .receive(on: DispatchQueue.main)
-            .assign(to: &self.$bleTelemetryIsAvailable)
-
         balloonPositionService.$aprsTelemetryIsAvailable
             .receive(on: DispatchQueue.main)
             .assign(to: &self.$aprsTelemetryIsAvailable)
@@ -420,10 +412,10 @@ final class ServiceCoordinator: ObservableObject {
 
         // Frequency sync scenarios per FSD requirements
         // Scenario 2: RadioSondyGo connects when APRS data already available - sync immediately
-        bleCommunicationService.$isReadyForCommands
+        bleCommunicationService.$telemetryState
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] isReady in
-                if isReady {
+            .sink { [weak self] bleTelemetryState in
+                if bleTelemetryState.canReceiveCommands {
                     self?.handleBLEConnectionWithAPRSSync()
                 }
             }

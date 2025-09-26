@@ -140,12 +140,10 @@ extension ServiceCoordinator {
         appLog("STARTUP: Complete ✅ Ready for tracking (\(String(format: "%.1f", totalTime))s total)", category: .general, level: .info)
     }
     
-    // MARK: - Startup Step Execution Helper (removed - using consolidated logging)
     
     // MARK: - Step 2: BLE Connection
     
     private func startBLEConnectionWithTimeout() async -> (connected: Bool, hasMessage: Bool) {
-        // Step 2: Starting BLE connection (log removed)
         
         // Wait for Bluetooth to be powered on (reasonable timeout)
         let bluetoothTimeout = Date().addingTimeInterval(5) // 5 seconds for Bluetooth
@@ -164,11 +162,11 @@ extension ServiceCoordinator {
         
         // Try to establish connection with 5-second timeout
         let connectionTimeout = Date().addingTimeInterval(5) // 5 seconds to find and connect
-        while !bleCommunicationService.isReadyForCommands && Date() < connectionTimeout {
+        while !bleCommunicationService.telemetryState.canReceiveCommands && Date() < connectionTimeout {
             try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 second checks
         }
         
-        if bleCommunicationService.isReadyForCommands {
+        if bleCommunicationService.telemetryState.canReceiveCommands {
             // BLE connection established
             return (connected: true, hasMessage: true)
         } else {

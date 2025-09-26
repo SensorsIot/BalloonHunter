@@ -59,10 +59,14 @@ final class APRSTelemetryService: ObservableObject {
     // MARK: - Constants
     private static let sondeHubBaseURL = "https://api.v2.sondehub.org"
     private static let fastPollInterval: TimeInterval = 15.0
-    private static let landedThreshold: TimeInterval = 120.0
-    private static let landedConfirmationWindow: TimeInterval = 1_800.0
+    private static let slowPollInterval: TimeInterval = 60.0
     private static let landedConfirmationInterval: TimeInterval = 300.0
+    private static let verySlowPollInterval: TimeInterval = 3600.0  // 1 hour
     private static let apiTimeout: TimeInterval = 30.0
+
+    // Polling thresholds
+    private static let freshDataThreshold: TimeInterval = 120.0  // 2 minutes - fresh data
+    private static let staleDataThreshold: TimeInterval = 1800.0 // 30 minutes - very slow polling
 
     init(userSettings: UserSettings) {
         self.userSettings = userSettings
@@ -203,26 +207,28 @@ final class APRSTelemetryService: ObservableObject {
         }
     }
 
+    private func adjustPollingCadenceForAPIEfficiency(telemetryAge: TimeInterval) {
+        guard isPollingActive else { return }
+
+        // Adjust polling frequency based on data freshness (API efficiency only)
+        if telemetryAge <= Self.freshDataThreshold {
+            // Fresh data - poll frequently
+            updatePollingInterval(Self.fastPollInterval)
+        } else if telemetryAge <= Self.staleDataThreshold {
+            // Stale data - poll less frequently to confirm landing
+            updatePollingInterval(Self.landedConfirmationInterval)
+        } else {
+            // Very old data - poll once per hour to check for recovery
+            updatePollingInterval(Self.verySlowPollInterval)
+        }
+    }
+
     private func updatePollingInterval(_ interval: TimeInterval) {
         guard pollCadence != interval else { return }
         pollCadence = interval
         if isPollingActive {
-            appLog("APRSTelemetryService: Adjusting polling interval to \(Int(interval))s", category: .service, level: .debug)
+            appLog("APRSTelemetryService: Adjusting polling interval to \(Int(interval))s for API efficiency", category: .service, level: .debug)
             startPollingTimer()
-        }
-    }
-
-    private func adjustPollingCadence(for telemetry: TelemetryData) {
-        guard isPollingActive else { return }
-        let age = Date().timeIntervalSince(telemetry.timestamp)
-
-        if age <= Self.landedThreshold {
-            updatePollingInterval(Self.fastPollInterval)
-        } else if age <= Self.landedConfirmationWindow {
-            updatePollingInterval(Self.landedConfirmationInterval)
-        } else {
-            appLog("APRSTelemetryService: APRS data older than 30 minutes — stopping polling", category: .service, level: .info)
-            stopPolling()
         }
     }
 
@@ -253,7 +259,11 @@ final class APRSTelemetryService: ObservableObject {
 
             appLog("APRSTelemetryService: Published telemetry for sonde \(latestSonde.serial) at \(String(format: "%.5f, %.5f", latestSonde.lat, latestSonde.lon))", category: .service, level: .info)
 
-            adjustPollingCadence(for: telemetryData)
+            // Adjust polling frequency for API efficiency
+            let telemetryAge = Date().timeIntervalSince(telemetryData.timestamp)
+            adjustPollingCadenceForAPIEfficiency(telemetryAge: telemetryAge)
+
+            connectionStatus = .connected
 
         } catch APRSError.invalidPayload {
             appLog("APRSTelemetryService: Ignoring incomplete telemetry payload", category: .service, level: .info)
@@ -363,13 +373,14 @@ final class APRSTelemetryService: ObservableObject {
         telemetry.burstKillerTime = 0
         telemetry.softwareVersion = "APRS"
 
-        // Timestamp
+        // Timestamps: balloon transmission time and API call time
         if let timestamp = parseISO8601Date(sonde.datetime) {
             telemetry.timestamp = timestamp
         } else {
             telemetry.timestamp = Date()
             appLog("APRSTelemetryService: Failed to parse timestamp '\(sonde.datetime)', using current time", category: .service, level: .error)
         }
+        telemetry.apiCallTimestamp = Date()
 
         return telemetry
     }

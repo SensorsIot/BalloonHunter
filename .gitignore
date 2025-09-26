@@ -1,7 +1,44 @@
+# AI Assistant Files
 claude.md
 claude*
+CLAUDE.md
 gemini.md
 gemini*
 .claude
 AGENTS.md
+agents.md
 CODEX.md
+
+# Xcode
+*.xcuserdata
+*.xcuserdatad
+DerivedData/
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# Build Products
+build/
+*.pbxuser
+*.mode1v3
+*.mode2v3
+*.perspectivev3
+xcuserdata/
+
+# CocoaPods
+Pods/
+*.xcworkspace
+
+# Swift Package Manager
+.swiftpm/
+.build/
+
+# Fastlane
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots
+fastlane/test_output
+
+# macOS
+.DS_Store

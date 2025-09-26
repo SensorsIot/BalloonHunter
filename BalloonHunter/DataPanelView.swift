@@ -14,7 +14,6 @@ struct DataPanelView: View {
 
     var body: some View {
         GeometryReader { geometry in // Added GeometryReader
-            let _ : CGFloat = 120 // Column width no longer needed after FSD restructure
 
             VStack {
                 // Table 1: 5 columns - Connected, Flight Status, Sonde Type, Sonde Name, Altitude
@@ -220,7 +219,7 @@ struct DataPanelView: View {
             return ("globe.americas.fill", .orange)
         }
         // No telemetry - show BLE connection status
-        if bleService.connectionStatus == .connected {
+        if bleService.telemetryState.isConnected {
             return ("antenna.radiowaves.left.and.right", .gray)
         }
         return ("antenna.radiowaves.left.and.right.slash", .red)
