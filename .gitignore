@@ -56,3 +56,9 @@ xcuserdata/
 *.txt
 default.csv
 Log*.txt
+
+# CI/Testing Infrastructure (removed - using Xcode directly)
+.github/
+scripts/ci*
+*.yml
+*.yaml
