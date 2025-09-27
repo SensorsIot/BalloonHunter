@@ -4,8 +4,9 @@ import OSLog
 import Foundation
 
 struct DataPanelView: View {
-    // MapState eliminated - ServiceCoordinator now holds all state
+    // UI state now provided by MapPresenter, app flow by ServiceCoordinator
     @EnvironmentObject var serviceCoordinator: ServiceCoordinator
+    @EnvironmentObject var mapPresenter: MapPresenter
     @EnvironmentObject var predictionService: PredictionService
     @EnvironmentObject var userSettings: UserSettings
     @EnvironmentObject var bleService: BLECommunicationService
@@ -80,7 +81,7 @@ struct DataPanelView: View {
                     }
                     // Row 4: Adjusted descent rate (per FSD requirement) - spans all 3 columns
                     GridRow {
-                        let descentRate = serviceCoordinator.smoothedDescentRate
+                        let descentRate = mapPresenter.smoothedDescentRate
                         let descentValue: String = {
                             if balloonPositionService.balloonPhase == .ascending {
                                 return "0.0"
@@ -91,7 +92,7 @@ struct DataPanelView: View {
                         let burstKillerExpiry = burstKillerExpiryString()
                         HStack(spacing: 0) {
                             Text("Descent Rate: \(descentValue) m/s")
-                                .foregroundColor(serviceCoordinator.smoothenedPredictionActive ? .green : .primary)
+                                .foregroundColor(mapPresenter.smoothenedPredictionActive ? .green : .primary)
                             Text("  •  Burst killer: \(burstKillerExpiry)")
                                 .foregroundColor(.primary)
                         }

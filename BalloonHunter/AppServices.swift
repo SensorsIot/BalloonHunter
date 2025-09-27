@@ -75,6 +75,11 @@ final class AppServices: ObservableObject {
         // 5. Set up inter-service communication
         balloonPositionService.setBalloonTrackService(balloonTrackService)
 
+        // NEW: Set up service chain dependencies
+        predictionService.setLandingPointTrackingService(landingPointTrackingService)
+        balloonPositionService.setLandingPointTrackingService(landingPointTrackingService)
+        landingPointTrackingService.setRouteCalculationService(routeCalculationService)
+
     }
     
     // MARK: - Service Lifecycle

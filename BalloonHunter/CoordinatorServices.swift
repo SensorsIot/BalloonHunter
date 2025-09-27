@@ -137,12 +137,11 @@ extension ServiceCoordinator {
             showTrackingMap = true
         }
 
-        // Brief delay to ensure map is ready before triggering zoom
+        // Brief delay to ensure services are fully initialized
         try? await Task.sleep(nanoseconds: 300_000_000) // 0.3 seconds
 
-        // Step 8: Trigger final map zoom to show all overlays
-        triggerStartupMapZoom()
-        appLog("STARTUP: Step 8 - Startup map zoom triggered", category: .general, level: .info)
+        // Step 8: Startup complete - UI handles its own map zoom initialization
+        appLog("STARTUP: Step 8 - Service startup complete, UI handles map initialization", category: .general, level: .info)
 
         appLog("STARTUP: Complete ✅ Ready for tracking (\(String(format: "%.1f", totalTime))s total)", category: .general, level: .info)
     }

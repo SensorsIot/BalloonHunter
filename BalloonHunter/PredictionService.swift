@@ -165,6 +165,7 @@ final class PredictionService: ObservableObject {
     private let userSettings: UserSettings
     private let balloonTrackService: BalloonTrackService?
     private weak var balloonPositionService: BalloonPositionService?
+    private weak var landingPointTrackingService: LandingPointTrackingService?
     
     // MARK: - Published State
     var isRunning: Bool = false
@@ -203,6 +204,7 @@ final class PredictionService: ObservableObject {
         self.serviceCoordinator = nil // Will be set later to avoid circular dependency
         self.balloonTrackService = nil // Will be set later if needed
         self.balloonPositionService = nil // Will be set later to avoid circular dependency
+        self.landingPointTrackingService = nil // Will be set later for service chain
 
         // PredictionService initialized with shared dependencies
         publishHealthEvent(.healthy, message: "Prediction service initialized with shared dependencies")
@@ -226,6 +228,8 @@ final class PredictionService: ObservableObject {
         self.serviceCoordinator = serviceCoordinator
         self.userSettings = userSettings
         self.balloonTrackService = balloonTrackService
+        self.balloonPositionService = nil // Will be set later to avoid circular dependency
+        self.landingPointTrackingService = nil // Will be set later for service chain
         
         // PredictionService initialized with scheduling
         publishHealthEvent(.healthy, message: "Prediction service initialized")
@@ -241,6 +245,11 @@ final class PredictionService: ObservableObject {
     func setBalloonPositionService(_ service: BalloonPositionService) {
         self.balloonPositionService = service
         appLog("PredictionService: BalloonPositionService configured", category: .service, level: .info)
+    }
+
+    func setLandingPointTrackingService(_ service: LandingPointTrackingService) {
+        self.landingPointTrackingService = service
+        appLog("PredictionService: LandingPointTrackingService configured for service chain", category: .service, level: .info)
     }
 
 
@@ -375,13 +384,11 @@ final class PredictionService: ObservableObject {
 
         // Use smoothed descent rate only when descending below 10k with valid smoothed data
         if balloonPhase == .descendingBelow10k,
-           let smoothedRate = serviceCoordinator.smoothedDescentRate,
+           let balloonTrackService = balloonTrackService,
+           let smoothedRate = balloonTrackService.motionMetrics.adjustedDescentRateMS,
            smoothedRate != 0 {
             let val = abs(smoothedRate)
             appLog("PredictionService: Using smoothed descent rate: \(String(format: "%.2f", val)) m/s (descendingBelow10k)", category: .service, level: .info)
-            Task { @MainActor in
-                serviceCoordinator.smoothenedPredictionActive = true
-            }
             return val
         } else {
             let val = userSettings.descentRate
@@ -390,9 +397,6 @@ final class PredictionService: ObservableObject {
                         balloonPhase == .landed ? "landed" :
                         balloonPhase == .unknown ? "unknown" : "no smoothed rate"
             appLog("PredictionService: Using settings descent rate: \(String(format: "%.2f", val)) m/s (\(reason))", category: .service, level: .info)
-            Task { @MainActor in
-                serviceCoordinator.smoothenedPredictionActive = false
-            }
             return val
         }
     }
@@ -416,15 +420,11 @@ final class PredictionService: ObservableObject {
         
         appLog("PredictionService: Prediction completed successfully from \(trigger)", category: .service, level: .info)
         
-        // Update ServiceCoordinator with results
-        guard let serviceCoordinator = serviceCoordinator else {
-            appLog("PredictionService: ServiceCoordinator is nil, cannot update", category: .service, level: .error)
-            return
-        }
-        
-        await MainActor.run {
-            serviceCoordinator.predictionData = predictionData
-            serviceCoordinator.updateMapWithPrediction(predictionData)
+
+        // NEW: Auto-chain to LandingPointTrackingService
+        if let landingPoint = predictionData.landingPoint,
+           let landingService = landingPointTrackingService {
+            await landingService.updateLandingPoint(landingPoint, source: .prediction)
         }
         if let lp = predictionData.landingPoint {
             DebugCSVLogger.shared.setLatestPredictedLanding(lp)

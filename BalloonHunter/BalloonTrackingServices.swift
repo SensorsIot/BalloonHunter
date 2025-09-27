@@ -43,6 +43,11 @@ struct TelemetryInputs {
     let balloonPhase: BalloonPhase
 }
 
+enum LandingPointSource {
+    case prediction      // From PredictionService
+    case currentPosition // From current balloon telemetry
+}
+
 // MARK: - Balloon Position Service
 
 @MainActor
@@ -96,6 +101,7 @@ final class BalloonPositionService: ObservableObject {
     private let persistenceService: PersistenceService
     private let predictionService: PredictionService
     private let routeCalculationService: RouteCalculationService
+    private var landingPointTrackingService: LandingPointTrackingService?
     private var currentUserLocation: LocationData?
     private var lastTelemetryTime: Date?
     private var lastLoggedBurstKillerTime: Int?
@@ -105,7 +111,6 @@ final class BalloonPositionService: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
     private let bleStalenessThreshold: TimeInterval = 3.0 // 3 seconds for BLE
     private let aprsStalenessThreshold: TimeInterval = 30.0 // 30 seconds for APRS
-    // REMOVED: isEvaluatingFrequencySync - no longer needed after eliminating duplicate triggers
 
     
     init(bleService: BLECommunicationService,
@@ -130,6 +135,12 @@ final class BalloonPositionService: ObservableObject {
 
         // Trigger initial state evaluation
         evaluateTelemetryState()
+    }
+
+    // Set reference to LandingPointTrackingService for service chain
+    func setLandingPointTrackingService(_ landingPointTrackingService: LandingPointTrackingService) {
+        self.landingPointTrackingService = landingPointTrackingService
+        appLog("BalloonPositionService: LandingPointTrackingService configured", category: .service, level: .info)
     }
     
     private func setupSubscriptions() {
@@ -399,15 +410,27 @@ final class BalloonPositionService: ObservableObject {
         case .liveBLEFlying:
             // BLE telemetry active, balloon flying
             aprsTelemetryService.disablePolling()
-            // BLE telemetry is source of truth - no frequency sync needed
-            // Landing point: predicted landing point
-            setLandingPointForFlyingState()
+            // NEW: Trigger PredictionService with BLE balloon position
+            if let telemetry = currentTelemetry {
+                Task {
+                    await predictionService.triggerPredictionWithTelemetry(telemetry, trigger: "state-machine")
+                }
+            }
 
         case .liveBLELanded:
             // BLE telemetry active, balloon landed
             aprsTelemetryService.disablePolling()
-            // Landed state - predictions should stop, landing point is live position
-            setLandingPointForBLELanded()
+            // NEW: Trigger LandingPointTrackingService with current BLE position
+            if let telemetry = currentTelemetry,
+               telemetry.latitude != 0.0, telemetry.longitude != 0.0 {
+                let currentPosition = CLLocationCoordinate2D(
+                    latitude: telemetry.latitude,
+                    longitude: telemetry.longitude
+                )
+                Task {
+                    await landingPointTrackingService?.updateLandingPoint(currentPosition, source: .currentPosition)
+                }
+            }
 
         case .waitingForAPRS:
             // BLE lost - start APRS polling and wait for response
@@ -418,16 +441,28 @@ final class BalloonPositionService: ObservableObject {
         case .aprsFallbackFlying:
             // APRS fallback while flying - enable polling and frequency monitoring
             aprsTelemetryService.enablePolling()
-            // Frequency sync happens when APRS messages arrive
-            // Landing point: predicted landing point
-            setLandingPointForFlyingState()
+            // NEW: Trigger PredictionService with APRS balloon position
+            if let telemetry = currentTelemetry {
+                Task {
+                    await predictionService.triggerPredictionWithTelemetry(telemetry, trigger: "state-machine")
+                }
+            }
 
         case .aprsFallbackLanded:
             // APRS fallback with old/stale data indicating landing
             aprsTelemetryService.enablePolling()
-            // Predictions should stop, use APRS position as landing point
-            // Frequency sync happens when APRS messages arrive
-            setLandingPointForAPRSLanded()
+            // NEW: Trigger LandingPointTrackingService with current APRS position
+            if let telemetry = currentTelemetry,
+               telemetry.telemetrySource == .aprs,
+               telemetry.latitude != 0.0, telemetry.longitude != 0.0 {
+                let currentPosition = CLLocationCoordinate2D(
+                    latitude: telemetry.latitude,
+                    longitude: telemetry.longitude
+                )
+                Task {
+                    await landingPointTrackingService?.updateLandingPoint(currentPosition, source: .currentPosition)
+                }
+            }
         }
 
         // Update staleness thresholds based on expected telemetry source
@@ -443,72 +478,66 @@ final class BalloonPositionService: ObservableObject {
     func updateCachedPrediction(_ prediction: PredictionData?) {
         cachedPrediction = prediction
 
-        // If currently in a flying state, update landing point immediately
-        if currentTelemetryState == .liveBLEFlying || currentTelemetryState == .aprsFallbackFlying {
-            setLandingPointForFlyingState()
-        }
+        //     setLandingPointForFlyingState()
+        // }
     }
 
-    // MARK: - Landing Point Determination Methods
+    //     if let prediction = cachedPrediction,
+    //        let predictedLandingPoint = prediction.landingPoint {
+    //         landingPoint = predictedLandingPoint
+    //         appLog("BalloonPositionService: State machine - flying state, landing point set to prediction [\(String(format: "%.4f", predictedLandingPoint.latitude)), \(String(format: "%.4f", predictedLandingPoint.longitude))]", category: .service, level: .info)
+    //
+    //         // Trigger route calculation for flying states
+    //         triggerRouteCalculation(to: predictedLandingPoint)
+    //     } else {
+    //         // No prediction available - keep existing landing point if available
+    //         appLog("BalloonPositionService: State machine - flying state, no prediction available for landing point", category: .service, level: .debug)
+    //     }
+    // }
 
-    private func setLandingPointForFlyingState() {
-        // For flying states: landing point should be predicted landing point
-        if let prediction = cachedPrediction,
-           let predictedLandingPoint = prediction.landingPoint {
-            landingPoint = predictedLandingPoint
-            appLog("BalloonPositionService: State machine - flying state, landing point set to prediction [\(String(format: "%.4f", predictedLandingPoint.latitude)), \(String(format: "%.4f", predictedLandingPoint.longitude))]", category: .service, level: .info)
+    // private func setLandingPointForBLELanded() {
+    //     // BLE landed: use current BLE telemetry position as landing point
+    //     if let telemetry = currentTelemetry,
+    //        telemetry.latitude != 0.0, telemetry.longitude != 0.0 {
+    //         let newLandingPoint = CLLocationCoordinate2D(
+    //             latitude: telemetry.latitude,
+    //             longitude: telemetry.longitude
+    //         )
+    //         landingPoint = newLandingPoint
+    //         appLog("BalloonPositionService: State machine - BLE landed, landing point set to BLE position [\(String(format: "%.4f", newLandingPoint.latitude)), \(String(format: "%.4f", newLandingPoint.longitude))]", category: .service, level: .info)
+    //     }
+    // }
 
-            // Trigger route calculation for flying states
-            triggerRouteCalculation(to: predictedLandingPoint)
-        } else {
-            // No prediction available - keep existing landing point if available
-            appLog("BalloonPositionService: State machine - flying state, no prediction available for landing point", category: .service, level: .debug)
-        }
-    }
+    // private func setLandingPointForAPRSLanded() {
+    //     // APRS landed: use current APRS telemetry position as landing point
+    //     if let telemetry = currentTelemetry,
+    //        telemetry.telemetrySource == .aprs,
+    //        telemetry.latitude != 0.0, telemetry.longitude != 0.0 {
+    //         let newLandingPoint = CLLocationCoordinate2D(
+    //             latitude: telemetry.latitude,
+    //             longitude: telemetry.longitude
+    //         )
+    //         landingPoint = newLandingPoint
+    //         appLog("BalloonPositionService: State machine - APRS landed, landing point set to APRS position [\(String(format: "%.4f", newLandingPoint.latitude)), \(String(format: "%.4f", newLandingPoint.longitude))]", category: .service, level: .info)
+    //
+    //         // Trigger route calculation (RouteCalculationService uses its own transport mode)
+    //         triggerRouteCalculation(to: newLandingPoint)
+    //     }
+    // }
 
-    private func setLandingPointForBLELanded() {
-        // BLE landed: use current BLE telemetry position as landing point
-        if let telemetry = currentTelemetry,
-           telemetry.latitude != 0.0, telemetry.longitude != 0.0 {
-            let newLandingPoint = CLLocationCoordinate2D(
-                latitude: telemetry.latitude,
-                longitude: telemetry.longitude
-            )
-            landingPoint = newLandingPoint
-            appLog("BalloonPositionService: State machine - BLE landed, landing point set to BLE position [\(String(format: "%.4f", newLandingPoint.latitude)), \(String(format: "%.4f", newLandingPoint.longitude))]", category: .service, level: .info)
-        }
-    }
-
-    private func setLandingPointForAPRSLanded() {
-        // APRS landed: use current APRS telemetry position as landing point
-        if let telemetry = currentTelemetry,
-           telemetry.telemetrySource == .aprs,
-           telemetry.latitude != 0.0, telemetry.longitude != 0.0 {
-            let newLandingPoint = CLLocationCoordinate2D(
-                latitude: telemetry.latitude,
-                longitude: telemetry.longitude
-            )
-            landingPoint = newLandingPoint
-            appLog("BalloonPositionService: State machine - APRS landed, landing point set to APRS position [\(String(format: "%.4f", newLandingPoint.latitude)), \(String(format: "%.4f", newLandingPoint.longitude))]", category: .service, level: .info)
-
-            // Trigger route calculation (RouteCalculationService uses its own transport mode)
-            triggerRouteCalculation(to: newLandingPoint)
-        }
-    }
-
-    func triggerRouteCalculation(to destination: CLLocationCoordinate2D) {
-        guard let userLocation = currentLocationService.locationData else {
-            appLog("BalloonPositionService: Cannot calculate route - no user location available", category: .service, level: .debug)
-            return
-        }
-
-        // Trigger route calculation directly - RouteCalculationService uses its own transport mode
-        routeCalculationService.calculateAndPublishRoute(
-            from: userLocation,
-            to: destination
-        )
-        appLog("BalloonPositionService: Route calculation triggered for landing point", category: .service, level: .info)
-    }
+    // func triggerRouteCalculation(to destination: CLLocationCoordinate2D) {
+    //     guard let userLocation = currentLocationService.locationData else {
+    //         appLog("BalloonPositionService: Cannot calculate route - no user location available", category: .service, level: .debug)
+    //         return
+    //     }
+    //
+    //     // Trigger route calculation directly - RouteCalculationService uses its own transport mode
+    //     routeCalculationService.calculateAndPublishRoute(
+    //         from: userLocation,
+    //         to: destination
+    //     )
+    //     appLog("BalloonPositionService: Route calculation triggered for landing point", category: .service, level: .info)
+    // }
 
 
     private func updateStalenessThresholds(for state: TelemetryState) {
@@ -755,8 +784,6 @@ final class BalloonPositionService: ObservableObject {
         evaluateTelemetryState()
     }
 
-    // REMOVED: triggerStartupFrequencySyncIfNeeded() - replaced by state-based evaluateStartupFrequencySync() with user confirmation
-    // REMOVED: performRegularAPRSFrequencySync() - replaced by state-based evaluateStateBasedFrequencySync()
 
     /// Accept and execute the frequency sync proposal
     func acceptFrequencySyncProposal() {
@@ -920,8 +947,6 @@ final class BalloonPositionService: ObservableObject {
         }
     }
 
-    // REMOVED: evaluateFrequencySyncFromAPRS() - external interface no longer needed
-    // Frequency sync evaluation is now triggered exclusively by internal telemetry updates
 
     /// Reject the frequency sync proposal
     func rejectFrequencySyncProposal() {
@@ -1168,14 +1193,20 @@ final class BalloonTrackService: ObservableObject {
     }
     
     func processTelemetryData(_ telemetryData: TelemetryData) {
+        let incomingName = telemetryData.sondeName.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // Always extract sonde name, even during startup (needed for service chain)
+        if !incomingName.isEmpty && currentBalloonName == nil {
+            currentBalloonName = incomingName
+            appLog("BalloonTrackService: Sonde name extracted during startup: \(incomingName)", category: .service, level: .info)
+        }
+
         // Only record track points when we have valid telemetry states (not startup, waitingForAPRS, or noTelemetry)
         let state = balloonPositionService.currentTelemetryState
         guard state != .startup && state != .waitingForAPRS && state != .noTelemetry else {
             appLog("BalloonTrackService: State \(state) - not recording track point", category: .service, level: .info)
             return
         }
-
-        let incomingName = telemetryData.sondeName.trimmingCharacters(in: .whitespacesAndNewlines)
 
         if !incomingName.isEmpty,
            incomingName != currentBalloonName {
@@ -1463,9 +1494,13 @@ final class LandingPointTrackingService: ObservableObject {
 
     private let persistenceService: PersistenceService
     private let balloonTrackService: BalloonTrackService
+    private var routeCalculationService: RouteCalculationService?
     private var cancellables = Set<AnyCancellable>()
     private let deduplicationThreshold: CLLocationDistance = 25.0
     private var currentSondeName: String?
+
+    // Store pending route calculation for when sonde name becomes available
+    private var pendingLandingPoint: CLLocationCoordinate2D?
 
     init(persistenceService: PersistenceService, balloonTrackService: BalloonTrackService) {
         self.persistenceService = persistenceService
@@ -1477,6 +1512,44 @@ final class LandingPointTrackingService: ObservableObject {
                 self?.handleSondeChange(newName: newName)
             }
             .store(in: &cancellables)
+    }
+
+    // Set reference to RouteCalculationService for service chain
+    func setRouteCalculationService(_ routeCalculationService: RouteCalculationService) {
+        self.routeCalculationService = routeCalculationService
+        appLog("LandingPointTrackingService: RouteCalculationService configured", category: .service, level: .info)
+    }
+
+    // NEW: Unified landing point update method for service chain
+    func updateLandingPoint(_ point: CLLocationCoordinate2D, source: LandingPointSource) async {
+        guard balloonTrackService.currentBalloonName != nil else {
+            appLog("LandingPointTrackingService: No sonde name yet - storing pending landing point for route calculation", category: .service, level: .debug)
+            // Store for later when sonde name becomes available
+            pendingLandingPoint = point
+            return
+        }
+
+        // Handle different sources
+        switch source {
+        case .prediction:
+            // Record as prediction in history
+            recordLandingPrediction(coordinate: point, predictedAt: Date(), landingEta: nil, source: .sondehub)
+        case .currentPosition:
+            // Update as current position (could record differently if needed)
+            appLog("LandingPointTrackingService: Landing point updated to current position [\(String(format: "%.4f", point.latitude)), \(String(format: "%.4f", point.longitude))]", category: .service, level: .info)
+        }
+
+        // AUTO-CHAIN: Trigger route calculation when landing point changes
+        triggerRouteCalculation(to: point)
+    }
+
+    private func triggerRouteCalculation(to point: CLLocationCoordinate2D) {
+        if let routingService = routeCalculationService {
+            appLog("LandingPointTrackingService: Triggering route calculation to [\(String(format: "%.4f", point.latitude)), \(String(format: "%.4f", point.longitude))]", category: .service, level: .info)
+            routingService.calculateRoute(to: point)
+        } else {
+            appLog("LandingPointTrackingService: No RouteCalculationService available for route calculation", category: .service, level: .debug)
+        }
     }
 
     func recordLandingPrediction(coordinate: CLLocationCoordinate2D, predictedAt: Date, landingEta: Date?, source: LandingPredictionSource = .sondehub) {
@@ -1522,6 +1595,13 @@ final class LandingPointTrackingService: ObservableObject {
             lastLandingPrediction = storedHistory.last
         } else {
             resetHistory()
+        }
+
+        // Process pending landing point if we have one
+        if let pending = pendingLandingPoint, newName != nil {
+            appLog("LandingPointTrackingService: Sonde name available - processing pending landing point for route calculation", category: .service, level: .info)
+            pendingLandingPoint = nil
+            triggerRouteCalculation(to: pending)
         }
     }
 }

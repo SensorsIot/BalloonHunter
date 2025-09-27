@@ -31,7 +31,15 @@ final class MapPresenter: ObservableObject {
     // APRS sonde name display (for persistent field in tracking view)
     @Published private(set) var bleSerialName: String = ""
     @Published private(set) var aprsSerialName: String = ""
-    // Frequency sync proposal removed - automatic sync only
+
+    // MOVED FROM ServiceCoordinator: Additional UI state
+    @Published private(set) var connectionStatus: ConnectionStatus = .disconnected
+    @Published private(set) var smoothedDescentRate: Double? = nil
+    @Published private(set) var smoothenedPredictionActive: Bool = false
+    @Published private(set) var isTelemetryStale: Bool = false
+    @Published private(set) var aprsTelemetryIsAvailable: Bool = false
+    @Published private(set) var showAllAnnotations: Bool = false
+    @Published private(set) var frequencySyncProposal: FrequencySyncProposal? = nil
 
     // MARK: - Dependencies
 
@@ -42,6 +50,7 @@ final class MapPresenter: ObservableObject {
     private let currentLocationService: CurrentLocationService
     private let aprsTelemetryService: APRSTelemetryService
     private let routeCalculationService: RouteCalculationService
+    private let predictionService: PredictionService
 
     private var cancellables = Set<AnyCancellable>()
 
@@ -52,7 +61,8 @@ final class MapPresenter: ObservableObject {
         landingPointTrackingService: LandingPointTrackingService,
         currentLocationService: CurrentLocationService,
         aprsTelemetryService: APRSTelemetryService,
-        routeCalculationService: RouteCalculationService
+        routeCalculationService: RouteCalculationService,
+        predictionService: PredictionService
     ) {
         self.coordinator = coordinator
         self.balloonTrackService = balloonTrackService
@@ -61,6 +71,7 @@ final class MapPresenter: ObservableObject {
         self.currentLocationService = currentLocationService
         self.aprsTelemetryService = aprsTelemetryService
         self.routeCalculationService = routeCalculationService
+        self.predictionService = predictionService
 
         transportMode = routeCalculationService.transportMode
         distanceToBalloon = currentLocationService.distanceToBalloon
@@ -88,7 +99,19 @@ final class MapPresenter: ObservableObject {
     // MARK: - Intent Handlers
 
     func toggleHeadingMode() {
-        coordinator.isHeadingMode.toggle()
+        isHeadingMode.toggle()
+        updateLocationServiceMode()
+        appLog("MapPresenter: Heading mode toggled to \(isHeadingMode)", category: .general, level: .info)
+    }
+
+    private func updateLocationServiceMode() {
+        if isHeadingMode {
+            currentLocationService.enableHeadingMode()
+            appLog("MapPresenter: Enabled precision location mode for heading view", category: .general, level: .info)
+        } else {
+            currentLocationService.disableHeadingMode()
+            appLog("MapPresenter: Disabled precision location mode, using background mode", category: .general, level: .info)
+        }
     }
 
     func setTransportMode(_ mode: TransportationMode) {
@@ -97,18 +120,28 @@ final class MapPresenter: ObservableObject {
     }
 
     func requestDeviceParameters() {
-        coordinator.bleCommunicationService.getParameters()
+        bleService.getParameters()
     }
 
     func setMuteState(_ muted: Bool) {
-        coordinator.isBuzzerMuted = muted
         isBuzzerMuted = muted
         appLog("MapPresenter: Setting mute state to \(muted)", category: .general, level: .info)
-        coordinator.bleCommunicationService.setMute(muted)
+        bleService.setMute(muted)
     }
 
     func triggerShowAllAnnotations() {
+        showAllAnnotations = true
         updateCameraToShowAllAnnotations()
+
+        // Reset flag after brief delay to allow for future triggers
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            self?.showAllAnnotations = false
+        }
+    }
+
+    func setCameraUpdatesSuspended(_ suspended: Bool) {
+        cameraUpdatesSuspended = suspended
+        appLog("MapPresenter: Camera updates suspended: \(suspended)", category: .general, level: .debug)
     }
 
     func openInAppleMaps() {
@@ -116,17 +149,21 @@ final class MapPresenter: ObservableObject {
     }
 
     func triggerPrediction() {
-        coordinator.triggerPrediction()
+        // Direct service call - no coordinator middleman
+        guard let telemetry = balloonPositionService.currentTelemetry else {
+            appLog("MapPresenter: No telemetry available for manual prediction", category: .general, level: .error)
+            return
+        }
+
+        Task {
+            await predictionService.triggerPredictionWithTelemetry(telemetry, trigger: "manual")
+        }
     }
 
     func updateCameraToShowAllAnnotations() {
         performCameraFit()
     }
 
-    func setCameraUpdatesSuspended(_ suspended: Bool) {
-        coordinator.suspendCameraUpdates = suspended
-        cameraUpdatesSuspended = suspended
-    }
 
 
     var bleService: BLECommunicationService { coordinator.bleCommunicationService }
@@ -145,9 +182,29 @@ final class MapPresenter: ObservableObject {
     // MARK: - Private Helpers
 
     private func bindServices() {
-        coordinator.$predictionPath
-            .sink { [weak self] path in
-                self?.predictionPath = path
+        // DIRECT SERVICE SUBSCRIPTIONS - no coordinator middleman
+
+        // Subscribe to PredictionService directly for prediction data and path
+        predictionService.$latestPrediction
+            .sink { [weak self] prediction in
+                guard let self = self else { return }
+                self.predictionData = prediction
+
+                // Update prediction path based on flight state and prediction data
+                if let prediction = prediction,
+                   let path = prediction.path,
+                   !path.isEmpty,
+                   balloonPositionService.balloonPhase != .landed {
+                    self.predictionPath = MKPolyline(coordinates: path, count: path.count)
+                } else {
+                    self.predictionPath = nil
+                }
+
+                // Update landing and burst points from prediction
+                self.landingPoint = prediction?.landingPoint
+                self.burstPoint = prediction?.burstPoint
+
+                self.refreshAnnotations()
             }
             .store(in: &cancellables)
 
@@ -159,12 +216,6 @@ final class MapPresenter: ObservableObject {
                 } else {
                     self?.userRoute = nil
                 }
-            }
-            .store(in: &cancellables)
-
-        coordinator.$predictionData
-            .sink { [weak self] data in
-                self?.predictionData = data
             }
             .store(in: &cancellables)
 
@@ -182,32 +233,23 @@ final class MapPresenter: ObservableObject {
             }
             .store(in: &cancellables)
 
+        // Subscribe to BalloonPositionService for landing point updates (from state machine)
         balloonPositionService.$landingPoint
             .sink { [weak self] point in
-                self?.landingPoint = point
-                self?.refreshAnnotations()
+                // Only use BalloonPositionService landing point if no prediction available
+                // (this handles landed states where state machine sets landing point directly)
+                if let self = self, let point = point {
+                    // If we have a prediction, prioritize prediction landing point
+                    if self.predictionData?.landingPoint == nil {
+                        self.landingPoint = point
+                        self.refreshAnnotations()
+                    }
+                }
             }
             .store(in: &cancellables)
 
-        coordinator.$burstPoint
-            .sink { [weak self] point in
-                self?.burstPoint = point
-                self?.refreshAnnotations()
-            }
-            .store(in: &cancellables)
-
-        coordinator.$isHeadingMode
-            .sink { [weak self] headingMode in
-                self?.isHeadingMode = headingMode
-            }
-            .store(in: &cancellables)
-
-
-        coordinator.$isBuzzerMuted
-            .sink { [weak self] muted in
-                self?.isBuzzerMuted = muted
-            }
-            .store(in: &cancellables)
+        // coordinator.$isHeadingMode -> MapPresenter handles this directly
+        // coordinator.$isBuzzerMuted -> MapPresenter handles this directly
 
         routeCalculationService.$transportMode
             .sink { [weak self] mode in
@@ -215,24 +257,50 @@ final class MapPresenter: ObservableObject {
             }
             .store(in: &cancellables)
 
-        coordinator.$userLocation
+        // Subscribe directly to services for moved properties
+        currentLocationService.$locationData
+            .receive(on: DispatchQueue.main)
             .sink { [weak self] location in
                 self?.userLocation = location
                 self?.refreshAnnotations()
             }
             .store(in: &cancellables)
 
-        coordinator.$suspendCameraUpdates
-            .sink { [weak self] suspended in
-                self?.cameraUpdatesSuspended = suspended
+        // Subscribe to BLE service for connection status
+        bleService.$connectionStatus
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] status in
+                self?.connectionStatus = status
             }
             .store(in: &cancellables)
 
-        coordinator.$showAllAnnotations
-            .sink { [weak self] shouldShow in
-                if shouldShow {
-                    self?.triggerShowAllAnnotations()
-                }
+        // Subscribe to balloon track service for motion metrics
+        balloonTrackService.$motionMetrics
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] metrics in
+                self?.smoothedDescentRate = metrics.adjustedDescentRateMS
+            }
+            .store(in: &cancellables)
+
+        // Subscribe to balloon position service for telemetry state
+        balloonPositionService.$isTelemetryStale
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] stale in
+                self?.isTelemetryStale = stale
+            }
+            .store(in: &cancellables)
+
+        balloonPositionService.$aprsTelemetryIsAvailable
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] available in
+                self?.aprsTelemetryIsAvailable = available
+            }
+            .store(in: &cancellables)
+
+        balloonPositionService.$frequencySyncProposal
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] proposal in
+                self?.frequencySyncProposal = proposal
             }
             .store(in: &cancellables)
 

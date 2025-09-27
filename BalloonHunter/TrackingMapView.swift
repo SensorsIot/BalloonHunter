@@ -435,7 +435,8 @@ struct TrackingMapView: View {
         landingPointTrackingService: mockAppServices.landingPointTrackingService,
         currentLocationService: mockAppServices.currentLocationService,
         aprsTelemetryService: mockAppServices.aprsTelemetryService,
-        routeCalculationService: mockAppServices.routeCalculationService
+        routeCalculationService: mockAppServices.routeCalculationService,
+        predictionService: mockAppServices.predictionService
     )
     
     TrackingMapView()

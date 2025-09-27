@@ -173,6 +173,15 @@ final class RouteCalculationService: ObservableObject {
         }
     }
 
+    /// Calculate route with internal user location lookup - called by service chain
+    func calculateRoute(to destination: CLLocationCoordinate2D) {
+        guard let userLocation = currentLocationService.locationData else {
+            appLog("RouteCalculationService: Cannot calculate route - no user location available", category: .service, level: .debug)
+            return
+        }
+        calculateAndPublishRoute(from: userLocation, to: destination)
+    }
+
     /// Calculate and publish route - called by state machine
     func calculateAndPublishRoute(from userLocation: LocationData, to destination: CLLocationCoordinate2D, transportMode: TransportationMode? = nil) {
         // Store destination for transport mode changes

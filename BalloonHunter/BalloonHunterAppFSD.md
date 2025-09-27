@@ -56,41 +56,47 @@ The balloon carries a sonde that transmits its position signal. This signal is r
                          │                          │
                          ▼                          ▼
 ┌───────────────────────────────────────────────────────────────────────────────────────┐
-│                           BALLOON POSITION SERVICE
-│                              (State Machine Coordinator)                              │ │
+│                           BALLOON POSITION SERVICE                                   │
+│                              (State Machine Coordinator)                            │
 │  📊 PUBLISHED STATE:                                                                  │
-│  • currentTelemetry: TelemetryData                                                     │
-│  • currentTelemetryState: TelemetryState (7-state machine)                            │
-│  • balloonPhase: BalloonPhase                                                          │
-│  • landingPoint: CLLocationCoordinate2D                                               │
-│  • shouldEnablePredictions: Bool                                                       │
-│  • isTelemetryStale: Bool                                                              │
-│  • aprsTelemetryIsAvailable: Bool                                                      │
-│                                                                                        │
-│  🔄 STATE MACHINE: startup → liveBLEFlying → waitingForAPRS → aprsFallbackFlying      │
-│                             → liveBLELanded              → aprsFallbackLanded          │
-│                                          → noTelemetry                                 │
+│  • currentTelemetry: TelemetryData                                                   │
+│  • currentTelemetryState: TelemetryState (7-state machine)                          │
+│  • balloonPhase: BalloonPhase                                                        │
+│  • landingPoint: CLLocationCoordinate2D                                             │
+│  • shouldEnablePredictions: Bool                                                     │
+│  • isTelemetryStale: Bool                                                            │
+│  • aprsTelemetryIsAvailable: Bool                                                    │
+│                                                                                      │
+│  🔄 STATE MACHINE TRIGGERS SERVICE CHAINS:                                          │
+│  • Flying states → PredictionService → LandingPointService → RouteService          │
+│  • Landed states → LandingPointService → RouteService                              │
+│                                                                                      │
+│  🔄 STATES: startup → liveBLEFlying → waitingForAPRS → aprsFallbackFlying          │
+│                    → liveBLELanded              → aprsFallbackLanded               │
+│                                   → noTelemetry                                     │
 └───────────────────────────────────────────────────────────────────────────────────────┘
                                            │
                          ┌─────────────────┼─────────────────┐
                          │                 │                 │
                          ▼                 ▼                 ▼
 ┌─────────────────────┐ ┌─────────────────────┐ ┌─────────────────────┐
-│ BALLOON TRACK       │ │ PREDICTION SERVICE  │ │ SERVICE COORDINATOR │
-│ SERVICE             │ │                     │ │                     │
-│                     │ │ 📊 PUBLISHED:       │ │ 📊 PUBLISHED:       │
-│ 📊 PUBLISHED:       │ │ • flightTimeString  │ │ • balloonTelemetry  │
-│ • currentBalloonTrack│ │ • landingTimeString │ │ • predictionPath    │
-│   [BalloonTrackPoint]│ │                     │ │ • userRoute         │
-│ • motionMetrics     │ │ 🎯 FEATURES:        │ │ • landingPoint      │
-│   BalloonMotionMetrics│ │ • Tawhiri API      │ │ • burstPoint        │
-│ • landingPosition   │ │ • Smart caching     │ │ • routeData         │
-│   CLLocationCoord2D │ │ • Time formatting   │ │ • deviceSettings    │
+│ PREDICTION SERVICE  │ │ LANDING POINT       │ │ ROUTE CALCULATION   │
+│                     │ │ TRACKING SERVICE    │ │ SERVICE             │
+│ 📊 PUBLISHED:       │ │                     │ │                     │
+│ • latestPrediction  │ │ 📊 PUBLISHED:       │ │ 📊 PUBLISHED:       │
+│ • flightTimeString  │ │ • currentLandingPt  │ │ • currentRoute      │
+│ • landingTimeString │ │ • landingSource     │ │ • transportMode     │
+│                     │ │ • updateTime        │ │ • routeMetrics      │
+│ 🎯 FEATURES:        │ │                     │ │                     │
+│ • Tawhiri API       │ │ 🎯 FEATURES:        │ │ 🎯 FEATURES:        │
+│ • Smart caching     │ │ • Source tracking   │ │ • Apple Maps API    │
+│ • Time formatting   │ │ • Point merging     │ │ • Multi-transport   │
+│ • Auto-chaining     │ │ • Auto-chaining     │ │ • Route optimization│
 │                     │ │                     │ │                     │
-│ 🎯 FEATURES:        │ │                     │ │ 🎯 ORCHESTRATION:   │
-│ • Track smoothing   │ │                     │ │ • Cross-service     │
-│ • Landing detection │ │                     │ │ • State merging     │
-│ • Motion analysis   │ │                     │ │ • UI coordination   │
+│        │            │ │        │            │ │                     │
+│        ▼            │ │        ▼            │ │                     │
+│   Chains to ────────┼─┼───▶ Chains to ─────┼─┼────▶                │
+│   LandingPt         │ │   RouteCalc         │ │                     │
 └─────────────────────┘ └─────────────────────┘ └─────────────────────┘
                                            │
                          ┌─────────────────┼─────────────────┐
@@ -98,18 +104,20 @@ The balloon carries a sonde that transmits its position signal. This signal is r
                          ▼                 ▼                 ▼
 ┌─────────────────────┐ ┌─────────────────────┐ ┌─────────────────────┐
 │ MAP PRESENTER       │ │ DATA PANEL VIEW     │ │ TRACKING MAP VIEW   │
+│ (UI Coordinator)    │ │                     │ │                     │
+│                     │ │ 🎯 DISPLAYS:        │ │ 🎯 DISPLAYS:        │
+│ 📊 UI STATE:        │ │ • Telemetry data    │ │ • Map with overlays │
+│ • predictionData    │ │ • Motion metrics    │ │ • Balloon position  │
+│ • landingPoint      │ │ • Flight times      │ │ • Prediction path   │
+│ • currentRoute      │ │ • Battery status    │ │ • User route        │
+│ • userLocation      │ │ • Signal strength   │ │ • Landing point     │
+│ • connectionStatus  │ │ • Descent rate      │ │ • User controls     │
+│ • cameraRegion      │ │                     │ │                     │
 │                     │ │                     │ │                     │
-│ 📊 PUBLISHED:       │ │ 🎯 DISPLAYS:        │ │ 🎯 DISPLAYS:        │
-│ • annotations       │ │ • Telemetry data    │ │ • Map with overlays │
-│ • predictionPath    │ │ • Motion metrics    │ │ • Balloon position  │
-│ • userRoute         │ │ • Flight times      │ │ • Prediction path   │
-│ • region/camera     │ │ • Battery status    │ │ • User route        │
-│ • trackPoints       │ │ • Signal strength   │ │ • Landing point     │
-│                     │ │                     │ │ • User controls     │
-│ 🎯 FEATURES:        │ │                     │ │                     │
-│ • Map coordination  │ │                     │ │                     │
-│ • Annotation mgmt   │ │                     │ │                     │
-│ • Camera control    │ │                     │ │                     │
+│ 🎯 DIRECT SERVICE   │ │                     │ │                     │
+│    SUBSCRIPTIONS:   │ │                     │ │                     │
+│ • No middleman      │ │                     │ │                     │
+│ • Reactive updates  │ │                     │ │                     │
 └─────────────────────┘ └─────────────────────┘ └─────────────────────┘
 ```
 
@@ -146,11 +154,28 @@ The balloon carries a sonde that transmits its position signal. This signal is r
 
 ### Communication Patterns
 
-🔄 **Direct Service Communication:**
-Service @Published → View @EnvironmentObject (single service, simple data)
+🔄 **Service Chain Architecture:**
+State Machine → Service A → Service B → Service C (automatic chaining via dependency injection)
 
-🔄 **Coordinated Communication:**
-Multiple Services → ServiceCoordinator → Consolidated State → Views
+🔄 **Direct UI Communication:**
+Services @Published → MapPresenter @Published → Views @EnvironmentObject (no middleman)
+
+🔄 **Service Coordination:**
+ServiceCoordinator handles app infrastructure only, UI state handled by MapPresenter
+
+## Architecture Changes (2025-09-28)
+
+**NEW: Service Chain Architecture**
+- State machine now triggers single services that auto-chain to subsequent services
+- Flying states: PredictionService → LandingPointTrackingService → RouteCalculationService
+- Landed states: LandingPointTrackingService → RouteCalculationService
+- Eliminates ServiceCoordinator middleman for business logic
+
+**NEW: Direct UI Communication**
+- MapPresenter subscribes directly to services via @Published properties
+- No ServiceCoordinator middleman for UI state updates
+- Reactive UI updates with proper separation of concerns
+- ServiceCoordinator handles only app infrastructure (startup, persistence, settings)
 
 ## Dealing with Frequencies
 

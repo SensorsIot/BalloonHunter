@@ -70,7 +70,8 @@ struct BalloonHunterApp: App {
             landingPointTrackingService: services.landingPointTrackingService,
             currentLocationService: services.currentLocationService,
             aprsTelemetryService: services.aprsTelemetryService,
-            routeCalculationService: services.routeCalculationService
+            routeCalculationService: services.routeCalculationService,
+            predictionService: services.predictionService
         )
         _appServices = StateObject(wrappedValue: services)
         _serviceCoordinator = StateObject(wrappedValue: coordinator)
