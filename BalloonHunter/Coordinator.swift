@@ -415,16 +415,10 @@ final class ServiceCoordinator: ObservableObject {
 
         // Subscribe to APRS sonde names for display
 
-        // Frequency sync scenarios per FSD requirements
-        // Scenario 2: RadioSondyGo connects when APRS data already available - sync immediately
-        bleCommunicationService.$telemetryState
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] bleTelemetryState in
-                if bleTelemetryState.canReceiveCommands {
-                    self?.handleBLEConnectionWithAPRSSync()
-                }
-            }
-            .store(in: &cancellables)
+        // ARCHITECTURAL FIX: Remove duplicate frequency sync trigger
+        // Frequency sync is handled exclusively by BalloonPositionService state machine
+        // when telemetry updates, eliminating race conditions and duplicate functionality
+        // BLE connection state changes will trigger state machine transitions which handle frequency sync
 
         // APRS frequency sync now handled by state machine transitions
 
@@ -447,23 +441,8 @@ final class ServiceCoordinator: ObservableObject {
         // Direct subscriptions setup complete
     }
 
-    // MARK: - Frequency Sync Handlers
-
-    private func handleBLEConnectionWithAPRSSync() {
-        // Scenario 2: RadioSondyGo connects when APRS data already available
-        guard aprsTelemetryIsAvailable else {
-            appLog("ServiceCoordinator: RadioSondyGo connected but no APRS telemetry for frequency sync", category: .general, level: .debug)
-            return
-        }
-
-        // RACE CONDITION FIX: Delegate all frequency sync decisions to BalloonPositionService state machine
-        // ServiceCoordinator should not duplicate frequency comparison logic that exists in BalloonPositionService
-        // Let the state machine handle frequency sync evaluation with proper currentTelemetry state
-        appLog("ServiceCoordinator: RadioSondyGo connected with APRS data - delegating frequency sync to state machine", category: .general, level: .info)
-        balloonPositionService.evaluateFrequencySyncFromAPRS()
-    }
-
-    // APRS frequency sync logic moved to BalloonPositionService state machine
+    // REMOVED: handleBLEConnectionWithAPRSSync() - architectural duplication eliminated
+    // Frequency sync is now handled exclusively by BalloonPositionService state machine
 
     /// Accept the APRS frequency sync proposal
     func acceptFrequencySyncProposal() {

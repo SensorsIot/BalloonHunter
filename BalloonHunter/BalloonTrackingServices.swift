@@ -101,7 +101,7 @@ final class BalloonPositionService: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
     private let bleStalenessThreshold: TimeInterval = 3.0 // 3 seconds for BLE
     private let aprsStalenessThreshold: TimeInterval = 30.0 // 30 seconds for APRS
-    private var isEvaluatingFrequencySync: Bool = false // Prevents concurrent frequency sync evaluations
+    // REMOVED: isEvaluatingFrequencySync - no longer needed after eliminating duplicate triggers
 
     
     init(bleService: BLECommunicationService,
@@ -747,14 +747,6 @@ final class BalloonPositionService: ObservableObject {
 
     /// State machine evaluates frequency sync based on current state and conditions
     private func evaluateStateBasedFrequencySync() {
-        // Prevent concurrent frequency sync evaluations (race condition protection)
-        guard !isEvaluatingFrequencySync else {
-            appLog("BalloonPositionService: Frequency sync evaluation already in progress - skipping", category: .service, level: .debug)
-            return
-        }
-        isEvaluatingFrequencySync = true
-        defer { isEvaluatingFrequencySync = false }
-
         // Only evaluate frequency sync based on state machine conditions
         switch currentTelemetryState {
         case .aprsFallbackFlying, .aprsFallbackLanded:
@@ -905,10 +897,8 @@ final class BalloonPositionService: ObservableObject {
         }
     }
 
-    /// External interface - delegates to state-based evaluation
-    func evaluateFrequencySyncFromAPRS() {
-        evaluateStateBasedFrequencySync()
-    }
+    // REMOVED: evaluateFrequencySyncFromAPRS() - external interface no longer needed
+    // Frequency sync evaluation is now triggered exclusively by internal telemetry updates
 
     /// Reject the frequency sync proposal
     func rejectFrequencySyncProposal() {
