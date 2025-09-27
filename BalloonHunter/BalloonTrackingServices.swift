@@ -228,6 +228,7 @@ final class BalloonPositionService: ObservableObject {
         // Debug: Always log when APRS telemetry arrives
         if source == "APRS" {
             appLog("BalloonPositionService: APRS telemetry received for \(telemetry.sondeName) - BLE available: \(bleService.telemetryState.hasTelemetry)", category: .service, level: .info)
+            appLog("BalloonPositionService: 🔥 CRITICAL - RECEIVED telemetry from APRS: frequency=\(telemetry.frequency), sonde=\(telemetry.sondeName)", category: .service, level: .error)
         }
 
         // Only process APRS telemetry when BLE telemetry is not available (arbitration)
@@ -249,6 +250,11 @@ final class BalloonPositionService: ObservableObject {
         }
 
         var telemetryToStore = telemetry
+
+        // DEBUG: Check telemetryToStore right after creation
+        if source == "APRS" {
+            appLog("BalloonPositionService: 🔥 CRITICAL - telemetryToStore CREATED: frequency=\(telemetryToStore.frequency), sonde=\(telemetryToStore.sondeName)", category: .service, level: .error)
+        }
 
         if source == "BLE" {
             let countdown = telemetry.burstKillerTime
