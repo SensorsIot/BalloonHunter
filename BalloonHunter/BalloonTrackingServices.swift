@@ -88,7 +88,7 @@ final class BalloonPositionService: ObservableObject {
     @Published var frequencySyncProposal: FrequencySyncProposal? = nil
 
     private let bleService: BLECommunicationService
-    let aprsService: APRSTelemetryService
+    let aprsTelemetryService: APRSTelemetryService
     private let currentLocationService: CurrentLocationService
     private let persistenceService: PersistenceService
     private let predictionService: PredictionService
@@ -104,12 +104,12 @@ final class BalloonPositionService: ObservableObject {
 
     
     init(bleService: BLECommunicationService,
-         aprsService: APRSTelemetryService,
+         aprsTelemetryService: APRSTelemetryService,
          currentLocationService: CurrentLocationService,
          persistenceService: PersistenceService,
          predictionService: PredictionService) {
         self.bleService = bleService
-        self.aprsService = aprsService
+        self.aprsTelemetryService = aprsTelemetryService
         self.currentLocationService = currentLocationService
         self.persistenceService = persistenceService
         self.predictionService = predictionService
@@ -126,21 +126,67 @@ final class BalloonPositionService: ObservableObject {
     }
     
     private func setupSubscriptions() {
-        // Subscribe to BLE service telemetry stream (primary source)
-        bleService.telemetryData
+        // Subscribe to BLE service position stream (primary source)
+        bleService.positionDataStream
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] telemetry in
+            .sink { [weak self] positionData in
+                // Convert to TelemetryData for state machine
+                let telemetry = TelemetryData(
+                    sondeName: positionData.sondeName,
+                    probeType: "",
+                    frequency: 0.0,
+                    latitude: positionData.latitude,
+                    longitude: positionData.longitude,
+                    altitude: positionData.altitude,
+                    verticalSpeed: positionData.verticalSpeed,
+                    horizontalSpeed: positionData.horizontalSpeed,
+                    heading: positionData.heading,
+                    temperature: positionData.temperature,
+                    humidity: positionData.humidity,
+                    pressure: positionData.pressure,
+                    timestamp: positionData.timestamp,
+                    apiCallTimestamp: positionData.apiCallTimestamp,
+                    burstKillerTime: positionData.burstKillerTime,
+                    telemetrySource: positionData.telemetrySource
+                )
                 self?.handleTelemetryUpdate(telemetry, source: "BLE")
             }
             .store(in: &cancellables)
 
-        // Subscribe to APRS service telemetry stream (fallback source)
-        aprsService.telemetryData
+        // Subscribe to APRS service position stream (fallback source)
+        aprsTelemetryService.positionDataStream
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] telemetry in
+            .sink { [weak self] positionData in
+                // Convert to TelemetryData for state machine
+                let telemetry = TelemetryData(
+                    sondeName: positionData.sondeName,
+                    probeType: "",
+                    frequency: 0.0,
+                    latitude: positionData.latitude,
+                    longitude: positionData.longitude,
+                    altitude: positionData.altitude,
+                    verticalSpeed: positionData.verticalSpeed,
+                    horizontalSpeed: positionData.horizontalSpeed,
+                    heading: positionData.heading,
+                    temperature: positionData.temperature,
+                    humidity: positionData.humidity,
+                    pressure: positionData.pressure,
+                    timestamp: positionData.timestamp,
+                    apiCallTimestamp: positionData.apiCallTimestamp,
+                    burstKillerTime: positionData.burstKillerTime,
+                    telemetrySource: positionData.telemetrySource
+                )
                 self?.handleTelemetryUpdate(telemetry, source: "APRS")
             }
             .store(in: &cancellables)
+
+
+        // BLE radio channel data is used only for frequency sync after BLE telemetry updates
+        // APRS frequency sync is handled in handleTelemetryUpdate() after currentTelemetry is set
+        // This prevents race condition where radio channel stream triggers before telemetry stream
+
+        // Note: APRS frequency sync is handled in handleTelemetryUpdate() after currentTelemetry is set
+        // No separate subscription to APRS radioChannelDataStream for frequency sync needed
 
         // Monitor BLE telemetry state for state machine evaluation
         bleService.$telemetryState
@@ -228,6 +274,7 @@ final class BalloonPositionService: ObservableObject {
 
         currentTelemetry = telemetryToStore
 
+
         // Update balloon phase based on new telemetry
         updateBalloonPhase()
 
@@ -251,7 +298,7 @@ final class BalloonPositionService: ObservableObject {
 
         // Update APRS service with BLE sonde name for mismatch detection
         if source == "BLE" {
-            aprsService.updateBLESondeName(telemetry.sondeName)
+            aprsTelemetryService.updateBLESondeName(telemetry.sondeName)
         }
 
         // Update distance to user if location available
@@ -261,10 +308,8 @@ final class BalloonPositionService: ObservableObject {
         evaluateStateBasedFrequencySync()
 
         // Position and telemetry are now available through @Published properties
-        // Suppress verbose position update log in debug output
     }
 
-    // handleBLETelemetryAvailabilityChange removed - state machine handles this automatically
     
     private func handleUserLocationUpdate(_ location: LocationData) {
         currentUserLocation = location
@@ -369,41 +414,41 @@ final class BalloonPositionService: ObservableObject {
         switch state {
         case .startup:
             // Startup state - no telemetry operations yet
-            aprsService.disablePolling()
+            aprsTelemetryService.disablePolling()
 
         case .noTelemetry:
             // No telemetry sources available - disable all polling
-            aprsService.disablePolling()
+            aprsTelemetryService.disablePolling()
 
         case .liveBLEFlying:
             // BLE telemetry active, balloon flying
-            aprsService.disablePolling()
+            aprsTelemetryService.disablePolling()
             // BLE telemetry is source of truth - no frequency sync needed
             // Landing point: predicted landing point (TODO: integrate with PredictionService)
             setLandingPointForFlyingState()
 
         case .liveBLELanded:
             // BLE telemetry active, balloon landed
-            aprsService.disablePolling()
+            aprsTelemetryService.disablePolling()
             // Landed state - predictions should stop, landing point is live position
             setLandingPointForBLELanded()
 
         case .waitingForAPRS:
             // BLE lost - start APRS polling and wait for response
-            aprsService.enablePolling()
+            aprsTelemetryService.enablePolling()
             appLog("BalloonPositionService: Starting APRS polling - waiting for telemetry response", category: .service, level: .info)
-            // Keep existing landing point during transition
+            // Keep existing landing point
 
         case .aprsFallbackFlying:
             // APRS fallback while flying - enable polling and frequency monitoring
-            aprsService.enablePolling()
+            aprsTelemetryService.enablePolling()
             // Frequency sync happens when APRS messages arrive
             // Landing point: predicted landing point (TODO: integrate with PredictionService)
             setLandingPointForFlyingState()
 
         case .aprsFallbackLanded:
             // APRS fallback with old/stale data indicating landing
-            aprsService.enablePolling()
+            aprsTelemetryService.enablePolling()
             // Predictions should stop, use APRS position as landing point
             // Frequency sync happens when APRS messages arrive
             setLandingPointForAPRSLanded()
@@ -558,7 +603,7 @@ final class BalloonPositionService: ObservableObject {
         }
 
         // Check if APRS priming was successful during startup
-        if aprsService.aprsSerialName != nil {
+        if aprsTelemetryService.aprsSerialName != nil {
             // APRS data available from priming - start fallback polling
             return inputs.balloonPhase == .landed ? .aprsFallbackLanded : .aprsFallbackFlying
         }
@@ -766,6 +811,7 @@ final class BalloonPositionService: ObservableObject {
         let bleFreq = bleService.deviceSettings.frequency
         let freqMismatch = abs(aprsFreq - bleFreq) > 0.01
 
+
         let aprsProbeType = telemetry.probeType.isEmpty ? "RS41" : telemetry.probeType
         let bleProbeType = bleService.deviceSettings.probeType
         let probeTypeMismatch = aprsProbeType != bleProbeType
@@ -844,7 +890,7 @@ final class BalloonPositionService: ObservableObject {
         }
     }
 
-    /// Legacy method for external calls - delegates to state-based evaluation
+    /// External interface - delegates to state-based evaluation
     func evaluateFrequencySyncFromAPRS() {
         evaluateStateBasedFrequencySync()
     }
@@ -1023,7 +1069,7 @@ final class BalloonTrackService: ObservableObject {
 
     /// Clean up persisted tracks by removing invalid coordinate points (0,0)
     private func cleanupPersistedTracks() {
-        let allTracks = persistenceService.loadAllTracks()
+        let allTracks = persistenceService.getAllTracks()
         var cleanedCount = 0
         var totalOriginalPoints = 0
         var totalValidPoints = 0
@@ -1045,7 +1091,7 @@ final class BalloonTrackService: ObservableObject {
 
             if validCount != originalCount {
                 // Save cleaned track data back to persistence
-                persistenceService.saveBalloonTrack(validTrackData, sondeName: sondeName)
+                persistenceService.saveBalloonTrack(sondeName: sondeName, track: validTrackData)
                 cleanedCount += 1
                 appLog("BalloonTrackService: Cleaned track '\(sondeName)' - removed \(originalCount - validCount) invalid points (\(validCount)/\(originalCount) valid)", category: .service, level: .info)
             }
