@@ -36,6 +36,7 @@ struct DistanceOverlayView: View {
 struct TrackingMapView: View {
     @EnvironmentObject var mapPresenter: MapPresenter
     @EnvironmentObject var userSettings: UserSettings
+    @EnvironmentObject var coordinator: ServiceCoordinator
 
     @State private var showSettings = false
     @State private var position: MapCameraPosition = .automatic
@@ -339,7 +340,22 @@ struct TrackingMapView: View {
                 .environmentObject(mapPresenter.persistenceService)
                 .environmentObject(userSettings)
         }
-        // Frequency sync alert removed - automatic sync only
+        .confirmationDialog(
+            "APRS Frequency Sync",
+            isPresented: .constant(coordinator.frequencySyncProposal != nil),
+            titleVisibility: .visible
+        ) {
+            Button("Sync to \(coordinator.frequencySyncProposal?.frequency ?? 0, specifier: "%.2f") MHz (\(coordinator.frequencySyncProposal?.probeType ?? ""))") {
+                coordinator.acceptFrequencySyncProposal()
+            }
+            Button("Keep Current Settings", role: .cancel) {
+                coordinator.rejectFrequencySyncProposal()
+            }
+        } message: {
+            if let proposal = coordinator.frequencySyncProposal {
+                Text("APRS telemetry suggests changing frequency to \(proposal.frequency, specifier: "%.2f") MHz for \(proposal.probeType) sonde. Update RadioSondyGo settings?")
+            }
+        }
         .onChange(of: showSettings) { _, isOpen in
             mapPresenter.setCameraUpdatesSuspended(isOpen)
         }

@@ -33,7 +33,6 @@ final class AppServices: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
     
     init() {
-        appLog("AppServices: Initializing with dependency injection", category: .general, level: .info)
         
         // 1. Initialize core infrastructure first
         self.persistenceService = PersistenceService()
@@ -67,7 +66,6 @@ final class AppServices: ObservableObject {
         // 5. Set up inter-service communication
         balloonPositionService.setBalloonTrackService(balloonTrackService)
 
-        appLog("AppServices: Dependency injection setup complete", category: .general, level: .info)
     }
     
     // MARK: - Service Lifecycle
@@ -78,8 +76,7 @@ final class AppServices: ObservableObject {
         // Service initialization handled by ServiceCoordinator
         // AppServices now focuses on service coordination only
         
-        let initTime = Date().timeIntervalSince(startTime)
-        appLog("AppServices: All services initialized (\(String(format: "%.2f", initTime))s)", category: .general, level: .info)
+        let _ = Date().timeIntervalSince(startTime)
     }
     
     // MARK: - UI Command Methods

@@ -53,7 +53,7 @@ actor RoutingCache {
         cleanExpiredEntries()
         guard let entry = cache[key] else {
             metrics.misses += 1
-            appLog("RoutingCache: Miss for key \(key)", category: .cache, level: .debug)
+            // Cache miss - will calculate route
             return nil
         }
 
@@ -97,7 +97,7 @@ actor RoutingCache {
         lru.removeAll(where: { $0 == key })
         lru.insert(key, at: 0)
 
-        appLog("RoutingCache: Set key \(key) with version \(version)", category: .cache, level: .debug)
+        // Route cached successfully
     }
 
     private func cleanExpiredEntries() {
@@ -143,14 +143,10 @@ final class RouteCalculationService: ObservableObject {
     
     init(currentLocationService: CurrentLocationService) {
         self.currentLocationService = currentLocationService
-        appLog("RouteCalculationService init", category: .service, level: .debug)
     }
     
     func calculateRoute(from userLocation: LocationData, to destination: CLLocationCoordinate2D, transportMode: TransportationMode) async throws -> RouteData {
-        // Log inputs
-        appLog(String(format: "RouteCalculationService: Request src=(%.5f,%.5f) dst=(%.5f,%.5f) mode=%@",
-                      userLocation.latitude, userLocation.longitude, destination.latitude, destination.longitude, transportMode.rawValue),
-               category: .service, level: .debug)
+        // Calculate route from user to destination
 
         // Helper to build a request for a given transport type
         func makeRequest(_ type: MKDirectionsTransportType, to dest: CLLocationCoordinate2D) -> MKDirections.Request {

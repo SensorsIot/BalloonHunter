@@ -66,75 +66,9 @@ struct TelemetryData {
     var burstKillerEnabled: Bool = false
     var burstKillerTime: Int = 0
     var softwareVersion: String = ""
-    
-    mutating func parse(message: String) {
-        let components = message.components(separatedBy: "/")
-        guard components.count > 3 else { return }
-        
-        let packetType = components[0]
-        timestamp = Date()
-        
-        switch packetType {
-        case "0":
-            guard components.count >= 8 else { return }
-            probeType = normalizeProbeType(components[1])
-            frequency = Double(components[2]) ?? 0.0
-            signalStrength = Int(Double(components[3]) ?? 0.0)
-            batteryPercentage = Int(components[4]) ?? 0
-            batteryVoltage = Double(components[5]) ?? 0.0
-            buzmute = components[6] == "1"
-            softwareVersion = components[7]
-            
-        case "1":
-            guard components.count >= 20 else { return }
-            probeType = normalizeProbeType(components[1])
-            frequency = Double(components[2]) ?? 0.0
-            sondeName = components[3]
-            latitude = Double(components[4]) ?? 0.0
-            longitude = Double(components[5]) ?? 0.0
-            altitude = Double(components[6]) ?? 0.0
-            horizontalSpeed = Double(components[7]) ?? 0.0
-            verticalSpeed = Double(components[8]) ?? 0.0
-            signalStrength = Int(Double(components[9]) ?? 0.0)
-            batteryPercentage = Int(components[10]) ?? 0
-            afcFrequency = Int(components[11]) ?? 0
-            burstKillerEnabled = components[12] == "1"
-            burstKillerTime = Int(components[13]) ?? 0
-            batteryVoltage = Double(components[14]) ?? 0.0
-            buzmute = components[15] == "1"
-            softwareVersion = components[19]
-            
-        case "2":
-            guard components.count >= 10 else { return }
-            probeType = normalizeProbeType(components[1])
-            frequency = Double(components[2]) ?? 0.0
-            sondeName = components[3]
-            signalStrength = Int(Double(components[4]) ?? 0.0)
-            batteryPercentage = Int(components[5]) ?? 0
-            afcFrequency = Int(components[6]) ?? 0
-            batteryVoltage = Double(components[7]) ?? 0.0
-            buzmute = components[8] == "1"
-            softwareVersion = components[9]
-            latitude = 0.0
-            longitude = 0.0
-            altitude = 0.0
-            horizontalSpeed = 0.0
-            verticalSpeed = 0.0
-            
-        default:
-            break
-        }
-    }
-    
-    private func normalizeProbeType(_ input: String) -> String {
-        let upperCaseType = input.uppercased()
-        switch upperCaseType {
-        case "PIL":
-            return "PILOT"
-        default:
-            return upperCaseType
-        }
-    }
+    var telemetrySource: TelemetrySource = .ble
+
+    // Parsing removed - BLEService is now the single parsing authority
 }
 
 struct LocationData {

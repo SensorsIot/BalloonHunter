@@ -106,6 +106,9 @@ final class ServiceCoordinator: ObservableObject {
     // App settings reference (for transport mode and other app-level settings)
     var appSettings: AppSettings?
 
+    // Frequency sync proposal from APRS fallback
+    @Published var frequencySyncProposal: FrequencySyncProposal? = nil
+
     // Transport mode kept in sync with AppSettings persistence
     @Published var transportMode: TransportationMode = .car {
         didSet {
@@ -433,6 +436,14 @@ final class ServiceCoordinator: ObservableObject {
             }
             .store(in: &cancellables)
 
+        // Subscribe to frequency sync proposals
+        balloonPositionService.$frequencySyncProposal
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] proposal in
+                self?.frequencySyncProposal = proposal
+            }
+            .store(in: &cancellables)
+
         // Direct subscriptions setup complete
     }
 
@@ -442,7 +453,7 @@ final class ServiceCoordinator: ObservableObject {
         // Scenario 2: RadioSondyGo connects when APRS data already available
         guard aprsTelemetryIsAvailable,
               let telemetry = balloonPositionService.currentTelemetry,
-              telemetry.softwareVersion == "APRS" else {
+              telemetry.telemetrySource == .aprs else {
             appLog("ServiceCoordinator: RadioSondyGo connected but no APRS telemetry for frequency sync", category: .general, level: .debug)
             return
         }
@@ -457,28 +468,21 @@ final class ServiceCoordinator: ObservableObject {
             return
         }
 
-        // Always automatic sync - no user prompts needed
-        appLog("ServiceCoordinator: RadioSondyGo connected with APRS data - syncing frequency automatically", category: .general, level: .info)
-        syncFrequencyFromAPRS(aprsTelemetry: telemetry)
+        // Delegate to state machine for frequency sync decisions
+        appLog("ServiceCoordinator: RadioSondyGo connected with APRS data - requesting state machine to evaluate frequency sync", category: .general, level: .info)
+        balloonPositionService.evaluateFrequencySyncFromAPRS()
     }
 
-    // handleAPRSDataAvailable removed - state machine now manages APRS coordination
+    // APRS frequency sync logic moved to BalloonPositionService state machine
 
-    private func syncFrequencyFromAPRS(aprsTelemetry: TelemetryData) {
-        let aprsFreq = aprsTelemetry.frequency
-        let bleFreq = bleCommunicationService.deviceSettings.frequency
-        let freqMismatch = abs(aprsFreq - bleFreq) > 0.01 // 0.01 MHz tolerance
+    /// Accept the APRS frequency sync proposal
+    func acceptFrequencySyncProposal() {
+        balloonPositionService.acceptFrequencySyncProposal()
+    }
 
-        if freqMismatch {
-            appLog("ServiceCoordinator: Syncing RadioSondyGo frequency from APRS - \(String(format: "%.2f", bleFreq)) MHz → \(String(format: "%.2f", aprsFreq)) MHz", category: .general, level: .info)
-
-            let probeType = BLECommunicationService.ProbeType.from(string: aprsTelemetry.probeType.isEmpty ? "RS41" : aprsTelemetry.probeType) ?? .rs41
-            bleCommunicationService.setFrequency(aprsFreq, probeType: probeType)
-
-            // Note: Display will update when RadioSondyGo confirms the new frequency via BLE device settings
-        } else {
-            appLog("ServiceCoordinator: Frequencies match - no sync needed (\(String(format: "%.2f", aprsFreq)) MHz)", category: .general, level: .debug)
-        }
+    /// Reject the APRS frequency sync proposal
+    func rejectFrequencySyncProposal() {
+        balloonPositionService.rejectFrequencySyncProposal()
     }
 
     // MARK: - High-Level UI Methods for View Actions
@@ -839,6 +843,12 @@ final class ServiceCoordinator: ObservableObject {
     }
     
     func updateRoute() async {
+        // Don't calculate routes during startup state - wait for state machine to transition
+        guard balloonPositionService.currentTelemetryState != .startup else {
+            appLog("ServiceCoordinator: Route calculation skipped - state machine in startup", category: .general, level: .debug)
+            return
+        }
+
         // When landed, only hide route if user is very close (200m), otherwise continue showing route to landing position
         if isLanded {
             if let userLocation = userLocation,

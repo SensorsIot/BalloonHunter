@@ -85,6 +85,7 @@ final class BalloonPositionService: ObservableObject {
     @Published var shouldEnablePredictions: Bool = false
     @Published var shouldEnableLandingDetection: Bool = false
     @Published var isInAPRSFallbackMode: Bool = false
+    @Published var frequencySyncProposal: FrequencySyncProposal? = nil
 
     private let bleService: BLECommunicationService
     let aprsService: APRSTelemetryService
@@ -230,9 +231,6 @@ final class BalloonPositionService: ObservableObject {
         // Update balloon phase based on new telemetry
         updateBalloonPhase()
 
-        // Trigger startup frequency sync if needed
-        triggerStartupFrequencySyncIfNeeded()
-
         // Update current state
         currentPosition = CLLocationCoordinate2D(latitude: telemetryToStore.latitude,
                                                  longitude: telemetryToStore.longitude)
@@ -259,10 +257,8 @@ final class BalloonPositionService: ObservableObject {
         // Update distance to user if location available
         updateDistanceToUser()
 
-        // Frequency sync when APRS messages arrive during fallback scenarios
-        if source == "APRS" && (currentTelemetryState == .aprsFallbackFlying || currentTelemetryState == .aprsFallbackLanded) {
-            performRegularAPRSFrequencySync()
-        }
+        // State-based frequency sync evaluation on every telemetry update
+        evaluateStateBasedFrequencySync()
 
         // Position and telemetry are now available through @Published properties
         // Suppress verbose position update log in debug output
@@ -462,7 +458,7 @@ final class BalloonPositionService: ObservableObject {
     private func setLandingPointForAPRSLanded() {
         // APRS landed: use current APRS telemetry position as landing point
         if let telemetry = currentTelemetry,
-           telemetry.softwareVersion == "APRS",
+           telemetry.telemetrySource == .aprs,
            telemetry.latitude != 0.0, telemetry.longitude != 0.0 {
             let newLandingPoint = CLLocationCoordinate2D(
                 latitude: telemetry.latitude,
@@ -689,70 +685,179 @@ final class BalloonPositionService: ObservableObject {
         evaluateTelemetryState()
     }
 
-    /// Trigger automatic frequency sync during startup when APRS telemetry first becomes available
-    private func triggerStartupFrequencySyncIfNeeded() {
-        // Only during startup or shortly after
-        guard !isStartupComplete || Date().timeIntervalSince(startupTime) < 10 else { return }
+    // REMOVED: triggerStartupFrequencySyncIfNeeded() - replaced by state-based evaluateStartupFrequencySync() with user confirmation
+    // REMOVED: performRegularAPRSFrequencySync() - replaced by state-based evaluateStateBasedFrequencySync()
 
-        // Only for APRS telemetry
+    /// Accept and execute the frequency sync proposal
+    func acceptFrequencySyncProposal() {
+        guard let proposal = frequencySyncProposal else { return }
+
+        // Delegate to frequency management service
+        bleService.acceptFrequencySync(frequency: proposal.frequency, probeType: proposal.probeType, source: "APRS-UserAccepted")
+
+        // Clear the proposal
+        frequencySyncProposal = nil
+    }
+
+    /// State machine evaluates frequency sync based on current state and conditions
+    private func evaluateStateBasedFrequencySync() {
+        // Only evaluate frequency sync based on state machine conditions
+        switch currentTelemetryState {
+        case .aprsFallbackFlying, .aprsFallbackLanded:
+            // In APRS fallback: check for frequency mismatches and offer user confirmation
+            evaluateAPRSFrequencyProposal()
+
+        case .startup:
+            // During startup: check for frequency mismatches and offer user confirmation
+            evaluateStartupFrequencySync()
+
+        case .liveBLEFlying, .liveBLELanded:
+            // BLE is primary: check if BLE just reconnected during APRS fallback
+            evaluateBLEReconnectionSync()
+
+        case .waitingForAPRS, .noTelemetry:
+            // No frequency sync decisions in these states
+            break
+        }
+    }
+
+    /// Evaluate APRS frequency proposal during fallback states (user confirmation required)
+    private func evaluateAPRSFrequencyProposal() {
         guard let telemetry = currentTelemetry,
-              telemetry.softwareVersion == "APRS" else { return }
+              telemetry.telemetrySource == .aprs else { return }
 
-        // Check if BLE is ready for commands
-        guard bleService.telemetryState.canReceiveCommands else { return }
-
-        // Check if frequency sync is needed
-        let aprsFreq = telemetry.frequency
-        let bleFreq = bleService.deviceSettings.frequency
-        let freqMismatch = abs(aprsFreq - bleFreq) > 0.01 // 0.01 MHz tolerance
-
-        guard freqMismatch, aprsFreq > 0 else {
-            appLog("BalloonPositionService: Frequencies already match, no startup sync needed", category: .service, level: .info)
+        // Only evaluate frequency sync when BLE is ready for commands
+        guard bleService.telemetryState.canReceiveCommands else {
+            appLog("BalloonPositionService: BLE not ready for commands - skipping frequency sync evaluation", category: .service, level: .debug)
             return
         }
 
-        appLog("BalloonPositionService: Performing startup frequency sync from \(String(format: "%.2f", bleFreq)) MHz to \(String(format: "%.2f", aprsFreq)) MHz", category: .service, level: .info)
-
-        // Perform automatic sync during startup (no user prompt needed)
-        let probeType = BLECommunicationService.ProbeType.from(string: telemetry.probeType.isEmpty ? "RS41" : telemetry.probeType) ?? .rs41
-        bleService.setFrequency(aprsFreq, probeType: probeType)
-
-        // Note: Display will update when RadioSondyGo confirms the new frequency via BLE device settings
-
-        appLog("BalloonPositionService: Startup frequency sync complete", category: .service, level: .info)
-    }
-
-    /// Regular frequency sync during APRS fallback scenarios
-    /// If RadioSondyGo is connected (readyForCommands), regularly check and sync frequency/sonde type
-    private func performRegularAPRSFrequencySync() {
-        // Only perform sync when we have APRS telemetry
-        guard let telemetry = currentTelemetry,
-              telemetry.softwareVersion == "APRS" else { return }
-
-        // Only sync if RadioSondyGo is connected and ready for commands
-        guard bleService.telemetryState.canReceiveCommands else { return }
-
-        // Check if frequency sync is needed
         let aprsFreq = telemetry.frequency
         let bleFreq = bleService.deviceSettings.frequency
-        let freqMismatch = abs(aprsFreq - bleFreq) > 0.01 // 0.01 MHz tolerance
+        let freqMismatch = abs(aprsFreq - bleFreq) > 0.01
 
-        // Check if probe type sync is needed
         let aprsProbeType = telemetry.probeType.isEmpty ? "RS41" : telemetry.probeType
         let bleProbeType = bleService.deviceSettings.probeType
         let probeTypeMismatch = aprsProbeType != bleProbeType
 
-        guard (freqMismatch && aprsFreq > 0) || probeTypeMismatch else {
-            return // No sync needed
+        guard freqMismatch || probeTypeMismatch else {
+            appLog("BalloonPositionService: APRS-BLE frequency/probe match - no sync needed", category: .service, level: .debug)
+            return
         }
 
-        appLog("BalloonPositionService: APRS fallback frequency sync needed - Freq: \(String(format: "%.2f", bleFreq)) → \(String(format: "%.2f", aprsFreq)) MHz, Probe: '\(bleProbeType)' → '\(aprsProbeType)'", category: .service, level: .info)
+        appLog("BalloonPositionService: APRS fallback frequency sync needed - creating user proposal", category: .service, level: .info)
 
-        // Perform sync
-        let probeType = BLECommunicationService.ProbeType.from(string: aprsProbeType) ?? .rs41
-        bleService.setFrequency(aprsFreq, probeType: probeType)
+        // Create user confirmation proposal
+        createFrequencySyncProposal(aprsFreq: aprsFreq, aprsProbeType: aprsProbeType, bleFreq: bleFreq, bleProbeType: bleProbeType)
+    }
 
-        appLog("BalloonPositionService: APRS fallback frequency sync command sent", category: .service, level: .info)
+    /// Evaluate startup frequency sync (user confirmation required)
+    private func evaluateStartupFrequencySync() {
+        guard let telemetry = currentTelemetry,
+              telemetry.telemetrySource == .aprs else { return }
+
+        // Only evaluate frequency sync when BLE is ready for commands
+        guard bleService.telemetryState.canReceiveCommands else {
+            appLog("BalloonPositionService: Startup - BLE not ready for commands - skipping frequency sync evaluation", category: .service, level: .debug)
+            return
+        }
+
+        let aprsFreq = telemetry.frequency
+        let bleFreq = bleService.deviceSettings.frequency
+        let freqMismatch = abs(aprsFreq - bleFreq) > 0.01
+
+        let aprsProbeType = telemetry.probeType.isEmpty ? "RS41" : telemetry.probeType
+        let bleProbeType = bleService.deviceSettings.probeType
+        let probeTypeMismatch = aprsProbeType != bleProbeType
+
+        guard freqMismatch || probeTypeMismatch else {
+            appLog("BalloonPositionService: Startup - APRS-BLE frequency/probe match, no sync needed", category: .service, level: .debug)
+            return
+        }
+
+        appLog("BalloonPositionService: Startup frequency sync needed - creating user proposal", category: .service, level: .info)
+
+        // Create user confirmation proposal (same as APRS fallback)
+        createFrequencySyncProposal(aprsFreq: aprsFreq, aprsProbeType: aprsProbeType, bleFreq: bleFreq, bleProbeType: bleProbeType)
+    }
+
+    /// Evaluate BLE reconnection sync (automatic if previous APRS fallback)
+    private func evaluateBLEReconnectionSync() {
+        // Only sync if we have APRS telemetry available (indicates we were in fallback)
+        guard aprsTelemetryIsAvailable,
+              let aprsTelemetry = currentTelemetry,
+              aprsTelemetry.telemetrySource == .aprs else {
+            appLog("BalloonPositionService: BLE reconnection - no APRS data to sync from", category: .service, level: .debug)
+            return
+        }
+
+        // Check if BLE is ready for commands
+        guard bleService.telemetryState.canReceiveCommands else {
+            appLog("BalloonPositionService: BLE reconnection - device not ready for commands", category: .service, level: .debug)
+            return
+        }
+
+        // Check if frequency sync is needed
+        let aprsFreq = aprsTelemetry.frequency
+        let bleFreq = bleService.deviceSettings.frequency
+        let freqMismatch = abs(aprsFreq - bleFreq) > 0.01 // 0.01 MHz tolerance
+
+        let aprsProbeType = aprsTelemetry.probeType.isEmpty ? "RS41" : aprsTelemetry.probeType
+        let bleProbeType = bleService.deviceSettings.probeType
+        let probeTypeMismatch = aprsProbeType != bleProbeType
+
+        guard freqMismatch || probeTypeMismatch else {
+            appLog("BalloonPositionService: BLE reconnection - frequencies already match, no sync needed", category: .service, level: .debug)
+            return
+        }
+
+        appLog("BalloonPositionService: BLE reconnection - automatic frequency sync from APRS", category: .service, level: .info)
+        appLog("BalloonPositionService: Syncing frequency from \(String(format: "%.2f", bleFreq)) MHz to \(String(format: "%.2f", aprsFreq)) MHz", category: .service, level: .info)
+
+        // Perform automatic sync (no user confirmation for reconnection scenario)
+        bleService.syncFrequencyFromExternal(aprsFreq, probeType: aprsProbeType, source: "BLE-Reconnection")
+    }
+
+    /// Helper method to create frequency sync proposal with cooldown check
+    private func createFrequencySyncProposal(aprsFreq: Double, aprsProbeType: String, bleFreq: Double, bleProbeType: String) {
+        // Delegate proposal decision to frequency management service
+        let shouldPropose = bleService.proposeFrequencyChange(
+            from: bleFreq,
+            currentProbe: bleProbeType,
+            to: aprsFreq,
+            targetProbe: aprsProbeType
+        )
+
+        // Only create UI proposal if frequency service approves (not in cooldown)
+        if shouldPropose {
+            let proposal = FrequencySyncProposal(
+                frequency: aprsFreq,
+                probeType: aprsProbeType
+            )
+
+            // Only propose if different from current proposal to avoid spam
+            if frequencySyncProposal?.frequency != proposal.frequency ||
+               frequencySyncProposal?.probeType != proposal.probeType {
+                frequencySyncProposal = proposal
+                appLog("BalloonPositionService: APRS frequency sync proposal created (user confirmation required)", category: .service, level: .info)
+            }
+        }
+    }
+
+    /// Legacy method for external calls - delegates to state-based evaluation
+    func evaluateFrequencySyncFromAPRS() {
+        evaluateStateBasedFrequencySync()
+    }
+
+    /// Reject the frequency sync proposal
+    func rejectFrequencySyncProposal() {
+        guard let proposal = frequencySyncProposal else { return }
+
+        // Delegate to frequency management service for rejection and cooldown
+        bleService.rejectFrequencySync(frequency: proposal.frequency, probeType: proposal.probeType)
+
+        // Clear the proposal
+        frequencySyncProposal = nil
     }
 
 
@@ -820,7 +925,7 @@ final class BalloonPositionService: ObservableObject {
 
         // Check for old APRS data (age-based landing)
         let telemetryAge = Date().timeIntervalSince(currentTelemetry.timestamp)
-        let isAprsTelemetry = currentTelemetry.softwareVersion == "APRS"
+        let isAprsTelemetry = currentTelemetry.telemetrySource == .aprs
         let aprsLandingAgeThreshold = 120.0 // 2 minutes
 
         if isAprsTelemetry && telemetryAge > aprsLandingAgeThreshold {
@@ -909,11 +1014,50 @@ final class BalloonTrackService: ObservableObject {
     init(persistenceService: PersistenceService, balloonPositionService: BalloonPositionService) {
         self.persistenceService = persistenceService
         self.balloonPositionService = balloonPositionService
+
         // BalloonTrackService initialized
+        cleanupPersistedTracks()
         setupSubscriptions()
         loadPersistedDataAtStartup()
     }
-    
+
+    /// Clean up persisted tracks by removing invalid coordinate points (0,0)
+    private func cleanupPersistedTracks() {
+        let allTracks = persistenceService.loadAllTracks()
+        var cleanedCount = 0
+        var totalOriginalPoints = 0
+        var totalValidPoints = 0
+
+        for (sondeName, trackData) in allTracks {
+            let originalCount = trackData.count
+            totalOriginalPoints += originalCount
+
+            // Filter out invalid coordinates (0,0) and empty/nil values
+            let validTrackData = trackData.filter { point in
+                return point.latitude != 0.0 &&
+                       point.longitude != 0.0 &&
+                       abs(point.latitude) <= 90.0 &&
+                       abs(point.longitude) <= 180.0
+            }
+
+            let validCount = validTrackData.count
+            totalValidPoints += validCount
+
+            if validCount != originalCount {
+                // Save cleaned track data back to persistence
+                persistenceService.saveBalloonTrack(validTrackData, sondeName: sondeName)
+                cleanedCount += 1
+                appLog("BalloonTrackService: Cleaned track '\(sondeName)' - removed \(originalCount - validCount) invalid points (\(validCount)/\(originalCount) valid)", category: .service, level: .info)
+            }
+        }
+
+        if cleanedCount > 0 {
+            appLog("BalloonTrackService: Startup cleanup completed - cleaned \(cleanedCount) tracks, removed \(totalOriginalPoints - totalValidPoints) invalid points", category: .service, level: .info)
+        } else {
+            appLog("BalloonTrackService: Startup cleanup completed - all persisted tracks valid", category: .service, level: .debug)
+        }
+    }
+
     /// Load any persisted balloon data at startup
     private func loadPersistedDataAtStartup() {
         // Try to load any existing track data from persistence
@@ -934,6 +1078,13 @@ final class BalloonTrackService: ObservableObject {
     }
     
     func processTelemetryData(_ telemetryData: TelemetryData) {
+        // Only record track points when we have valid telemetry states (not startup, waitingForAPRS, or noTelemetry)
+        let state = balloonPositionService.currentTelemetryState
+        guard state != .startup && state != .waitingForAPRS && state != .noTelemetry else {
+            appLog("BalloonTrackService: State \(state) - not recording track point", category: .service, level: .info)
+            return
+        }
+
         let incomingName = telemetryData.sondeName.trimmingCharacters(in: .whitespacesAndNewlines)
 
         if !incomingName.isEmpty,
@@ -1030,7 +1181,7 @@ final class BalloonTrackService: ObservableObject {
 
         // Update published balloon phase
         let telemetryAge = Date().timeIntervalSince(telemetryData.timestamp)
-        let isAprsTelemetry = telemetryData.softwareVersion == "APRS"
+        let isAprsTelemetry = telemetryData.telemetrySource == .aprs
 
         // Debug APRS landing detection
         if isAprsTelemetry {

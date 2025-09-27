@@ -609,9 +609,18 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
         
         switch messageType {
         case "0":
-            // Device Basic Info and Status
-            if let status = parseType0Message(components) {
+            // Device Basic Info and Status - FSD: 0/probeType/frequency/RSSI/batPercentage/batVoltage/buzmute/softwareVersion/o
+            if let (status, telemetry) = parseType0Message(components) {
                 deviceStatus = status
+
+                // Update deviceSettings with probe type and frequency from Type 0 packet per FSD
+                deviceSettings.probeType = telemetry.probeType
+                deviceSettings.frequency = telemetry.frequency
+
+                // Type 0 packets are device status only - do NOT send as telemetry data
+                // Position data is invalid (0,0) and would override APRS telemetry
+                latestTelemetry = telemetry  // Update for UI display only
+
                 // Show all available packet data for Type 0 messages
                 let packetInfo = components.enumerated().map { (index, value) in
                     return "[\(index)]=\(value)"
@@ -697,8 +706,16 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
             } else {
                 appLog("🔴 BLE MSG (Type 2): Invalid field count=\(components.count)", category: .ble, level: .error)
             }
-            if let nameData = parseType2Message(components) {
-                appLog("🏷️ BLE PARSED (Type 2): Sonde name - \(nameData.name)", category: .ble, level: .info)
+            if let telemetry = parseType2Message(components) {
+                // Update deviceSettings with probe type and frequency from Type 2 packet per FSD
+                deviceSettings.probeType = telemetry.probeType
+                deviceSettings.frequency = telemetry.frequency
+
+                // Type 2 packets are partial telemetry without GPS position - do NOT send as telemetry data
+                // Position data is invalid (0,0) and would override APRS telemetry
+                latestTelemetry = telemetry  // Update for UI display only
+
+                appLog("📊 BLE PARSED (Type 2): Device status without position - \(telemetry.sondeName)", category: .ble, level: .info)
             }
             
         case "3":
@@ -765,21 +782,43 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
     }
 
     // Type 0: Device Basic Info and Status
-    private func parseType0Message(_ components: [String]) -> DeviceStatusData? {
+    private func parseType0Message(_ components: [String]) -> (DeviceStatusData, TelemetryData)? {
         guard let messageType = components.first, messageType == "0" else {
             appLog("BLE: Type 0 parse mismatch - expected leading '0', found '\(components.first ?? "nil")'", category: .ble, level: .error)
             return nil
         }
         guard components.count >= 8 else { return nil }
 
+        // FSD: 0/probeType/frequency/RSSI/batPercentage/batVoltage/buzmute/softwareVersion/o
+        let probeType = components[1]
+        let frequency = Double(components[2]) ?? 0.0
         let rssiValue = adjustedRssiValue(from: components[3]) ?? (Double(components[3]) ?? 0.0)
-        return DeviceStatusData(
-            batteryVoltage: Double(components[5]) ?? 0.0,
-            batteryPercentage: Int(components[4]) ?? 0,
+        let batteryPercentage = Int(components[4]) ?? 0
+        let batteryVoltage = Double(components[5]) ?? 0.0
+        let buzmute = components[6] == "1"
+        let softwareVersion = components[7]
+
+        let deviceStatus = DeviceStatusData(
+            batteryVoltage: batteryVoltage,
+            batteryPercentage: batteryPercentage,
             temperature: 0.0, // Not provided in this message type
             signalStrength: Int(rssiValue),
             timestamp: Date()
         )
+
+        // Create TelemetryData from Type 0 packet
+        var telemetry = TelemetryData()
+        telemetry.probeType = probeType
+        telemetry.frequency = frequency
+        telemetry.signalStrength = Int(rssiValue)
+        telemetry.batteryPercentage = batteryPercentage
+        telemetry.batteryVoltage = batteryVoltage
+        telemetry.buzmute = buzmute
+        telemetry.softwareVersion = softwareVersion
+        telemetry.timestamp = Date()
+        // Position fields remain at default 0.0 for Type 0
+
+        return (deviceStatus, telemetry)
     }
     
     // Type 1: Probe Telemetry
@@ -834,18 +873,40 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
         return telemetry
     }
     
-    // Type 2: Name Only
-    private func parseType2Message(_ components: [String]) -> NameOnlyData? {
+    // Type 2: Partial Telemetry
+    private func parseType2Message(_ components: [String]) -> TelemetryData? {
         guard let messageType = components.first, messageType == "2" else {
             appLog("BLE: Type 2 parse mismatch - expected leading '2', found '\(components.first ?? "nil")'", category: .ble, level: .error)
             return nil
         }
         guard components.count >= 10 else { return nil }
-        
-        return NameOnlyData(
-            name: components[3], // sondeName
-            timestamp: Date()
-        )
+
+        // FSD: 2/probeType/frequency/sondeName/RSSI/batPercentage/afcFrequency/batVoltage/buzmute/softwareVersion/o
+        let probeType = components[1]
+        let frequency = Double(components[2]) ?? 0.0
+        let sondeName = components[3]
+        let rssiValue = adjustedRssiValue(from: components[4]) ?? (Double(components[4]) ?? 0.0)
+        let batteryPercentage = Int(components[5]) ?? 0
+        let afcFrequency = Int(components[6]) ?? 0
+        let batteryVoltage = Double(components[7]) ?? 0.0
+        let buzmute = components[8] == "1"
+        let softwareVersion = components[9]
+
+        // Create TelemetryData from Type 2 packet
+        var telemetry = TelemetryData()
+        telemetry.probeType = probeType
+        telemetry.frequency = frequency
+        telemetry.sondeName = sondeName
+        telemetry.signalStrength = Int(rssiValue)
+        telemetry.batteryPercentage = batteryPercentage
+        telemetry.afcFrequency = afcFrequency
+        telemetry.batteryVoltage = batteryVoltage
+        telemetry.buzmute = buzmute
+        telemetry.softwareVersion = softwareVersion
+        telemetry.timestamp = Date()
+        // Position fields remain at default 0.0 for Type 2 per FSD note
+
+        return telemetry
     }
 
     // Type 3: Device Configuration
@@ -1031,7 +1092,121 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
             }
         }
     }
-    
+
+    // MARK: - Centralized Frequency Management Service
+
+    /// Update frequency with validation and automatic persistence
+    /// This is the primary method for frequency changes throughout the app
+    func updateFrequency(to frequency: Double, probeType: String? = nil, source: String = "User") {
+        // Input validation
+        guard isValidFrequency(frequency) else {
+            appLog("BLE: Invalid frequency \(frequency) MHz rejected", category: .ble, level: .error)
+            return
+        }
+
+        // Determine probe type
+        let targetProbeType: ProbeType
+        if let probeTypeString = probeType {
+            targetProbeType = ProbeType.from(string: probeTypeString) ?? ProbeType.from(string: deviceSettings.probeType) ?? .rs41
+        } else {
+            targetProbeType = ProbeType.from(string: deviceSettings.probeType) ?? .rs41
+        }
+
+        appLog("BLE: Frequency update request from \(source) - \(String(format: "%.2f", frequency)) MHz (\(targetProbeType.name))", category: .ble, level: .info)
+
+        // Use existing setFrequency method
+        setFrequency(frequency, probeType: targetProbeType)
+    }
+
+    /// Update frequency from digit array (for UI input)
+    func updateFrequencyFromDigits(_ digits: [Int], probeType: String? = nil, source: String = "SettingsUI") {
+        guard digits.count >= 6 else {
+            appLog("BLE: Invalid frequency digits array (count=\(digits.count))", category: .ble, level: .error)
+            return
+        }
+
+        let frequency = calculateFrequencyFromDigits(digits)
+        updateFrequency(to: frequency, probeType: probeType, source: source)
+    }
+
+
+    /// Sync frequency from external source (APRS)
+    func syncFrequencyFromExternal(_ frequency: Double, probeType: String, source: String) {
+        updateFrequency(to: frequency, probeType: probeType, source: source)
+    }
+
+    // MARK: - Frequency Sync Proposal Management
+
+    private var rejectedProposals: [String: Date] = [:] // Key: "frequency-probeType", Value: rejection timestamp
+
+    /// Propose frequency change with user confirmation (returns true if proposal should be shown)
+    func proposeFrequencyChange(from currentFreq: Double, currentProbe: String, to targetFreq: Double, targetProbe: String) -> Bool {
+        // First check if frequencies/probe types are actually different
+        let freqMismatch = abs(targetFreq - currentFreq) > 0.01 // 0.01 MHz tolerance
+        let probeTypeMismatch = targetProbe != currentProbe
+
+        guard freqMismatch || probeTypeMismatch else {
+            appLog("BLE: Frequency sync not needed - frequencies and probe types already match (\(String(format: "%.2f", currentFreq)) MHz, \(currentProbe))", category: .ble, level: .debug)
+            return false
+        }
+
+        // Check if this proposal was recently rejected (5-minute cooldown)
+        let proposalKey = "\(String(format: "%.2f", targetFreq))-\(targetProbe)"
+        let now = Date()
+        let cooldownPeriod: TimeInterval = 300 // 5 minutes
+
+        if let rejectionTime = rejectedProposals[proposalKey],
+           now.timeIntervalSince(rejectionTime) < cooldownPeriod {
+            let remainingCooldown = Int(cooldownPeriod - now.timeIntervalSince(rejectionTime))
+            appLog("BLE: Frequency sync proposal \(proposalKey) still in cooldown (\(remainingCooldown)s remaining)", category: .ble, level: .debug)
+            return false
+        }
+
+        appLog("BLE: Frequency sync proposal created - \(String(format: "%.2f", currentFreq)) MHz (\(currentProbe)) → \(String(format: "%.2f", targetFreq)) MHz (\(targetProbe))", category: .ble, level: .info)
+        return true
+    }
+
+    /// Accept frequency sync proposal and apply change
+    func acceptFrequencySync(frequency: Double, probeType: String, source: String = "UserAccepted") {
+        appLog("BLE: User accepted frequency sync - applying \(String(format: "%.2f", frequency)) MHz (\(probeType))", category: .ble, level: .info)
+        updateFrequency(to: frequency, probeType: probeType, source: source)
+    }
+
+    /// Reject frequency sync proposal and record cooldown
+    func rejectFrequencySync(frequency: Double, probeType: String) {
+        let proposalKey = "\(String(format: "%.2f", frequency))-\(probeType)"
+        rejectedProposals[proposalKey] = Date()
+
+        appLog("BLE: User rejected frequency sync proposal - keeping current settings (\(String(format: "%.2f", deviceSettings.frequency)) MHz, \(deviceSettings.probeType)). Cooldown: 5 minutes", category: .ble, level: .info)
+    }
+
+    // MARK: - Frequency Validation and Utilities
+
+    /// Validate frequency is within MySondyGo supported range (400-406 MHz)
+    private func isValidFrequency(_ frequency: Double) -> Bool {
+        return frequency >= 400.0 && frequency <= 406.0 && frequency.isFinite
+    }
+
+    /// Calculate frequency from UI digit array
+    private func calculateFrequencyFromDigits(_ digits: [Int]) -> Double {
+        guard digits.count >= 6 else { return 0.0 }
+        return Double(digits[0] * 100 + digits[1] * 10 + digits[2]) +
+               Double(digits[3]) * 0.1 +
+               Double(digits[4]) * 0.01 +
+               Double(digits[5]) * 0.001
+    }
+
+    /// Get current frequency for UI display
+    func getCurrentFrequency() -> Double {
+        return deviceSettings.frequency
+    }
+
+    /// Get current probe type for UI display
+    func getCurrentProbeType() -> String {
+        return deviceSettings.probeType
+    }
+
+
     /// Control buzzer mute
     func setMute(_ muted: Bool) {
         let muteValue = muted ? 1 : 0
@@ -1171,7 +1346,7 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
 
         let data = command.data(using: .utf8)!
         peripheral.writeValue(data, for: characteristic, type: .withResponse)
-        appLog("BLE: Sent command: \(command)", category: .ble, level: .debug)
+        appLog("📤 BLE COMMAND: \(command)", category: .ble, level: .info)
     }
     
     // MARK: - Device Settings Management (moved from SettingsView for proper separation of concerns)

@@ -462,15 +462,8 @@ struct SettingsView: View {
     }
     
     private func saveSondeSettingsOnDismiss() {
-        // Update frequency from digits using service layer
-        tempDeviceSettings.updateFrequencyFromDigits(freqDigits)
-        
-        // Delegate command generation directly to BLE service
-        let probeType = BLECommunicationService.ProbeType.from(string: tempDeviceSettings.probeType) ?? .rs41
-        bleService.setFrequency(tempDeviceSettings.frequency, probeType: probeType)
-        
-        // Save to persistence
-        persistenceService.save(deviceSettings: tempDeviceSettings)
+        // Delegate all frequency business logic to BLE service
+        bleService.updateFrequencyFromDigits(freqDigits, probeType: tempDeviceSettings.probeType, source: "SettingsView")
     }
     
     private func revertSondeSettings() {

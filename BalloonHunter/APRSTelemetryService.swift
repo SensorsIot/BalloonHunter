@@ -212,7 +212,7 @@ final class APRSTelemetryService: ObservableObject {
     }
 
     private func fetchLatestTelemetry() async {
-        appLog("APRSTelemetryService: Fetching telemetry for station \(currentStationId)", category: .service, level: .debug)
+        // Reduced logging frequency for APRS fetches
 
         do {
             let siteResponse = try await fetchSiteData()
@@ -350,7 +350,8 @@ final class APRSTelemetryService: ObservableObject {
         telemetry.afcFrequency = 0
         telemetry.burstKillerEnabled = false
         telemetry.burstKillerTime = 0
-        telemetry.softwareVersion = "APRS"
+        telemetry.softwareVersion = "APRS" // Keep APRS as software version identifier
+        telemetry.telemetrySource = .aprs
 
         // Timestamps: balloon transmission time and API call time
         if let timestamp = parseISO8601Date(sonde.datetime) {

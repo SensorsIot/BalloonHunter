@@ -395,12 +395,12 @@ final class MapPresenter: ObservableObject {
             allCoordinates.append(userCoordinate)
         }
 
-        if let balloonPath = predictionData?.path, !balloonPath.isEmpty {
-            allCoordinates.append(contentsOf: balloonPath)
-        }
-
+        // Use predictionPath polyline if available, otherwise use predictionData path
+        // Avoid duplication since both represent the same prediction data
         if let predictionPolyline = predictionPath {
             allCoordinates.append(contentsOf: coordinates(from: predictionPolyline))
+        } else if let balloonPath = predictionData?.path, !balloonPath.isEmpty {
+            allCoordinates.append(contentsOf: balloonPath)
         }
 
         if let routePolyline = userRoute {
