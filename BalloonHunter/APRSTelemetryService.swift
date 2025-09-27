@@ -7,7 +7,8 @@ import OSLog
 struct SondeHubSondeData: Codable {
     let serial: String
     let type: String
-    let frequency: Double
+    let frequency: Double?
+    let tx_frequency: Double?
     let datetime: String
     let lat: Double
     let lon: Double
@@ -17,6 +18,11 @@ struct SondeHubSondeData: Codable {
     let temp: Double?
     let humidity: Double?
     let pressure: Double?
+
+    // Computed property to get the best available frequency
+    var effectiveFrequency: Double {
+        return tx_frequency ?? frequency ?? 0.0
+    }
 }
 
 // Site response is a dictionary with serial numbers as keys and sonde data as values
@@ -27,7 +33,14 @@ typealias SondeHubSiteResponse = [String: SondeHubSondeData]
 @MainActor
 final class APRSTelemetryService: ObservableObject {
 
-    // MARK: - Published Properties (compatible with BLE service)
+    // MARK: - Three-Channel Architecture (compatible with BLE service)
+    @Published var latestPosition: PositionData? = nil
+    let positionDataStream = PassthroughSubject<PositionData, Never>()
+
+    @Published var latestRadioChannel: RadioChannelData? = nil
+    let radioChannelDataStream = PassthroughSubject<RadioChannelData, Never>()
+
+    // MARK: - Legacy Properties (state machine compatibility)
     @Published var latestTelemetry: TelemetryData? = nil
     @Published var connectionStatus: ConnectionStatus = .disconnected
     var lastTelemetryUpdateTime: Date? = nil
@@ -225,15 +238,23 @@ final class APRSTelemetryService: ObservableObject {
 
             // Convert to TelemetryData and publish
             let telemetryData = try convertToTelemetryData(latestSonde)
+            let positionData = telemetryData.toPositionData()
+            let radioChannelData = telemetryData.toRadioChannelData()
 
             // Update state
             latestTelemetry = telemetryData
+            latestPosition = positionData
+            latestRadioChannel = radioChannelData
             lastTelemetryUpdateTime = Date()
             lastSondeSerial = latestSonde.serial
             connectionStatus = .connected
             lastApiError = nil
 
-            // Publish through telemetry stream (compatible with BLE service)
+            // Publish through new three-channel streams
+            self.positionDataStream.send(positionData)
+            self.radioChannelDataStream.send(radioChannelData)
+
+            // State machine compatibility - maintain telemetry stream
             self.telemetryData.send(telemetryData)
 
             appLog("APRSTelemetryService: Published telemetry for sonde \(latestSonde.serial) at \(String(format: "%.5f, %.5f", latestSonde.lat, latestSonde.lon))", category: .service, level: .info)
@@ -286,7 +307,8 @@ final class APRSTelemetryService: ObservableObject {
 
             // Log essential telemetry data only (debug level)
             let sondesSummary = siteResponse.map { (serial, data) in
-                "\(serial): lat=\(String(format: "%.5f", data.lat)), lon=\(String(format: "%.5f", data.lon)), alt=\(String(format: "%.0f", data.alt))m, v_v=\(String(format: "%.1f", data.vel_v))m/s, v_h=\(String(format: "%.1f", data.vel_h))m/s, time=\(data.datetime)"
+                let freqStr = "freq=\(String(format: "%.3f", data.frequency ?? 0.0))/tx=\(String(format: "%.3f", data.tx_frequency ?? 0.0))/eff=\(String(format: "%.3f", data.effectiveFrequency))MHz"
+                return "\(serial): lat=\(String(format: "%.5f", data.lat)), lon=\(String(format: "%.5f", data.lon)), alt=\(String(format: "%.0f", data.alt))m, v_v=\(String(format: "%.1f", data.vel_v))m/s, v_h=\(String(format: "%.1f", data.vel_h))m/s, \(freqStr), type=\(data.type), time=\(data.datetime)"
             }.joined(separator: " | ")
             appLog("APRSTelemetryService: Telemetry data: \(sondesSummary)", category: .service, level: .debug)
             appLog("APRSTelemetryService: Received data for \(siteResponse.count) sondes", category: .service, level: .debug)
@@ -310,9 +332,12 @@ final class APRSTelemetryService: ObservableObject {
     private func convertToTelemetryData(_ sonde: SondeHubSondeData) throws -> TelemetryData {
         let trimmedSerial = sonde.serial.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedType = sonde.type.trimmingCharacters(in: .whitespacesAndNewlines)
-        let frequency = (sonde.frequency * 100).rounded() / 100.0
+        let frequency = (sonde.effectiveFrequency * 100).rounded() / 100.0
         let latitude = sonde.lat
         let longitude = sonde.lon
+
+        // DEBUG: Critical debugging for frequency conversion
+        appLog("APRSTelemetryService: 🔥 CRITICAL - Frequency conversion: raw=\(sonde.frequency ?? 0.0) tx=\(sonde.tx_frequency ?? 0.0) eff=\(sonde.effectiveFrequency) final=\(frequency)", category: .service, level: .error)
 
         let coordinatesValid = latitude.isFinite && longitude.isFinite && abs(latitude) <= 90 && abs(longitude) <= 180 && !(latitude == 0 && longitude == 0)
 
@@ -329,6 +354,9 @@ final class APRSTelemetryService: ObservableObject {
         telemetry.sondeName = trimmedSerial
         telemetry.probeType = trimmedType.uppercased()
         telemetry.frequency = frequency
+
+        // DEBUG: Verify telemetry frequency assignment
+        appLog("APRSTelemetryService: 🔥 CRITICAL - TelemetryData created: frequency=\(telemetry.frequency), sonde=\(telemetry.sondeName)", category: .service, level: .error)
 
         // Position and motion
         telemetry.latitude = latitude
