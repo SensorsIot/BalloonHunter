@@ -307,7 +307,7 @@ final class APRSTelemetryService: ObservableObject {
 
             // Log essential telemetry data only (debug level)
             let sondesSummary = siteResponse.map { (serial, data) in
-                let freqStr = "freq=\(String(format: "%.3f", data.frequency ?? 0.0))/tx=\(String(format: "%.3f", data.tx_frequency ?? 0.0))/eff=\(String(format: "%.3f", data.effectiveFrequency))MHz"
+                let freqStr = "freq=\(String(format: "%.2f", data.frequency ?? 0.0))/tx=\(String(format: "%.2f", data.tx_frequency ?? 0.0))/eff=\(String(format: "%.2f", data.effectiveFrequency))MHz"
                 return "\(serial): lat=\(String(format: "%.5f", data.lat)), lon=\(String(format: "%.5f", data.lon)), alt=\(String(format: "%.0f", data.alt))m, v_v=\(String(format: "%.1f", data.vel_v))m/s, v_h=\(String(format: "%.1f", data.vel_h))m/s, \(freqStr), type=\(data.type), time=\(data.datetime)"
             }.joined(separator: " | ")
             appLog("APRSTelemetryService: Telemetry data: \(sondesSummary)", category: .service, level: .debug)
@@ -332,7 +332,8 @@ final class APRSTelemetryService: ObservableObject {
     private func convertToTelemetryData(_ sonde: SondeHubSondeData) throws -> TelemetryData {
         let trimmedSerial = sonde.serial.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedType = sonde.type.trimmingCharacters(in: .whitespacesAndNewlines)
-        let frequency = (sonde.effectiveFrequency * 100).rounded() / 100.0
+        // Always use exactly 2 decimal places for frequency consistency
+        let frequency = round(sonde.effectiveFrequency * 100.0) / 100.0
         let latitude = sonde.lat
         let longitude = sonde.lon
 
@@ -343,7 +344,6 @@ final class APRSTelemetryService: ObservableObject {
 
         guard !trimmedSerial.isEmpty,
               !trimmedType.isEmpty,
-              frequency > 0,
               coordinatesValid else {
             throw APRSError.invalidPayload
         }
