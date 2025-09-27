@@ -11,6 +11,7 @@ struct DataPanelView: View {
     @EnvironmentObject var bleService: BLECommunicationService
     @EnvironmentObject var balloonTrackService: BalloonTrackService
     @EnvironmentObject var balloonPositionService: BalloonPositionService
+    @EnvironmentObject var routeCalculationService: RouteCalculationService
 
     var body: some View {
         GeometryReader { geometry in // Added GeometryReader
@@ -169,7 +170,7 @@ struct DataPanelView: View {
     }
     
     private var arrivalTimeString: String {
-        if let routeData = serviceCoordinator.routeData {
+        if let routeData = routeCalculationService.currentRoute {
             let arrivalTime = Date().addingTimeInterval(routeData.expectedTravelTime)
             return Self.timeFormatter.string(from: arrivalTime)
         }
@@ -177,7 +178,7 @@ struct DataPanelView: View {
     }
     
     private var distanceString: String {
-        guard let distanceMeters = serviceCoordinator.routeData?.distance else { return "--" }
+        guard let distanceMeters = routeCalculationService.currentRoute?.distance else { return "--" }
         let distanceKm = distanceMeters / 1000.0
         return String(format: "%.1f", distanceKm)
     }
@@ -279,7 +280,9 @@ struct DataPanelView: View {
         predictionService: mockAppServices.predictionService,
         balloonPositionService: mockAppServices.balloonPositionService,
         balloonTrackService: mockAppServices.balloonTrackService,
-        landingPointTrackingService: mockAppServices.landingPointTrackingService
+        landingPointTrackingService: mockAppServices.landingPointTrackingService,
+        navigationService: mockAppServices.navigationService,
+        userSettings: mockAppServices.userSettings
     )
     
     DataPanelView()
@@ -289,4 +292,5 @@ struct DataPanelView: View {
         .environmentObject(mockAppServices.bleCommunicationService)
         .environmentObject(mockAppServices.balloonTrackService)
         .environmentObject(mockAppServices.balloonPositionService)
+        .environmentObject(mockAppServices.routeCalculationService)
 }

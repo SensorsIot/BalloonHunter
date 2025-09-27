@@ -257,6 +257,10 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
     @Published var latestTelemetry: TelemetryData? = nil
     @Published var deviceSettings: DeviceSettings = .default
     @Published var deviceStatus: DeviceStatusData? = nil
+
+    // MARK: - AFC Frequency Tracking
+    @Published var afcFrequencies: [Int] = []
+    @Published var afcMovingAverage: Int = 0
     @Published var connectionStatus: ConnectionStatus = .disconnected
     var lastMessageType: String? = nil
     @Published var telemetryData = PassthroughSubject<TelemetryData, Never>()
@@ -707,11 +711,14 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
 
                     // Send to new streams
                     self.positionDataStream.send(positionData)
-                    self.radioChannelDataStream.send(radioData)
+                    // Type 1 packets focus on position data - radio channel handled by Type 0
 
                     // State machine compatibility - maintain telemetry interface
                     self.latestTelemetry = telemetry
                     self.telemetryData.send(telemetry)
+
+                    // Update AFC frequency tracking
+                    self.updateAFCTracking(telemetry)
 
                     // Device settings request is handled by the connection ready callback
                     // No need to request again here
@@ -745,14 +752,17 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
                 deviceSettings.probeType = telemetry.probeType
                 deviceSettings.frequency = telemetry.frequency
 
-                // Convert to radio channel data and update new architecture
+                // Type 2 packets focus on partial telemetry - radio channel handled by Type 0
                 let radioData = telemetry.toRadioChannelData()
                 latestRadioChannel = radioData
-                radioChannelDataStream.send(radioData)
+                // Note: No radioChannelDataStream emission to avoid duplication with Type 0
 
                 // Type 2 packets are partial telemetry without GPS position - do NOT send as position telemetry data
                 // Position data is invalid (0,0) and would override APRS telemetry
                 latestTelemetry = telemetry
+
+                // Update AFC frequency tracking for Type 2 messages
+                updateAFCTracking(telemetry)
 
                 appLog("📊 BLE PARSED (Type 2): Device status without position - \(telemetry.sondeName)", category: .ble, level: .info)
             }
@@ -824,24 +834,8 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
                     self.latestSettings = settingsData
                     self.settingsDataStream.send(settingsData)
 
-                    // Also update radio channel with shared Type 3 fields
-                    let radioData = RadioChannelData(
-                        sondeName: "",
-                        timestamp: Date(),
-                        telemetrySource: .ble,
-                        probeType: settings.probeType,
-                        frequency: settings.frequency,
-                        softwareVersion: settings.softwareVersion,
-                        batteryVoltage: 0.0,  // Not in Type 3
-                        batteryPercentage: 0, // Not in Type 3
-                        signalStrength: 0,    // Not in Type 3
-                        buzmute: false,       // Not in Type 3
-                        afcFrequency: 0,      // Not in Type 3
-                        burstKillerEnabled: false, // Not in Type 3
-                        burstKillerTime: 0    // Not in Type 3
-                    )
-                    self.latestRadioChannel = radioData
-                    self.radioChannelDataStream.send(radioData)
+                    // Type 3 packets only emit SettingsData - radio channel parameters
+                    // are handled by Type 0 packets to avoid duplication
 
                     // Update current telemetry data with device configuration
                     if var currentTelemetry = self.latestTelemetry {
@@ -1522,5 +1516,20 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
     // Helper function to convert probe type integer to string
     private func convertProbeTypeIntToString(_ probeTypeInt: Int) -> String {
         return BLECommunicationService.ProbeType.from(int: probeTypeInt)?.name ?? ""
+    }
+
+    // MARK: - AFC Frequency Tracking (moved from ServiceCoordinator)
+
+    private func updateAFCTracking(_ telemetry: TelemetryData) {
+        let afc = telemetry.afcFrequency
+        afcFrequencies.append(afc)
+
+        // Keep only the last 20 values for moving average
+        if afcFrequencies.count > 20 {
+            afcFrequencies.removeFirst()
+        }
+
+        // Update moving average
+        afcMovingAverage = afcFrequencies.isEmpty ? 0 : afcFrequencies.reduce(0, +) / afcFrequencies.count
     }
 }

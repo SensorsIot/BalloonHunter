@@ -73,6 +73,9 @@ final class BalloonPositionService: ObservableObject {
     // Landing point determination (centralized in state machine)
     @Published var landingPoint: CLLocationCoordinate2D? = nil
 
+    // Display position: shows landing point when landed, live position when flying
+    @Published var balloonDisplayPosition: CLLocationCoordinate2D? = nil
+
     // Cached prediction data for flying state landing point determination
     private var cachedPrediction: PredictionData? = nil
 
@@ -92,6 +95,7 @@ final class BalloonPositionService: ObservableObject {
     private let currentLocationService: CurrentLocationService
     private let persistenceService: PersistenceService
     private let predictionService: PredictionService
+    private let routeCalculationService: RouteCalculationService
     private var currentUserLocation: LocationData?
     private var lastTelemetryTime: Date?
     private var lastLoggedBurstKillerTime: Int?
@@ -108,12 +112,14 @@ final class BalloonPositionService: ObservableObject {
          aprsTelemetryService: APRSTelemetryService,
          currentLocationService: CurrentLocationService,
          persistenceService: PersistenceService,
-         predictionService: PredictionService) {
+         predictionService: PredictionService,
+         routeCalculationService: RouteCalculationService) {
         self.bleService = bleService
         self.aprsTelemetryService = aprsTelemetryService
         self.currentLocationService = currentLocationService
         self.persistenceService = persistenceService
         self.predictionService = predictionService
+        self.routeCalculationService = routeCalculationService
         setupSubscriptions()
         // BalloonPositionService initialized
     }
@@ -251,6 +257,9 @@ final class BalloonPositionService: ObservableObject {
         currentBalloonName = telemetryToStore.sondeName
         hasReceivedTelemetry = true
         lastTelemetryTime = now
+
+        // Update balloon display position based on state
+        updateBalloonDisplayPosition()
         if source == "APRS" {
             aprsTelemetryIsAvailable = true
         }
@@ -391,7 +400,7 @@ final class BalloonPositionService: ObservableObject {
             // BLE telemetry active, balloon flying
             aprsTelemetryService.disablePolling()
             // BLE telemetry is source of truth - no frequency sync needed
-            // Landing point: predicted landing point (TODO: integrate with PredictionService)
+            // Landing point: predicted landing point
             setLandingPointForFlyingState()
 
         case .liveBLELanded:
@@ -410,7 +419,7 @@ final class BalloonPositionService: ObservableObject {
             // APRS fallback while flying - enable polling and frequency monitoring
             aprsTelemetryService.enablePolling()
             // Frequency sync happens when APRS messages arrive
-            // Landing point: predicted landing point (TODO: integrate with PredictionService)
+            // Landing point: predicted landing point
             setLandingPointForFlyingState()
 
         case .aprsFallbackLanded:
@@ -448,6 +457,9 @@ final class BalloonPositionService: ObservableObject {
            let predictedLandingPoint = prediction.landingPoint {
             landingPoint = predictedLandingPoint
             appLog("BalloonPositionService: State machine - flying state, landing point set to prediction [\(String(format: "%.4f", predictedLandingPoint.latitude)), \(String(format: "%.4f", predictedLandingPoint.longitude))]", category: .service, level: .info)
+
+            // Trigger route calculation for flying states
+            triggerRouteCalculation(to: predictedLandingPoint)
         } else {
             // No prediction available - keep existing landing point if available
             appLog("BalloonPositionService: State machine - flying state, no prediction available for landing point", category: .service, level: .debug)
@@ -478,8 +490,26 @@ final class BalloonPositionService: ObservableObject {
             )
             landingPoint = newLandingPoint
             appLog("BalloonPositionService: State machine - APRS landed, landing point set to APRS position [\(String(format: "%.4f", newLandingPoint.latitude)), \(String(format: "%.4f", newLandingPoint.longitude))]", category: .service, level: .info)
+
+            // Trigger route calculation (RouteCalculationService uses its own transport mode)
+            triggerRouteCalculation(to: newLandingPoint)
         }
     }
+
+    func triggerRouteCalculation(to destination: CLLocationCoordinate2D) {
+        guard let userLocation = currentLocationService.locationData else {
+            appLog("BalloonPositionService: Cannot calculate route - no user location available", category: .service, level: .debug)
+            return
+        }
+
+        // Trigger route calculation directly - RouteCalculationService uses its own transport mode
+        routeCalculationService.calculateAndPublishRoute(
+            from: userLocation,
+            to: destination
+        )
+        appLog("BalloonPositionService: Route calculation triggered for landing point", category: .service, level: .info)
+    }
+
 
     private func updateStalenessThresholds(for state: TelemetryState) {
         // Different staleness thresholds based on active telemetry source
@@ -565,6 +595,7 @@ final class BalloonPositionService: ObservableObject {
             return .aprsFallbackLanded
         }
         if inputs.aprsTelemetryIsAvailable {
+            // For unknown balloon phase, default to flying mode until phase is determined
             return .aprsFallbackFlying
         }
 
@@ -992,6 +1023,20 @@ final class BalloonPositionService: ObservableObject {
         }
 
         // DEBUG: Critical debugging for balloon phase
+    }
+
+    // MARK: - Balloon Display Position Management (moved from ServiceCoordinator)
+
+    private func updateBalloonDisplayPosition() {
+        // Use landing point when landed, otherwise use live telemetry position
+        if balloonPhase == .landed, let balloonTrackService = balloonTrackService, let landingPosition = balloonTrackService.landingPosition {
+            balloonDisplayPosition = landingPosition
+            currentLocationService.updateBalloonDisplayPosition(landingPosition)
+        } else if let telemetry = currentTelemetry {
+            let livePosition = CLLocationCoordinate2D(latitude: telemetry.latitude, longitude: telemetry.longitude)
+            balloonDisplayPosition = livePosition
+            currentLocationService.updateBalloonDisplayPosition(livePosition)
+        }
     }
 }
 

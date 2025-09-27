@@ -193,9 +193,9 @@ extension ServiceCoordinator {
         
         while Date() < timeout && !hasReceivedFirstMessage {
             // Check if we've received any BLE messages (Type 0, 1, 2, or 3)
-            if bleCommunicationService.latestTelemetry != nil || 
+            if bleCommunicationService.latestTelemetry != nil ||
                !bleCommunicationService.deviceSettings.probeType.isEmpty ||
-               bleCommunicationService.deviceSettings.frequency != 434.0 {
+               bleCommunicationService.deviceSettings.frequency != 403.5 {
                 hasReceivedFirstMessage = true
                 
                 // Publish telemetry availability status

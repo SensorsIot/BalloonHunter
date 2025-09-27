@@ -20,7 +20,6 @@ final class MapPresenter: ObservableObject {
     @Published private(set) var annotations: [MapAnnotationItem] = []
     @Published private(set) var isHeadingMode: Bool = false
     @Published private(set) var transportMode: TransportationMode = .car
-    @Published private(set) var isRouteVisible: Bool = true
     @Published private(set) var isBuzzerMuted: Bool = false
     @Published private(set) var distanceToBalloon: CLLocationDistance?
     @Published private(set) var isWithin200mOfBalloon: Bool = false
@@ -42,6 +41,7 @@ final class MapPresenter: ObservableObject {
     private let landingPointTrackingService: LandingPointTrackingService
     private let currentLocationService: CurrentLocationService
     private let aprsTelemetryService: APRSTelemetryService
+    private let routeCalculationService: RouteCalculationService
 
     private var cancellables = Set<AnyCancellable>()
 
@@ -51,7 +51,8 @@ final class MapPresenter: ObservableObject {
         balloonPositionService: BalloonPositionService,
         landingPointTrackingService: LandingPointTrackingService,
         currentLocationService: CurrentLocationService,
-        aprsTelemetryService: APRSTelemetryService
+        aprsTelemetryService: APRSTelemetryService,
+        routeCalculationService: RouteCalculationService
     ) {
         self.coordinator = coordinator
         self.balloonTrackService = balloonTrackService
@@ -59,8 +60,9 @@ final class MapPresenter: ObservableObject {
         self.landingPointTrackingService = landingPointTrackingService
         self.currentLocationService = currentLocationService
         self.aprsTelemetryService = aprsTelemetryService
+        self.routeCalculationService = routeCalculationService
 
-        transportMode = coordinator.transportMode
+        transportMode = routeCalculationService.transportMode
         distanceToBalloon = currentLocationService.distanceToBalloon
         isWithin200mOfBalloon = currentLocationService.isWithin200mOfBalloon
 
@@ -90,7 +92,8 @@ final class MapPresenter: ObservableObject {
     }
 
     func setTransportMode(_ mode: TransportationMode) {
-        coordinator.transportMode = mode
+        appLog("MapPresenter: Transport mode changed to \(mode)", category: .general, level: .info)
+        routeCalculationService.setTransportMode(mode)
     }
 
     func requestDeviceParameters() {
@@ -125,12 +128,18 @@ final class MapPresenter: ObservableObject {
         cameraUpdatesSuspended = suspended
     }
 
+
     var bleService: BLECommunicationService { coordinator.bleCommunicationService }
 
     var persistenceService: PersistenceService { coordinator.persistenceService }
 
     func logZoomChange(_ description: String, span: MKCoordinateSpan, center: CLLocationCoordinate2D? = nil) {
-        coordinator.logZoomChange(description, span: span, center: center)
+        let zoomKm = Int(span.latitudeDelta * 111) // Approximate km conversion
+        if let center = center {
+            appLog("🔍 ZOOM: \(description) - \(zoomKm)km (\(String(format: "%.3f", span.latitudeDelta))°) at [\(String(format: "%.4f", center.latitude)), \(String(format: "%.4f", center.longitude))]", category: .general, level: .info)
+        } else {
+            appLog("🔍 ZOOM: \(description) - \(zoomKm)km (\(String(format: "%.3f", span.latitudeDelta))°)", category: .general, level: .info)
+        }
     }
 
     // MARK: - Private Helpers
@@ -142,9 +151,14 @@ final class MapPresenter: ObservableObject {
             }
             .store(in: &cancellables)
 
-        coordinator.$userRoute
-            .sink { [weak self] route in
-                self?.userRoute = route
+        // Subscribe to route calculation service directly
+        routeCalculationService.$currentRoute
+            .sink { [weak self] routeData in
+                if let routeData = routeData, !routeData.coordinates.isEmpty {
+                    self?.userRoute = MKPolyline(coordinates: routeData.coordinates, count: routeData.coordinates.count)
+                } else {
+                    self?.userRoute = nil
+                }
             }
             .store(in: &cancellables)
 
@@ -154,14 +168,14 @@ final class MapPresenter: ObservableObject {
             }
             .store(in: &cancellables)
 
-        coordinator.$balloonTelemetry
+        balloonPositionService.$currentTelemetry
             .sink { [weak self] telemetry in
                 self?.balloonTelemetry = telemetry
                 self?.refreshAnnotations()
             }
             .store(in: &cancellables)
 
-        coordinator.$balloonDisplayPosition
+        balloonPositionService.$balloonDisplayPosition
             .sink { [weak self] coordinate in
                 self?.balloonDisplayPosition = coordinate
                 self?.refreshAnnotations()
@@ -188,11 +202,6 @@ final class MapPresenter: ObservableObject {
             }
             .store(in: &cancellables)
 
-        coordinator.$isRouteVisible
-            .sink { [weak self] visible in
-                self?.isRouteVisible = visible
-            }
-            .store(in: &cancellables)
 
         coordinator.$isBuzzerMuted
             .sink { [weak self] muted in
@@ -200,7 +209,7 @@ final class MapPresenter: ObservableObject {
             }
             .store(in: &cancellables)
 
-        coordinator.$transportMode
+        routeCalculationService.$transportMode
             .sink { [weak self] mode in
                 self?.transportMode = mode
             }
@@ -385,7 +394,7 @@ final class MapPresenter: ObservableObject {
         let span = MKCoordinateSpan(latitudeDelta: latSpan, longitudeDelta: lonSpan)
 
         region = MKCoordinateRegion(center: center, span: span)
-        coordinator.logZoomChange("MapPresenter updateCameraToShowAllAnnotations", span: span, center: center)
+        logZoomChange("MapPresenter updateCameraToShowAllAnnotations", span: span, center: center)
     }
 
     private func cameraCoordinates() -> [CLLocationCoordinate2D] {
@@ -423,4 +432,5 @@ final class MapPresenter: ObservableObject {
         polyline.getCoordinates(&coords, range: NSRange(location: 0, length: polyline.pointCount))
         return coords.filter { CLLocationCoordinate2DIsValid($0) }
     }
+
 }

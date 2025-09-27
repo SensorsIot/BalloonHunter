@@ -14,45 +14,54 @@ final class AppServices: ObservableObject {
     let persistenceService: PersistenceService
     let predictionCache: PredictionCache
     let routingCache: RoutingCache
-    let userSettings = UserSettings()
-    
+    let userSettings: UserSettings
+
     // MARK: - Core Services
     let bleCommunicationService: BLECommunicationService
     let aprsTelemetryService: APRSTelemetryService
     let currentLocationService: CurrentLocationService
-    
+
     // MARK: - Specialized Services
     let predictionService: PredictionService
     let balloonPositionService: BalloonPositionService
     let balloonTrackService: BalloonTrackService
     let landingPointTrackingService: LandingPointTrackingService
-    // RouteCalculationService moved to ServiceCoordinator (circular dependencies)
-    
+    let routeCalculationService: RouteCalculationService
+    let navigationService: NavigationService
+
     // MARK: - Coordinators (moved to ServiceCoordinator)
-    
-    private var cancellables = Set<AnyCancellable>()
-    
+
     init() {
-        
+
         // 1. Initialize core infrastructure first
         self.persistenceService = PersistenceService()
         self.predictionCache = PredictionCache()
         self.routingCache = RoutingCache()
-        
+
+        // Use the loaded UserSettings from PersistenceService instead of creating fresh ones
+        self.userSettings = persistenceService.userSettings
+
         // 2. Initialize core services with dependencies
         self.bleCommunicationService = BLECommunicationService(persistenceService: persistenceService)
         self.aprsTelemetryService = APRSTelemetryService(userSettings: userSettings)
         self.currentLocationService = CurrentLocationService()
 
-        // 3. Initialize prediction service in API-only mode initially
-        self.predictionService = PredictionService()
+        // 3. Initialize prediction service with shared dependencies
+        self.predictionService = PredictionService(predictionCache: predictionCache, userSettings: userSettings)
 
-        // 4. Initialize specialized services
+        // 4. Initialize route calculation service
+        self.routeCalculationService = RouteCalculationService(currentLocationService: currentLocationService)
+
+        // 5. Initialize navigation service
+        self.navigationService = NavigationService(userSettings: userSettings, routeCalculationService: routeCalculationService)
+
+        // 5. Initialize specialized services
         self.balloonPositionService = BalloonPositionService(bleService: bleCommunicationService,
                                                              aprsTelemetryService: aprsTelemetryService,
                                                              currentLocationService: currentLocationService,
                                                              persistenceService: persistenceService,
-                                                             predictionService: predictionService)
+                                                             predictionService: predictionService,
+                                                             routeCalculationService: routeCalculationService)
         self.balloonTrackService = BalloonTrackService(
             persistenceService: persistenceService,
             balloonPositionService: balloonPositionService
@@ -69,39 +78,10 @@ final class AppServices: ObservableObject {
     }
     
     // MARK: - Service Lifecycle
-    
+
     func initialize() {
-        let startTime = Date()
-        
-        // Service initialization handled by ServiceCoordinator
-        // AppServices now focuses on service coordination only
-        
-        let _ = Date().timeIntervalSince(startTime)
+        // All service initialization is now handled in the init() method
+        // ServiceCoordinator manages the startup sequence
+        appLog("AppServices: Services initialized and ready", category: .service, level: .info)
     }
-    
-    // MARK: - UI Command Methods
-    
-    // Manual prediction now handled by ServiceCoordinator
-    // AppServices no longer manages UI interactions
-    
-    // Transport mode setting moved to ServiceCoordinator
-    // AppServices no longer manages UI state
-    
-    // Prediction visibility toggling moved to ServiceCoordinator
-    // AppServices no longer manages UI state
-    
-    // UI state management methods moved to ServiceCoordinator
-    // AppServices now focuses on service coordination only
-    
-    /// Set buzzer mute state
-    func setBuzzerMute(_ muted: Bool) {
-        bleCommunicationService.setMute(muted)
-        // Buzzer state now managed by ServiceCoordinator
-        appLog("AppServices: Buzzer mute set to \(muted)", category: .general, level: .info)
-    }
-    
-    // MARK: - Private Helper Methods
-    
-    // Camera control moved to ServiceCoordinator - AppServices no longer handles UI state
-    
 }

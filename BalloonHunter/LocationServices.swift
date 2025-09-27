@@ -27,6 +27,7 @@ final class CurrentLocationService: NSObject, ObservableObject, CLLocationManage
     private var isHeadingModeActive: Bool = false
     private var backgroundTimer: Timer?
     private var cancellables = Set<AnyCancellable>()
+    private var userLocationLogCount: Int = 0
     
     // Location service operational modes
     enum LocationMode {
@@ -181,9 +182,21 @@ final class CurrentLocationService: NSObject, ObservableObject, CLLocationManage
             self.updateDistanceToBalloon()
             self.updateProximityStatus()
 
+            // Throttled user location logging to avoid spam (moved from ServiceCoordinator)
+            self.userLocationLogCount += 1
             if isFirstUpdate {
                 appLog("Initial user location [\(modeString)]: lat=\(location.coordinate.latitude), lon=\(location.coordinate.longitude)", category: .service, level: .info)
-            } else if distanceDiff > 20 { // Log significant movement (>20m)
+            } else if self.userLocationLogCount % 10 == 1 {
+                // Log every 10th update with full details
+                appLog(String(format: "User (\(self.userLocationLogCount), every 10th): lat=%.5f lon=%.5f alt=%.0f acc=%.1f/%.1f",
+                               newLocationData.latitude,
+                               newLocationData.longitude,
+                               newLocationData.altitude,
+                               newLocationData.horizontalAccuracy,
+                               newLocationData.verticalAccuracy),
+                       category: .general, level: .debug)
+            } else if distanceDiff > 20 {
+                // Log significant movement (>20m) without full details
                 appLog("User location update [\(modeString)]: lat=\(location.coordinate.latitude), lon=\(location.coordinate.longitude), dist=\(Int(distanceDiff))m", category: .service, level: .debug)
             }
         }

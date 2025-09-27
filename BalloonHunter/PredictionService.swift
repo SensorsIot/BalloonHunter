@@ -164,6 +164,7 @@ final class PredictionService: ObservableObject {
     private weak var serviceCoordinator: ServiceCoordinator?
     private let userSettings: UserSettings
     private let balloonTrackService: BalloonTrackService?
+    private weak var balloonPositionService: BalloonPositionService?
     
     // MARK: - Published State
     var isRunning: Bool = false
@@ -188,23 +189,23 @@ final class PredictionService: ObservableObject {
     }()
     private let isoNoFrac = ISO8601DateFormatter()
 
-    // MARK: - Simplified Constructor (API-only mode)
-    init() {
-        // Initialize API session only
+    // MARK: - Shared Dependencies Constructor (for app initialization)
+    init(predictionCache: PredictionCache, userSettings: UserSettings) {
+        // Initialize API session
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 30.0
         config.timeoutIntervalForResource = 60.0
         self.session = URLSession(configuration: config)
-        
-        // Initialize scheduling dependencies as nil (API-only mode)
-        self.predictionCache = PredictionCache() // Default cache
-        self.serviceCoordinator = nil
-        self.userSettings = UserSettings() // Default settings
-        // API-only mode - no service dependencies needed for predictions
-        self.balloonTrackService = nil // Not needed for API-only predictions
-        
-        // PredictionService initialized in API-only mode
-        publishHealthEvent(.healthy, message: "Prediction service initialized (API-only)")
+
+        // Use shared dependencies
+        self.predictionCache = predictionCache
+        self.userSettings = userSettings
+        self.serviceCoordinator = nil // Will be set later to avoid circular dependency
+        self.balloonTrackService = nil // Will be set later if needed
+        self.balloonPositionService = nil // Will be set later to avoid circular dependency
+
+        // PredictionService initialized with shared dependencies
+        publishHealthEvent(.healthy, message: "Prediction service initialized with shared dependencies")
     }
     
     // MARK: - Full Constructor (with scheduling)
@@ -237,11 +238,11 @@ final class PredictionService: ObservableObject {
         appLog("PredictionService: ServiceCoordinator configured", category: .service, level: .info)
     }
 
-    func configureSharedDependencies(predictionCache: PredictionCache, userSettings: UserSettings) {
-        // Note: In API-only mode, we can't replace the let properties, but we can work with the existing ones
-        // This method is for future enhancement if needed
-        appLog("PredictionService: Shared dependencies noted (API-only mode uses internal instances)", category: .service, level: .info)
+    func setBalloonPositionService(_ service: BalloonPositionService) {
+        self.balloonPositionService = service
+        appLog("PredictionService: BalloonPositionService configured", category: .service, level: .info)
     }
+
 
     // MARK: - Service Lifecycle
     
@@ -267,24 +268,29 @@ final class PredictionService: ObservableObject {
     // MARK: - Manual Prediction Triggers
     
     func triggerManualPrediction() async {
-        guard let serviceCoordinator = serviceCoordinator,
-              let telemetry = serviceCoordinator.balloonTelemetry else {
+        guard let balloonPositionService = balloonPositionService,
+              let telemetry = balloonPositionService.currentTelemetry else {
             appLog("PredictionService: Manual trigger ignored - no telemetry available", category: .service, level: .debug)
             return
         }
-        
+
         appLog("PredictionService: Manual trigger - performing prediction", category: .service, level: .info)
         await performPrediction(telemetry: telemetry, trigger: "manual")
     }
     
     func triggerStartupPrediction() async {
-        guard let serviceCoordinator = serviceCoordinator,
-              let telemetry = serviceCoordinator.balloonTelemetry else {
+        guard let balloonPositionService = balloonPositionService,
+              let telemetry = balloonPositionService.currentTelemetry else {
             return
         }
-        
+
         appLog("PredictionService: Startup trigger - first telemetry received", category: .service, level: .info)
         await performPrediction(telemetry: telemetry, trigger: "startup")
+    }
+
+    /// Trigger prediction with specific telemetry data (called by ServiceCoordinator)
+    func triggerPredictionWithTelemetry(_ telemetry: TelemetryData, trigger: String = "coordinator") async {
+        await performPrediction(telemetry: telemetry, trigger: trigger)
     }
     
     // MARK: - Private Timer Implementation (disabled; coordinator owns timer)
@@ -364,7 +370,6 @@ final class PredictionService: ObservableObject {
         }
 
         let balloonPhase = serviceCoordinator.balloonPositionService.balloonPhase
-        let smoothedRate = serviceCoordinator.smoothedDescentRate
 
         // DEBUG: Critical debugging for descent rate logic
 

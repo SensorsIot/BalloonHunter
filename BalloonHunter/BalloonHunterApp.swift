@@ -59,7 +59,9 @@ struct BalloonHunterApp: App {
             predictionService: services.predictionService,
             balloonPositionService: services.balloonPositionService,
             balloonTrackService: services.balloonTrackService,
-            landingPointTrackingService: services.landingPointTrackingService
+            landingPointTrackingService: services.landingPointTrackingService,
+            navigationService: services.navigationService,
+            userSettings: services.userSettings
         )
         let presenter = MapPresenter(
             coordinator: coordinator,
@@ -67,7 +69,8 @@ struct BalloonHunterApp: App {
             balloonPositionService: services.balloonPositionService,
             landingPointTrackingService: services.landingPointTrackingService,
             currentLocationService: services.currentLocationService,
-            aprsTelemetryService: services.aprsTelemetryService
+            aprsTelemetryService: services.aprsTelemetryService,
+            routeCalculationService: services.routeCalculationService
         )
         _appServices = StateObject(wrappedValue: services)
         _serviceCoordinator = StateObject(wrappedValue: coordinator)
@@ -93,6 +96,7 @@ struct BalloonHunterApp: App {
                         .environmentObject(appServices.landingPointTrackingService)
                         .environmentObject(appServices.balloonPositionService)
                         .environmentObject(serviceCoordinator.predictionService)
+                        .environmentObject(appServices.routeCalculationService)
                 } else {
                     // Logo and startup sequence
                     VStack {
@@ -162,6 +166,7 @@ struct BalloonHunterApp: App {
                 // Initialize services
                 appServices.initialize()
                 serviceCoordinator.setAppSettings(appSettings)
+                appServices.routeCalculationService.setAppSettings(appSettings)
                 serviceCoordinator.initialize()
 
                 // Start the 8-step startup sequence

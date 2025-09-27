@@ -89,20 +89,14 @@ struct TrackingMapView: View {
                         .frame(width: 100)
 
 
-                        // Show All or Point button
-                        if mapPresenter.landingPoint != nil {
-                            Button("All") {
+                        // Show All button - no function when no landing point
+                        Button("All") {
+                            if mapPresenter.landingPoint != nil {
                                 if mapPresenter.isHeadingMode { mapPresenter.toggleHeadingMode() }
                                 mapPresenter.triggerShowAllAnnotations()
                             }
-                            .buttonStyle(.bordered)
-                        } else {
-                            Button("Point") {
-                                appLog("TrackingMapView: Landing point setting requested (not yet implemented)", category: .general, level: .info)
-                            }
-                            .buttonStyle(.bordered)
-                            .tint(.blue)
                         }
+                        .buttonStyle(.bordered)
 
                         // Heading mode toggle
                         Button {
@@ -153,7 +147,8 @@ struct TrackingMapView: View {
 
                 // Direct ServiceCoordinator Map Rendering
                 ZStack {
-                    Map(position: $position, interactionModes: mapPresenter.isHeadingMode ? .zoom : .all) {
+                    MapReader { proxy in
+                        Map(position: $position, interactionModes: mapPresenter.isHeadingMode ? .zoom : .all) {
                     
                     // 1. Balloon Track: Historic track as thin red line
                     let trackPoints = mapPresenter.trackPoints
@@ -261,6 +256,7 @@ struct TrackingMapView: View {
                         }
                     }
                 }
+                    }
                 .mapControls {
                     MapCompass()
                     MapScaleView()
@@ -428,7 +424,9 @@ struct TrackingMapView: View {
         predictionService: mockAppServices.predictionService,
         balloonPositionService: mockAppServices.balloonPositionService,
         balloonTrackService: mockAppServices.balloonTrackService,
-        landingPointTrackingService: mockAppServices.landingPointTrackingService
+        landingPointTrackingService: mockAppServices.landingPointTrackingService,
+        navigationService: mockAppServices.navigationService,
+        userSettings: mockAppServices.userSettings
     )
     let mockPresenter = MapPresenter(
         coordinator: mockServiceCoordinator,
@@ -436,7 +434,8 @@ struct TrackingMapView: View {
         balloonPositionService: mockAppServices.balloonPositionService,
         landingPointTrackingService: mockAppServices.landingPointTrackingService,
         currentLocationService: mockAppServices.currentLocationService,
-        aprsTelemetryService: mockAppServices.aprsTelemetryService
+        aprsTelemetryService: mockAppServices.aprsTelemetryService,
+        routeCalculationService: mockAppServices.routeCalculationService
     )
     
     TrackingMapView()

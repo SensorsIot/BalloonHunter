@@ -138,11 +138,11 @@ The balloon carries a sonde that transmits its position signal. This signal is r
 
 ### Packet Type Routing
 
-- **BLE Type 0** (Device Status) → RadioChannelData only
-- **BLE Type 1** (Full Telemetry) → PositionData + RadioChannelData (split packet)
-- **BLE Type 2** (Partial Status) → RadioChannelData only
-- **BLE Type 3** (Configuration) → SettingsData only
-- **APRS Telemetry** → PositionData + RadioChannelData (no SettingsData)
+- **BLE Type 0** (Device Status) → RadioChannelData only (radio parameters + device status)
+- **BLE Type 1** (Full Telemetry) → PositionData only (position and movement data)
+- **BLE Type 2** (Partial Status) → No stream emission (updates internal state only)
+- **BLE Type 3** (Configuration) → SettingsData only (device configuration)
+- **APRS Telemetry** → PositionData + RadioChannelData (position + radio parameters)
 
 ### Communication Patterns
 
@@ -199,6 +199,37 @@ The app treats BLE (MySondyGo) telemetry as authoritative whenever it is availab
 
 ## Telemetry State Machine
 
+### Overall Architecture & Responsibilities
+
+The telemetry system follows a clear separation of concerns between startup, state machine, and state-specific logic:
+
+**1. Startup Responsibilities:**
+- Collect necessary telemetry, connection status, and other decision inputs
+- Establish BLE connections and initial APRS polling
+- Gather balloon phase, telemetry availability, and user location
+- Provide decision points for state machine evaluation
+- **No business logic**: Startup only prepares inputs, does not trigger predictions or handle application logic
+
+**2. State Machine Responsibilities:**
+- Use collected inputs to determine appropriate state (flying, landed, etc.)
+- Manage state transitions based on telemetry availability and balloon phase
+- Control which services are enabled/disabled in each state
+- **Decision engine**: Pure state evaluation based on input signals
+
+**3. State-Specific Logic:**
+- Each state handles its own responsibilities (predictions, landing points, routing)
+- Flying states manage prediction triggers and landing point calculation
+- Landed states handle route calculation and position tracking
+- **Business logic**: All application functionality lives in state handlers
+
+This architecture ensures that:
+- Startup remains focused on input collection and never handles business logic
+- State machine provides clean, testable state transitions
+- All application behavior is properly encapsulated in state-specific handlers
+- No redundant or competing logic exists between startup and states
+
+### Implementation
+
 The telemetry availability scenarios are implemented as a formal state machine within `BalloonPositionService`. This state machine centralizes all telemetry source decision-making and ensures predictable, testable behavior.
 
 ##### States
@@ -227,21 +258,25 @@ Each state defines explicit exit criteria and associated functionality upon ente
 
 **State: `startup`**
 *   **Functionality**:
-    *   Disables APRS polling.
-    *   Disables predictions and landing detection.
+    *   Collects telemetry, connection status, and decision inputs
+    *   Establishes BLE connections and initial APRS polling
+    *   Disables predictions and landing detection (business logic handled by target states)
+    *   **Input collection only**: No prediction triggers or application logic
 *   **Transitions**:
-    1.  `bleTelemetryState.hasTelemetry` AND `balloonPhase.isFlying` → `liveBLEFlying`
-    2.  `bleTelemetryState.hasTelemetry` AND `balloonPhase.isLanded` → `liveBLELanded`
-    3.  `aprsTelemetryIsAvailable` AND `balloonPhase.isFlying` → `aprsFallbackFlying`
-    4.  `aprsTelemetryIsAvailable` AND `balloonPhase.isLanded` → `aprsFallbackLanded`
+    1.  `bleTelemetryState.hasTelemetry` AND `balloonPhase == .landed` → `liveBLELanded`
+    2.  `bleTelemetryState.hasTelemetry` → `liveBLEFlying`
+    3.  `aprsTelemetryIsAvailable` AND `balloonPhase == .landed` → `aprsFallbackLanded`
+    4.  `aprsTelemetryIsAvailable` → `aprsFallbackFlying` (defaults to flying when phase unknown)
     5.  `ELSE` → `noTelemetry`
 
 **State: `liveBLEFlying`**
 *   **Functionality**:
     *   Disables APRS polling.
     *   Enables predictions and landing detection.
+    *   **Business logic**: Triggers predictions when no cached prediction available
+    *   **Landing points**: Sets landing points from prediction data and triggers routing
 *   **Transitions**:
-    1.  `balloonPhase.isLanded` → `liveBLELanded`
+    1.  `balloonPhase == .landed` → `liveBLELanded`
     2.  `NOT bleTelemetryState.hasTelemetry` → `waitingForAPRS`
 
 **State: `liveBLELanded`**
@@ -249,7 +284,7 @@ Each state defines explicit exit criteria and associated functionality upon ente
     *   Disables APRS polling.
     *   Disables predictions. The live BLE position is used as the landing point.
 *   **Transitions**:
-    1.  `balloonPhase.isFlying` → `liveBLEFlying`
+    1.  `balloonPhase != .landed` → `liveBLEFlying`
     2.  `NOT bleTelemetryState.hasTelemetry` → `waitingForAPRS`
 
 **State: `waitingForAPRS`**
@@ -266,9 +301,11 @@ Each state defines explicit exit criteria and associated functionality upon ente
     *   Enables APRS polling.
     *   Enables predictions and landing detection.
     *   Monitors for frequency mismatches between APRS and the BLE device settings.
+    *   **Business logic**: Triggers predictions when no cached prediction available
+    *   **Landing points**: Sets landing points from prediction data and triggers routing
 *   **Transitions**:
     1.  `bleTelemetryState.hasTelemetry` AND `timeInState` ≥ 30s → `liveBLEFlying`
-    2.  `balloonPhase.isLanded` → `aprsFallbackLanded`
+    2.  `balloonPhase == .landed` → `aprsFallbackLanded`
     3.  `NOT aprsTelemetryIsAvailable` → `noTelemetry`
 
 **State: `aprsFallbackLanded`**
@@ -277,7 +314,7 @@ Each state defines explicit exit criteria and associated functionality upon ente
     *   Disables predictions. The APRS position is used as the landing point.
 *   **Transitions**:
     1.  `bleTelemetryState.hasTelemetry` AND `timeInState` ≥ 30s → `liveBLEFlying` or `liveBLELanded` (based on `balloonPhase`)
-    2.  `balloonPhase.isFlying` → `aprsFallbackFlying`
+    2.  `balloonPhase != .landed` → `aprsFallbackFlying`
     3.  `NOT aprsTelemetryIsAvailable` → `noTelemetry`
 
 **State: `noTelemetry`**
@@ -285,17 +322,17 @@ Each state defines explicit exit criteria and associated functionality upon ente
     *   Disables APRS polling.
     *   Disables predictions and landing detection.
 *   **Transitions**:
-    1.  `bleTelemetryState.hasTelemetry` AND `balloonPhase.isFlying` → `liveBLEFlying`
-    2.  `bleTelemetryState.hasTelemetry` AND `balloonPhase.isLanded` → `liveBLELanded`
-    3.  `aprsTelemetryIsAvailable` AND `balloonPhase.isFlying` → `aprsFallbackFlying`
-    4.  `aprsTelemetryIsAvailable` AND `balloonPhase.isLanded` → `aprsFallbackLanded`
+    1.  `bleTelemetryState.hasTelemetry` AND `balloonPhase == .landed` → `liveBLELanded`
+    2.  `bleTelemetryState.hasTelemetry` → `liveBLEFlying`
+    3.  `aprsTelemetryIsAvailable` AND `balloonPhase == .landed` → `aprsFallbackLanded`
+    4.  `aprsTelemetryIsAvailable` → `aprsFallbackFlying`
 
 ##### Key Design Principles
 
 *   **Input-Driven Transitions**: State changes occur only when input signals change.
 *   **30-Second Debouncing**: Transitions from APRS back to BLE require the system to be in an APRS state for at least 30 seconds to prevent rapid oscillation between telemetry sources.
 *   **External Balloon Phase**: The state machine consumes balloon phase decisions made by the `BalloonTrackService`.
-*   **APRS Service Manages Polling**: The `APRSTelemetryService` internally handles its polling frequency; the state machine only enables or disables it.
+*   **APRS Polling Control**: The `APRSTelemetryService` handles polling frequency internally; the state machine enables/disables it. Exception: APRS polling starts immediately during startup (Step 2) regardless of state machine status for telemetry source evaluation.
 
 ### Architecture
 
@@ -1119,9 +1156,10 @@ The coordinator runs `performCompleteStartupSequence()` in 8 sequential steps wi
 2.  **Step 2: BLE Connection + APRS Priming (100ms-5s) [PARALLEL]**
     *   The progress label is updated to "Step 2: BLE & APRS".
     *   **BLE Connection**: MySondyGo device scanning and connection (5-second timeout)
-    *   **APRS Priming**: Initial telemetry fetch from SondeHub for station evaluation
+    *   **APRS Startup Polling**: Initial telemetry availability check and station evaluation (always runs during startup)
     *   **Location Services**: GPS activation for user positioning
     *   Both operations run in parallel for efficiency
+    *   Note: APRS polling starts immediately during startup regardless of BLE status (differs from steady-state behavior)
 
 3.  **Step 3: First Telemetry Package (5s+)**
     *   The progress label is updated to "Step 3: Telemetry".
@@ -1137,10 +1175,12 @@ The coordinator runs `performCompleteStartupSequence()` in 8 sequential steps wi
     *   Apply frequency synchronization if needed
 
 5.  **Step 5: Persistence Data Loading**
-    *   The progress label is updated to "Step 5: Loading Data".
-    *   Load balloon tracks from Core Data persistence
-    *   Load device settings and user preferences
-    *   Load landing point history from previous sessions
+    *   The progress label is updated to "Step 5: Data".
+    *   **UserSettings**: Already loaded during PersistenceService initialization and shared across all services (prediction parameters, descent rates, transport mode)
+    *   **Balloon tracks**: Pre-loaded in PersistenceService, automatically restored by BalloonTrackService when matching sonde telemetry arrives
+    *   **Device settings**: Pre-loaded from BLE device configuration cache
+    *   **Landing point history**: Pre-loaded in PersistenceService, accessible via persistence methods when needed
+    *   Note: This step primarily logs available data rather than performing active loading (data is loaded during service initialization)
 
 6.  **Step 6: Landing Point Determination**
     *   The progress label is updated to "Step 6: Landing Point".
@@ -1175,18 +1215,26 @@ A row for Buttons is placed above the map. It is fixed and covers the entire wid
 * Mode of transportation: The transport mode (car or bicycle) shall be used to calculate the route and the predicted arrival time. Every time the mode is changed, a new calculation has to be done. Use icons to save horizontal space.  
 * Apple Maps navigation: Opens Apple Maps with the current landing point pre-filled. Car mode launches driving directions; bicycle mode launches cycling directions on iOS 14+ and falls back to walking on older systems.  
 
-* Prediction on/off. It toggles if the balloon predicted path is displayed.  
+* **Settings Button**: Gear icon that opens device configuration interface and requests current device parameters via BLE.
 
-* If a landing point is available, The  button “All” is shown.  It maximizes  the zoom level so that all overlays (user location, balloon track, balloon landing point) are visible (showAnnotations())  
+* **Transport Mode Picker**: Segmented control with car/bicycle icons for selecting navigation mode (affects routing calculations and Apple Maps integration).
 
-* A button “Free/Heading”: It toggles between the two camera positions:  
+* **Point/All/Cancel Button**: Dynamic button functionality:
+  - When **no landing point** exists: Shows "Point" button to enter manual landing point selection mode
+  - In **point selection mode**: Shows "Cancel" button (red) to exit selection mode
+  - When **landing point exists**: Shows "All" button to zoom map to show all annotations
+  - **Point selection workflow**: Tap "Point" → tap on map → landing point is set automatically
 
-  * “Heading” where the map centers the position of the iPhone and aligns the map direction to meet its heading. The user can only zoom freely.  
-  * “Free” where the user can zoom and pan freely.  
+* **Heading Mode Toggle**: Location icon button that toggles between camera positions:
+  - **"Heading" mode**: Map centers on iPhone position and aligns to device heading (zoom-only interaction)
+  - **"Free" mode**: Full pan and zoom interaction enabled
+  - **Zoom preservation**: Zoom level maintained when switching between modes
 
-* The zoom level stays the same if switched between the two modes.  
+* **Buzzer Mute Toggle**: Speaker icon button with haptic feedback that sends BLE mute command (o{mute=setMute}o). Icon reflects current mute state with immediate UI feedback.
 
-* Buzzer mute: Buzzer mute: On a button press, the buzzer shall be muted or unmuted by the mute BLE command (o{mute=setMute}o). The buzzer button shall indicate the current mute state.
+* **Apple Maps Button**: Navigation icon (only visible when landing point available) that opens Apple Maps with pre-configured directions using selected transport mode.
+
+**Note**: Prediction path visibility toggle is not currently implemented - prediction paths are always shown when available during flight phases.
 
 
 ### Map

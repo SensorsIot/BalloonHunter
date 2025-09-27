@@ -587,12 +587,12 @@ struct SettingsView: View {
         Form {
             Section(header: Text("Live AFC Value")) {
                 VStack(spacing: 15) {
-                    Text("\(serviceCoordinator.afcMovingAverage) Hz")
+                    Text("\(bleService.afcMovingAverage) Hz")
                         .font(.system(size: 30, weight: .bold, design: .monospaced))
                         .padding(.vertical, 10)
 
                     Button("Transfer") {
-                        tempTuneFrequencyCorrection = serviceCoordinator.afcMovingAverage
+                        tempTuneFrequencyCorrection = bleService.afcMovingAverage
                     }
                     .buttonStyle(.borderedProminent)
                 }
@@ -629,11 +629,11 @@ struct SettingsView: View {
         }
         .onAppear {
             loadTuneSettings()
-            // AFC tracking moved to ServiceCoordinator for proper separation of concerns
-            // No need to manage subscription here - just observe serviceCoordinator.afcFrequencies
+            // AFC tracking moved to BLEService for proper separation of concerns
+            // No need to manage subscription here - just observe bleService.afcFrequencies
         }
         .onDisappear {
-            // AFC tracking managed by ServiceCoordinator - no cleanup needed
+            // AFC tracking managed by BLEService - no cleanup needed
             // Removed any selectedTab = 0 here to prevent automatic tab switching
         }
         .tabItem { Label("Tune", systemImage: "slider.horizontal.3") }

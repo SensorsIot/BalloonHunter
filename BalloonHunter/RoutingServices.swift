@@ -139,10 +139,59 @@ actor RoutingCache {
 }
 
 final class RouteCalculationService: ObservableObject {
+    @Published var currentRoute: RouteData?
+    @Published var isCalculatingRoute: Bool = false
+    @Published var transportMode: TransportationMode = .car
+
     private let currentLocationService: CurrentLocationService
-    
+    private var lastDestination: CLLocationCoordinate2D?
+    private var appSettings: AppSettings?
+
     init(currentLocationService: CurrentLocationService) {
         self.currentLocationService = currentLocationService
+    }
+
+    /// Set AppSettings reference for transport mode persistence
+    func setAppSettings(_ settings: AppSettings) {
+        appSettings = settings
+        transportMode = settings.transportMode
+    }
+
+    /// Set transport mode and automatically recalculate current route
+    func setTransportMode(_ mode: TransportationMode) {
+        appLog("RouteCalculationService: Transport mode changed to \(mode)", category: .service, level: .info)
+        transportMode = mode
+
+        // Save to AppSettings
+        appSettings?.transportMode = mode
+
+        // Recalculate current route with new transport mode
+        if let destination = lastDestination,
+           let userLocation = currentLocationService.locationData {
+            appLog("RouteCalculationService: Recalculating route with new transport mode", category: .service, level: .info)
+            calculateAndPublishRoute(from: userLocation, to: destination, transportMode: mode)
+        }
+    }
+
+    /// Calculate and publish route - called by state machine
+    func calculateAndPublishRoute(from userLocation: LocationData, to destination: CLLocationCoordinate2D, transportMode: TransportationMode? = nil) {
+        // Store destination for transport mode changes
+        lastDestination = destination
+
+        // Use provided transport mode or service's current mode
+        let effectiveTransportMode = transportMode ?? self.transportMode
+
+        Task { @MainActor in
+            isCalculatingRoute = true
+            do {
+                let route = try await calculateRoute(from: userLocation, to: destination, transportMode: effectiveTransportMode)
+                currentRoute = route
+            } catch {
+                appLog("RouteCalculationService: Failed to calculate route: \(error.localizedDescription)", category: .service, level: .info)
+                currentRoute = nil
+            }
+            isCalculatingRoute = false
+        }
     }
     
     func calculateRoute(from userLocation: LocationData, to destination: CLLocationCoordinate2D, transportMode: TransportationMode) async throws -> RouteData {
