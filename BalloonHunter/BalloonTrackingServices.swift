@@ -210,7 +210,6 @@ final class BalloonPositionService: ObservableObject {
         // Debug: Always log when APRS telemetry arrives
         if source == "APRS" {
             appLog("BalloonPositionService: APRS telemetry received for \(telemetry.sondeName) - BLE available: \(bleService.telemetryState.hasTelemetry)", category: .service, level: .info)
-            appLog("BalloonPositionService: 🔥 CRITICAL - RECEIVED telemetry from APRS: frequency=\(telemetry.frequency), sonde=\(telemetry.sondeName)", category: .service, level: .error)
         }
 
         // Only process APRS telemetry when BLE telemetry is not available (arbitration)
@@ -233,10 +232,6 @@ final class BalloonPositionService: ObservableObject {
 
         var telemetryToStore = telemetry
 
-        // DEBUG: Check telemetryToStore right after creation
-        if source == "APRS" {
-            appLog("BalloonPositionService: 🔥 CRITICAL - telemetryToStore CREATED: frequency=\(telemetryToStore.frequency), sonde=\(telemetryToStore.sondeName)", category: .service, level: .error)
-        }
 
         if source == "BLE" {
             let countdown = telemetry.burstKillerTime
@@ -263,10 +258,6 @@ final class BalloonPositionService: ObservableObject {
 
         currentTelemetry = telemetryToStore
 
-        // DEBUG: Critical debugging for race condition
-        if source == "APRS" {
-            appLog("BalloonPositionService: 🔥 CRITICAL - currentTelemetry set from APRS: frequency=\(telemetryToStore.frequency), sonde=\(telemetryToStore.sondeName)", category: .service, level: .error)
-        }
 
         // Update balloon phase based on new telemetry
         updateBalloonPhase()
@@ -340,11 +331,13 @@ final class BalloonPositionService: ObservableObject {
     // MARK: - Telemetry State Machine
 
     private func evaluateTelemetryState() {
+
         let inputs = TelemetryInputs(
             bleTelemetryState: bleService.telemetryState,
             aprsTelemetryIsAvailable: aprsTelemetryIsAvailable,
             balloonPhase: balloonPhase
         )
+
 
         let newState = determineNextState(inputs: inputs)
 
@@ -570,7 +563,6 @@ final class BalloonPositionService: ObservableObject {
             isInAPRSFallbackMode = true
         }
 
-        appLog("BalloonPositionService: State behavior - Predictions:\(shouldEnablePredictions) LandingDetection:\(shouldEnableLandingDetection) APRSMode:\(isInAPRSFallbackMode)", category: .service, level: .debug)
     }
 
     // MARK: - State Transition Evaluators
@@ -652,7 +644,14 @@ final class BalloonPositionService: ObservableObject {
     }
 
     private func evaluateAPRSFallbackFlyingTransitions(inputs: TelemetryInputs, timeInState: TimeInterval) -> TelemetryState {
-        if inputs.bleTelemetryState.hasTelemetry && timeInState >= 30.0 {
+        // Check if this is a new balloon (immediate transition without debounce)
+        let isNewBalloon = isNewBalloonDetected()
+
+        if isNewBalloon {
+            appLog("BalloonPositionService: New balloon detected - bypassing 30s debounce for immediate BLE transition", category: .service, level: .info)
+        }
+
+        if inputs.bleTelemetryState.hasTelemetry && (timeInState >= 30.0 || isNewBalloon) {
             return .liveBLEFlying
         }
         if inputs.balloonPhase == .landed {
@@ -665,7 +664,14 @@ final class BalloonPositionService: ObservableObject {
     }
 
     private func evaluateAPRSFallbackLandedTransitions(inputs: TelemetryInputs, timeInState: TimeInterval) -> TelemetryState {
-        if inputs.bleTelemetryState.hasTelemetry && timeInState >= 30.0 {
+        // Check if this is a new balloon (immediate transition without debounce)
+        let isNewBalloon = isNewBalloonDetected()
+
+        if isNewBalloon {
+            appLog("BalloonPositionService: New balloon detected - bypassing 30s debounce for immediate BLE transition", category: .service, level: .info)
+        }
+
+        if inputs.bleTelemetryState.hasTelemetry && (timeInState >= 30.0 || isNewBalloon) {
             return inputs.balloonPhase == .landed ? .liveBLELanded : .liveBLEFlying
         }
         if inputs.balloonPhase != .landed {
@@ -691,6 +697,20 @@ final class BalloonPositionService: ObservableObject {
             return .aprsFallbackFlying
         }
         return .noTelemetry
+    }
+
+    /// Detect if BLE telemetry represents a new balloon (different sonde name)
+    private func isNewBalloonDetected() -> Bool {
+        guard let bleTelemetry = bleService.latestTelemetry,
+              !bleTelemetry.sondeName.isEmpty else {
+            return false
+        }
+
+        let bleSondeName = bleTelemetry.sondeName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let currentSondeName = currentTelemetry?.sondeName.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // New balloon if BLE has a different sonde name than current telemetry
+        return bleSondeName != currentSondeName
     }
 
     // Convenience methods for policies
@@ -774,8 +794,6 @@ final class BalloonPositionService: ObservableObject {
         let bleFreq = bleService.deviceSettings.frequency
         let freqMismatch = abs(aprsFreq - bleFreq) > 0.01
 
-        // DEBUG: Critical debugging for race condition
-        appLog("BalloonPositionService: 🔥 CRITICAL - Startup frequency check: APRS=\(aprsFreq) MHz, BLE=\(bleFreq) MHz, mismatch=\(freqMismatch)", category: .service, level: .error)
 
         let aprsProbeType = telemetry.probeType.isEmpty ? "RS41" : telemetry.probeType
         let bleProbeType = bleService.deviceSettings.probeType
@@ -825,8 +843,6 @@ final class BalloonPositionService: ObservableObject {
 
     /// Evaluate BLE reconnection sync (automatic if previous APRS fallback)
     private func evaluateBLEReconnectionSync() {
-        // DEBUG: Log that this method is called
-        appLog("BalloonPositionService: DEBUG - evaluateBLEReconnectionSync() called", category: .service, level: .error)
 
         // Only sync if we have APRS telemetry available (indicates we were in fallback)
         guard aprsTelemetryIsAvailable,
@@ -993,6 +1009,8 @@ final class BalloonPositionService: ObservableObject {
                 balloonPhase = currentTelemetry.altitude < 10_000 ? .descendingBelow10k : .descendingAbove10k
             }
         }
+
+        // DEBUG: Critical debugging for balloon phase
     }
 }
 

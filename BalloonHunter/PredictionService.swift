@@ -364,6 +364,9 @@ final class PredictionService: ObservableObject {
         }
 
         let balloonPhase = serviceCoordinator.balloonPositionService.balloonPhase
+        let smoothedRate = serviceCoordinator.smoothedDescentRate
+
+        // DEBUG: Critical debugging for descent rate logic
 
         // Use smoothed descent rate only when descending below 10k with valid smoothed data
         if balloonPhase == .descendingBelow10k,
@@ -372,7 +375,7 @@ final class PredictionService: ObservableObject {
             let val = abs(smoothedRate)
             appLog("PredictionService: Using smoothed descent rate: \(String(format: "%.2f", val)) m/s (descendingBelow10k)", category: .service, level: .info)
             Task { @MainActor in
-                serviceCoordinator.predictionUsesSmoothedDescent = true
+                serviceCoordinator.smoothenedPredictionActive = true
             }
             return val
         } else {
@@ -383,7 +386,7 @@ final class PredictionService: ObservableObject {
                         balloonPhase == .unknown ? "unknown" : "no smoothed rate"
             appLog("PredictionService: Using settings descent rate: \(String(format: "%.2f", val)) m/s (\(reason))", category: .service, level: .info)
             Task { @MainActor in
-                serviceCoordinator.predictionUsesSmoothedDescent = false
+                serviceCoordinator.smoothenedPredictionActive = false
             }
             return val
         }

@@ -53,7 +53,7 @@ struct DataPanelView: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                         Text("\(signalStrengthString) dBm")
                             .frame(maxWidth: .infinity, alignment: .leading)
-                        Text("\(batteryPercentageString) Batt%")
+                        Text("\(batteryPercentageString)%")
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     // Row 2: Vertical speed, Horizontal speed, Distance
@@ -88,10 +88,14 @@ struct DataPanelView: View {
                             }
                         }()
                         let burstKillerExpiry = burstKillerExpiryString()
-                        Text("Descent Rate: \(descentValue) m/s  •  Burst killer: \(burstKillerExpiry)")
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .foregroundColor(serviceCoordinator.predictionUsesSmoothedDescent ? .green : .primary)
-                            .gridCellColumns(3)
+                        HStack(spacing: 0) {
+                            Text("Descent Rate: \(descentValue) m/s")
+                                .foregroundColor(serviceCoordinator.smoothenedPredictionActive ? .green : .primary)
+                            Text("  •  Burst killer: \(burstKillerExpiry)")
+                                .foregroundColor(.primary)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .gridCellColumns(3)
                     }
                 }
                 .padding(.horizontal)
@@ -248,12 +252,11 @@ struct DataPanelView: View {
     }
 
     private var batteryPercentageString: String {
-        // Prioritize BLE device status (Type 0) when ready for commands
-        if bleService.telemetryState.canReceiveCommands,
-           let deviceStatus = bleService.deviceStatus {
+        // Prioritize BLE device status (Type 0) when available
+        if let deviceStatus = bleService.deviceStatus {
             return "\(deviceStatus.batteryPercentage)"
         }
-        // Fallback to telemetry data battery percentage
+        // Fallback to telemetry data battery percentage (Type 1)
         if let val = balloonPositionService.currentTelemetry?.batteryPercentage {
             return "\(val)"
         }

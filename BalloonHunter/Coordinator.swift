@@ -36,7 +36,7 @@ final class ServiceCoordinator: ObservableObject {
     @Published var balloonTrackHistory: [TelemetryData] = []
     @Published var connectionStatus: ConnectionStatus = .disconnected
     @Published var smoothedDescentRate: Double? = nil
-    @Published var predictionUsesSmoothedDescent: Bool = false
+    @Published var smoothenedPredictionActive: Bool = false
     @Published var smoothedVerticalSpeed: Double = 0.0
     @Published var smoothedHorizontalSpeed: Double = 0.0
     @Published var isTelemetryStale: Bool = false
@@ -361,7 +361,7 @@ final class ServiceCoordinator: ObservableObject {
                 self.smoothedVerticalSpeed = metrics.smoothedVerticalSpeedMS
                 self.smoothedHorizontalSpeed = metrics.smoothedHorizontalSpeedMS
                 self.smoothedDescentRate = metrics.adjustedDescentRateMS
-                // predictionUsesSmoothedDescent is controlled by PredictionService logic only
+                // smoothenedPredictionActive is controlled by PredictionService logic only
             }
             .store(in: &cancellables)
 
@@ -665,12 +665,14 @@ final class ServiceCoordinator: ObservableObject {
             if telemetry.altitude < 10000, let smoothedRate = measuredDescentRate {
                 // Below 10000m: Use automatically calculated smoothed descent rate
                 effectiveDescentRate = abs(smoothedRate)
+                smoothenedPredictionActive = true  // Set flag for UI color
                 if balloonDescends {
                     appLog("ServiceCoordinator: Using smoothed descent rate: \(String(format: "%.2f", effectiveDescentRate)) m/s (below 10000m)", category: .general, level: .info)
                 }
             } else {
                 // Above 10000m: Use user settings default
                 effectiveDescentRate = userSettings.descentRate
+                smoothenedPredictionActive = false  // Clear flag for UI color
                 if balloonDescends {
                     appLog("ServiceCoordinator: Using settings descent rate: \(String(format: "%.2f", effectiveDescentRate)) m/s (above 10000m or no smoothed rate)", category: .general, level: .info)
                 }
