@@ -275,6 +275,10 @@ final class BalloonPositionService: ObservableObject {
 
         currentTelemetry = telemetryToStore
 
+        // DEBUG: Critical debugging for race condition
+        if source == "APRS" {
+            appLog("BalloonPositionService: 🔥 CRITICAL - currentTelemetry set from APRS: frequency=\(telemetryToStore.frequency), sonde=\(telemetryToStore.sondeName)", category: .service, level: .error)
+        }
 
         // Update balloon phase based on new telemetry
         updateBalloonPhase()
@@ -781,6 +785,9 @@ final class BalloonPositionService: ObservableObject {
         let aprsFreq = telemetry.frequency
         let bleFreq = bleService.deviceSettings.frequency
         let freqMismatch = abs(aprsFreq - bleFreq) > 0.01
+
+        // DEBUG: Critical debugging for race condition
+        appLog("BalloonPositionService: 🔥 CRITICAL - Startup frequency check: APRS=\(aprsFreq) MHz, BLE=\(bleFreq) MHz, mismatch=\(freqMismatch)", category: .service, level: .error)
 
         let aprsProbeType = telemetry.probeType.isEmpty ? "RS41" : telemetry.probeType
         let bleProbeType = bleService.deviceSettings.probeType
