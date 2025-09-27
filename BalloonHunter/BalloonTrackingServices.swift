@@ -101,6 +101,7 @@ final class BalloonPositionService: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
     private let bleStalenessThreshold: TimeInterval = 3.0 // 3 seconds for BLE
     private let aprsStalenessThreshold: TimeInterval = 30.0 // 30 seconds for APRS
+    private var isEvaluatingFrequencySync: Bool = false // Prevents concurrent frequency sync evaluations
 
     
     init(bleService: BLECommunicationService,
@@ -746,6 +747,14 @@ final class BalloonPositionService: ObservableObject {
 
     /// State machine evaluates frequency sync based on current state and conditions
     private func evaluateStateBasedFrequencySync() {
+        // Prevent concurrent frequency sync evaluations (race condition protection)
+        guard !isEvaluatingFrequencySync else {
+            appLog("BalloonPositionService: Frequency sync evaluation already in progress - skipping", category: .service, level: .debug)
+            return
+        }
+        isEvaluatingFrequencySync = true
+        defer { isEvaluatingFrequencySync = false }
+
         // Only evaluate frequency sync based on state machine conditions
         switch currentTelemetryState {
         case .aprsFallbackFlying, .aprsFallbackLanded:
@@ -829,6 +838,9 @@ final class BalloonPositionService: ObservableObject {
 
     /// Evaluate BLE reconnection sync (automatic if previous APRS fallback)
     private func evaluateBLEReconnectionSync() {
+        // DEBUG: Log that this method is called
+        appLog("BalloonPositionService: DEBUG - evaluateBLEReconnectionSync() called", category: .service, level: .error)
+
         // Only sync if we have APRS telemetry available (indicates we were in fallback)
         guard aprsTelemetryIsAvailable,
               let aprsTelemetry = currentTelemetry,
@@ -851,6 +863,9 @@ final class BalloonPositionService: ObservableObject {
         let aprsProbeType = aprsTelemetry.probeType.isEmpty ? "RS41" : aprsTelemetry.probeType
         let bleProbeType = bleService.deviceSettings.probeType
         let probeTypeMismatch = aprsProbeType != bleProbeType
+
+        // DEBUG: Log the frequency comparison
+        appLog("BalloonPositionService: DEBUG - BLE reconnection frequency check: APRS=\(aprsFreq) MHz, BLE=\(bleFreq) MHz, mismatch=\(freqMismatch)", category: .service, level: .error)
 
         guard freqMismatch || probeTypeMismatch else {
             appLog("BalloonPositionService: BLE reconnection - frequencies already match, no sync needed", category: .service, level: .debug)

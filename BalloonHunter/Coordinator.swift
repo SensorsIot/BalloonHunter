@@ -451,25 +451,15 @@ final class ServiceCoordinator: ObservableObject {
 
     private func handleBLEConnectionWithAPRSSync() {
         // Scenario 2: RadioSondyGo connects when APRS data already available
-        guard aprsTelemetryIsAvailable,
-              let telemetry = balloonPositionService.currentTelemetry,
-              telemetry.telemetrySource == .aprs else {
+        guard aprsTelemetryIsAvailable else {
             appLog("ServiceCoordinator: RadioSondyGo connected but no APRS telemetry for frequency sync", category: .general, level: .debug)
             return
         }
 
-        // Check if frequency sync is needed
-        let aprsFreq = telemetry.frequency
-        let bleFreq = bleCommunicationService.deviceSettings.frequency
-        let freqMismatch = abs(aprsFreq - bleFreq) > 0.01 // 0.01 MHz tolerance
-
-        guard freqMismatch, aprsFreq > 0 else {
-            appLog("ServiceCoordinator: RadioSondyGo connected - frequencies already match", category: .general, level: .info)
-            return
-        }
-
-        // Delegate to state machine for frequency sync decisions
-        appLog("ServiceCoordinator: RadioSondyGo connected with APRS data - requesting state machine to evaluate frequency sync", category: .general, level: .info)
+        // RACE CONDITION FIX: Delegate all frequency sync decisions to BalloonPositionService state machine
+        // ServiceCoordinator should not duplicate frequency comparison logic that exists in BalloonPositionService
+        // Let the state machine handle frequency sync evaluation with proper currentTelemetry state
+        appLog("ServiceCoordinator: RadioSondyGo connected with APRS data - delegating frequency sync to state machine", category: .general, level: .info)
         balloonPositionService.evaluateFrequencySyncFromAPRS()
     }
 
