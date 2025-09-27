@@ -154,30 +154,12 @@ final class BalloonPositionService: ObservableObject {
             }
             .store(in: &cancellables)
 
-        // Subscribe to APRS service position stream (fallback source)
-        aprsTelemetryService.positionDataStream
+        // Subscribe to APRS service telemetry stream (complete data including frequency)
+        aprsTelemetryService.telemetryData
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] positionData in
-                // Convert to TelemetryData for state machine
-                let telemetry = TelemetryData(
-                    sondeName: positionData.sondeName,
-                    probeType: "",
-                    frequency: 0.0,
-                    latitude: positionData.latitude,
-                    longitude: positionData.longitude,
-                    altitude: positionData.altitude,
-                    verticalSpeed: positionData.verticalSpeed,
-                    horizontalSpeed: positionData.horizontalSpeed,
-                    heading: positionData.heading,
-                    temperature: positionData.temperature,
-                    humidity: positionData.humidity,
-                    pressure: positionData.pressure,
-                    timestamp: positionData.timestamp,
-                    apiCallTimestamp: positionData.apiCallTimestamp,
-                    burstKillerTime: positionData.burstKillerTime,
-                    telemetrySource: positionData.telemetrySource
-                )
-                self?.handleTelemetryUpdate(telemetry, source: "APRS")
+            .sink { [weak self] telemetryData in
+                // Use complete TelemetryData from APRS (includes frequency)
+                self?.handleTelemetryUpdate(telemetryData, source: "APRS")
             }
             .store(in: &cancellables)
 
