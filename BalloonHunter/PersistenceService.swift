@@ -104,6 +104,10 @@ final class PersistenceService: ObservableObject {
         return internalTracks[sondeName]
     }
     
+    func getAllTracks() -> [String: [BalloonTrackPoint]] {
+        return internalTracks
+    }
+
     func purgeAllTracks() {
         internalTracks.removeAll()
         userDefaults.removeObject(forKey: "BalloonTracks")

@@ -239,6 +239,21 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
     var isBLETelemetryStale: Bool = false
     private var previousTelemetryAvailable: Bool = false
     private var telemetryLogCount: Int = 0
+    // MARK: - Three-Channel Architecture
+
+    // Position data (Type 1) - single source of truth
+    @Published var latestPosition: PositionData? = nil
+    let positionDataStream = PassthroughSubject<PositionData, Never>()
+
+    // Radio channel data (Type 0, 2) - single source of truth
+    @Published var latestRadioChannel: RadioChannelData? = nil
+    let radioChannelDataStream = PassthroughSubject<RadioChannelData, Never>()
+
+    // Settings data (Type 3) - device configuration
+    @Published var latestSettings: SettingsData? = nil
+    let settingsDataStream = PassthroughSubject<SettingsData, Never>()
+
+    // MARK: - Legacy Properties (state machine compatibility)
     @Published var latestTelemetry: TelemetryData? = nil
     @Published var deviceSettings: DeviceSettings = .default
     @Published var deviceStatus: DeviceStatusData? = nil
@@ -617,9 +632,14 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
                 deviceSettings.probeType = telemetry.probeType
                 deviceSettings.frequency = telemetry.frequency
 
-                // Type 0 packets are device status only - do NOT send as telemetry data
+                // Convert to radio channel data and update new architecture
+                let radioData = telemetry.toRadioChannelData()
+                latestRadioChannel = radioData
+                radioChannelDataStream.send(radioData)
+
+                // Type 0 packets are device status only - do NOT send as position telemetry data
                 // Position data is invalid (0,0) and would override APRS telemetry
-                latestTelemetry = telemetry  // Update for UI display only
+                latestTelemetry = telemetry
 
                 // Show all available packet data for Type 0 messages
                 let packetInfo = components.enumerated().map { (index, value) in
@@ -637,6 +657,8 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
         case "1":
             // Probe Telemetry
             if components.count >= 20 {
+                // Type 1 telemetry message processing
+
                 // Throttle telemetry logging to every 5th packet to reduce verbosity
                 telemetryLogCount += 1
                 if telemetryLogCount % 5 == 1 {
@@ -668,19 +690,29 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
                 appLog("🔴 BLE MSG (Type 1): Invalid field count=\(components.count)", category: .ble, level: .error)
             }
             if let telemetry = parseType1Message(components) {
+
                 if telemetry.latitude == 0.0 && telemetry.longitude == 0.0 {
                     return // Skip invalid coordinates
                 }
-                
-                
+
                 DispatchQueue.main.async {
-                    self.latestTelemetry = telemetry
+                    // Convert to new three-channel architecture
+                    let positionData = telemetry.toPositionData()
+                    let radioData = telemetry.toRadioChannelData()
+
+                    // Update new channels
+                    self.latestPosition = positionData
+                    self.latestRadioChannel = radioData
                     self.lastTelemetryUpdateTime = Date()
+
+                    // Send to new streams
+                    self.positionDataStream.send(positionData)
+                    self.radioChannelDataStream.send(radioData)
+
+                    // State machine compatibility - maintain telemetry interface
+                    self.latestTelemetry = telemetry
                     self.telemetryData.send(telemetry)
-                    // Suppress verbose per-packet parsed telemetry log
-                    // Telemetry is now available through @Published latestTelemetry property
-                    // Services observe this directly instead of using EventBus
-                    
+
                     // Device settings request is handled by the connection ready callback
                     // No need to request again here
                 }
@@ -689,6 +721,8 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
         case "2":
             // Name Only
             if components.count >= 10 {
+                // Type 2 telemetry message processing
+
                 // Consolidated Type 2 message with key info
                 let keyInfo = [
                     components[1], // probeType
@@ -711,9 +745,14 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
                 deviceSettings.probeType = telemetry.probeType
                 deviceSettings.frequency = telemetry.frequency
 
-                // Type 2 packets are partial telemetry without GPS position - do NOT send as telemetry data
+                // Convert to radio channel data and update new architecture
+                let radioData = telemetry.toRadioChannelData()
+                latestRadioChannel = radioData
+                radioChannelDataStream.send(radioData)
+
+                // Type 2 packets are partial telemetry without GPS position - do NOT send as position telemetry data
                 // Position data is invalid (0,0) and would override APRS telemetry
-                latestTelemetry = telemetry  // Update for UI display only
+                latestTelemetry = telemetry
 
                 appLog("📊 BLE PARSED (Type 2): Device status without position - \(telemetry.sondeName)", category: .ble, level: .info)
             }
@@ -752,7 +791,58 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
                         appLog("BLE: Device settings updated -> freq=\(String(format: "%.2f", settings.frequency))MHz (prev=\(String(format: "%.2f", previousSettings.frequency))) type=\(settings.probeType)", category: .ble, level: .info)
                     }
                     self.persistenceService.save(deviceSettings: settings)
-                    
+
+                    // Convert to settings data (pure Type 3 configuration, no shared fields)
+                    let settingsData = SettingsData(
+                        sondeName: "",
+                        timestamp: Date(),
+                        telemetrySource: .ble,
+                        oledSDA: settings.oledSDA,
+                        oledSCL: settings.oledSCL,
+                        oledRST: settings.oledRST,
+                        ledPin: settings.ledPin,
+                        RS41Bandwidth: settings.RS41Bandwidth,
+                        M20Bandwidth: settings.M20Bandwidth,
+                        M10Bandwidth: settings.M10Bandwidth,
+                        PILOTBandwidth: settings.PILOTBandwidth,
+                        DFMBandwidth: settings.DFMBandwidth,
+                        frequencyCorrection: settings.frequencyCorrection,
+                        batPin: settings.batPin,
+                        batMin: settings.batMin,
+                        batMax: settings.batMax,
+                        batType: settings.batType,
+                        lcdType: settings.lcdType,
+                        nameType: settings.nameType,
+                        buzPin: settings.buzPin,
+                        callSign: settings.callSign,
+                        bluetoothStatus: settings.bluetoothStatus,
+                        lcdStatus: settings.lcdStatus,
+                        serialSpeed: settings.serialSpeed,
+                        serialPort: settings.serialPort,
+                        aprsName: settings.aprsName
+                    )
+                    self.latestSettings = settingsData
+                    self.settingsDataStream.send(settingsData)
+
+                    // Also update radio channel with shared Type 3 fields
+                    let radioData = RadioChannelData(
+                        sondeName: "",
+                        timestamp: Date(),
+                        telemetrySource: .ble,
+                        probeType: settings.probeType,
+                        frequency: settings.frequency,
+                        softwareVersion: settings.softwareVersion,
+                        batteryVoltage: 0.0,  // Not in Type 3
+                        batteryPercentage: 0, // Not in Type 3
+                        signalStrength: 0,    // Not in Type 3
+                        buzmute: false,       // Not in Type 3
+                        afcFrequency: 0,      // Not in Type 3
+                        burstKillerEnabled: false, // Not in Type 3
+                        burstKillerTime: 0    // Not in Type 3
+                    )
+                    self.latestRadioChannel = radioData
+                    self.radioChannelDataStream.send(radioData)
+
                     // Update current telemetry data with device configuration
                     if var currentTelemetry = self.latestTelemetry {
                         currentTelemetry.frequency = settings.frequency

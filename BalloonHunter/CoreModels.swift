@@ -43,6 +43,79 @@ enum BLETelemetryState: String, Codable, CaseIterable {
     }
 }
 
+// MARK: - Three-Channel Data Architecture
+
+/// Position data from Type 1 BLE packets - balloon location and motion
+struct PositionData {
+    var sondeName: String = ""
+    var latitude: Double = 0.0
+    var longitude: Double = 0.0
+    var altitude: Double = 0.0
+    var verticalSpeed: Double = 0.0
+    var horizontalSpeed: Double = 0.0
+    var heading: Double = 0.0
+    var temperature: Double = 0.0
+    var humidity: Double = 0.0
+    var pressure: Double = 0.0
+    var timestamp: Date = Date()
+    var apiCallTimestamp: Date? = nil
+    var burstKillerTime: Int = 0
+    var telemetrySource: TelemetrySource = .ble
+}
+
+/// Radio channel data from Type 0, 1, 2 BLE packets - device radio status (includes shared Type 1 fields)
+struct RadioChannelData {
+    var sondeName: String = ""
+    var timestamp: Date = Date()
+    var telemetrySource: TelemetrySource = .ble
+
+    // Runtime radio data (including shared fields from Type 1 and Type 3)
+    var probeType: String = ""          // Shared: Type 1 + Type 3
+    var frequency: Double = 0.0         // Shared: Type 1 + Type 3
+    var softwareVersion: String = ""    // Shared: Type 1 + Type 3
+    var batteryVoltage: Double = 0.0
+    var batteryPercentage: Int = 0
+    var signalStrength: Int = 0
+    var buzmute: Bool = false
+    var afcFrequency: Int = 0
+    var burstKillerEnabled: Bool = false
+    var burstKillerTime: Int = 0
+}
+
+/// Settings data from Type 3 BLE packets - pure device configuration (no Type 1 field overlap)
+struct SettingsData {
+    var sondeName: String = ""
+    var timestamp: Date = Date()
+    var telemetrySource: TelemetrySource = .ble
+
+    // Pure Type 3 configuration fields (not in Type 1)
+    var oledSDA: Int = 21
+    var oledSCL: Int = 22
+    var oledRST: Int = 16
+    var ledPin: Int = 25
+    var RS41Bandwidth: Int = 1
+    var M20Bandwidth: Int = 7
+    var M10Bandwidth: Int = 7
+    var PILOTBandwidth: Int = 7
+    var DFMBandwidth: Int = 6
+    var frequencyCorrection: Int = 0
+    var batPin: Int = 35
+    var batMin: Int = 2950
+    var batMax: Int = 4180
+    var batType: Int = 1
+    var lcdType: Int = 0
+    var nameType: Int = 0
+    var buzPin: Int = 0
+    var callSign: String = ""
+    var bluetoothStatus: Int = 1
+    var lcdStatus: Int = 1
+    var serialSpeed: Int = 115200
+    var serialPort: Int = 0
+    var aprsName: Int = 0
+    // Additional Type 3 specific fields can be added here
+}
+
+/// TelemetryData structure - state machine format
 struct TelemetryData {
     var sondeName: String = ""
     var probeType: String = ""
@@ -68,7 +141,43 @@ struct TelemetryData {
     var softwareVersion: String = ""
     var telemetrySource: TelemetrySource = .ble
 
-    // Parsing removed - BLEService is now the single parsing authority
+    // Conversion helpers for three-channel architecture
+    func toPositionData() -> PositionData {
+        return PositionData(
+            sondeName: sondeName,
+            latitude: latitude,
+            longitude: longitude,
+            altitude: altitude,
+            verticalSpeed: verticalSpeed,
+            horizontalSpeed: horizontalSpeed,
+            heading: heading,
+            temperature: temperature,
+            humidity: humidity,
+            pressure: pressure,
+            timestamp: timestamp,
+            apiCallTimestamp: apiCallTimestamp,
+            burstKillerTime: burstKillerTime,
+            telemetrySource: telemetrySource
+        )
+    }
+
+    func toRadioChannelData() -> RadioChannelData {
+        return RadioChannelData(
+            sondeName: sondeName,
+            timestamp: timestamp,
+            telemetrySource: telemetrySource,
+            probeType: probeType,
+            frequency: frequency,
+            softwareVersion: softwareVersion,
+            batteryVoltage: batteryVoltage,
+            batteryPercentage: batteryPercentage,
+            signalStrength: signalStrength,
+            buzmute: buzmute,
+            afcFrequency: afcFrequency,
+            burstKillerEnabled: burstKillerEnabled,
+            burstKillerTime: burstKillerTime
+        )
+    }
 }
 
 struct LocationData {

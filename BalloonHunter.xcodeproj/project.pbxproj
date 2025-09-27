@@ -31,7 +31,6 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
-		473FAF822E4B0F5E00D53910 /* BalloonHunter.xcdatamodel */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcdatamodel; path = BalloonHunter.xcdatamodel; sourceTree = "<group>"; };
 		4771180D2E3B511A00C79172 /* BalloonHunter.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = BalloonHunter.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A7F0DFF22E5BFFFF00000001 /* BalloonHunterTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = BalloonHunterTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		A7F0DFF32E5BFFFF00000001 /* BalloonHunterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BalloonHunterTests.swift; sourceTree = "<group>"; };
@@ -628,7 +627,6 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
-
 	};
 	rootObject = 477118052E3B511A00C79172 /* Project object */;
 }

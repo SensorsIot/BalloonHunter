@@ -248,7 +248,7 @@ extension ServiceCoordinator {
     /// Start APRS service immediately during startup (Step 2 of startup sequence)
     private func primeAPRSStartupData() async {
         // Start APRS polling immediately - no separate priming step
-        balloonPositionService.aprsService.startPolling()
+        balloonPositionService.aprsTelemetryService.startPolling()
     }
 
     /// Wait for initial APRS data before completing state machine startup
@@ -258,7 +258,7 @@ extension ServiceCoordinator {
 
         while Date() < timeout {
             // Check if APRS has provided any telemetry data AND state machine has processed it
-            if balloonPositionService.aprsService.latestTelemetry != nil &&
+            if balloonPositionService.aprsTelemetryService.latestTelemetry != nil &&
                balloonPositionService.aprsTelemetryIsAvailable {
                 appLog("STARTUP: APRS telemetry received and processed - proceeding with state machine", category: .general, level: .info)
                 // Add small delay to ensure all async processing completes

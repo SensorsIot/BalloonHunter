@@ -117,9 +117,16 @@ struct TrackingMapView: View {
 
                         // Buzzer mute toggle
                         Button {
-                            mapPresenter.setMuteState(!mapPresenter.isBuzzerMuted)
+                            let newMuteState = !mapPresenter.isBuzzerMuted
+                            mapPresenter.setMuteState(newMuteState)
+
+                            // Haptic feedback
+                            let impactFeedback = UIImpactFeedbackGenerator(style: .medium)
+                            impactFeedback.impactOccurred()
+
+                            appLog("🔇 Mute button pressed: \(newMuteState ? "MUTED" : "UNMUTED")", category: .ui, level: .info)
                         } label: {
-                            Image(systemName: (mapPresenter.balloonTelemetry?.buzmute ?? false) ? "speaker.slash.fill" : "speaker.2.fill")
+                            Image(systemName: mapPresenter.isBuzzerMuted ? "speaker.slash.fill" : "speaker.2.fill")
                                 .imageScale(.large)
                                 .padding(8)
                         }

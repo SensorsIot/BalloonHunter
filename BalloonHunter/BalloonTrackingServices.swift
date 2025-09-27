@@ -127,30 +127,12 @@ final class BalloonPositionService: ObservableObject {
     }
     
     private func setupSubscriptions() {
-        // Subscribe to BLE service position stream (primary source)
-        bleService.positionDataStream
+        // Subscribe to BLE service telemetry stream (complete data including battery)
+        bleService.telemetryData
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] positionData in
-                // Convert to TelemetryData for state machine
-                let telemetry = TelemetryData(
-                    sondeName: positionData.sondeName,
-                    probeType: "",
-                    frequency: 0.0,
-                    latitude: positionData.latitude,
-                    longitude: positionData.longitude,
-                    altitude: positionData.altitude,
-                    verticalSpeed: positionData.verticalSpeed,
-                    horizontalSpeed: positionData.horizontalSpeed,
-                    heading: positionData.heading,
-                    temperature: positionData.temperature,
-                    humidity: positionData.humidity,
-                    pressure: positionData.pressure,
-                    timestamp: positionData.timestamp,
-                    apiCallTimestamp: positionData.apiCallTimestamp,
-                    burstKillerTime: positionData.burstKillerTime,
-                    telemetrySource: positionData.telemetrySource
-                )
-                self?.handleTelemetryUpdate(telemetry, source: "BLE")
+            .sink { [weak self] telemetryData in
+                // Use complete TelemetryData from BLE (includes battery percentage)
+                self?.handleTelemetryUpdate(telemetryData, source: "BLE")
             }
             .store(in: &cancellables)
 
@@ -231,7 +213,6 @@ final class BalloonPositionService: ObservableObject {
         }
 
         var telemetryToStore = telemetry
-
 
         if source == "BLE" {
             let countdown = telemetry.burstKillerTime

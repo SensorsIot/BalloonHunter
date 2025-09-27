@@ -8,7 +8,149 @@
 
 This document outlines requirements for an iOS application designed to assist a person in hunting and recovering weather balloons. The app's design is centered around a single-screen, map-based interface that provides all critical information in real-time as they pursue a balloon.
 
-The balloon carries a sonde that transmits its position signal. This signal is received by a device, called “MySondyGo”. This device transmits the received telemetry data via BLE to our app. So, sonde and balloon are used interchangeable.
+The balloon carries a sonde that transmits its position signal. This signal is received by a device, called "MySondyGo". This device transmits the received telemetry data via BLE to our app. So, sonde and balloon are used interchangeable.
+
+## Three-Channel Data Architecture - Published Messages Block Diagram
+
+```
+┌───────────────────────────────────────────────────────────────────────────────────────┐
+│                                 BalloonHunter Data Flow Architecture                  │
+└───────────────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────┐    ┌─────────────────────┐    ┌─────────────────────┐
+│   BLE SERVICE       │    │  APRS SERVICE       │    │  LOCATION SERVICE   │
+│  (MySondyGo Device) │    │  (SondeHub API)     │    │  (Core Location)    │
+└─────────────────────┘    └─────────────────────┘    └─────────────────────┘
+          │                          │                          │
+          │ Type 0,1,2,3 BLE         │ APRS Telemetry          │ GPS Data
+          │ Packets                  │ JSON Response           │
+          │                          │                          │
+          ▼                          ▼                          ▼
+┌─────────────────────┐    ┌─────────────────────┐    ┌─────────────────────┐
+│ PUBLISHED STREAMS   │    │ PUBLISHED STREAMS   │    │ PUBLISHED STREAMS   │
+│                     │    │                     │    │                     │
+│ 📍 positionDataStream│   │ 📍positionDataStream│   │📍 locationData     │
+│    PositionData     │    │    PositionData     │    │    LocationData     │
+│    • sondeName      │    │    • sondeName      │    │    • latitude       │
+│    • lat/lon/alt    │    │    • lat/lon/alt    │    │    • longitude      │
+│    • speeds         │    │    • speeds         │    │    • altitude       │
+│    • environmental  │    │    • environmental  │    │    • accuracy       │
+│                     │    │                     │    │                     │
+│ 📻radioChannelStream│    │📻 radioChannelStream│    │ 📏distanceToBalloon│
+│    RadioChannelData │    │    RadioChannelData │    │   CLLocationDistance│
+│    • frequency      │    │    • frequency      │    │                     │
+│    • probeType      │    │    • probeType      │    │ 📍 isWithin200m     │
+│    • battery        │    │    • sondeName      │    │    Bool             │
+│    • signal         │    │    • timestamp      │    │                     │
+│    • afc/buzzer     │    │    • source=.aprs   │    │                     │
+│                     │    │                     │    │                     │
+│ ⚙️  settingsStream  │    │                     │    │                     │
+│    SettingsData     │    │ (No settings from   │    │                     │
+│    • oled pins      │    │  APRS - device only)│    │                     │
+│    • hardware cfg   │    │                     │    │                     │
+│    • callSign       │    │                     │    │                     │
+│    • bandwidths     │    │                     │    │                     │
+└─────────────────────┘    └─────────────────────┘    └─────────────────────┘
+          │                          │                          │
+          └──────────────┬───────────┴──────────────┬───────────┘
+                         │                          │
+                         ▼                          ▼
+┌───────────────────────────────────────────────────────────────────────────────────────┐
+│                           BALLOON POSITION SERVICE
+│                              (State Machine Coordinator)                              │ │
+│  📊 PUBLISHED STATE:                                                                  │
+│  • currentTelemetry: TelemetryData                                                     │
+│  • currentTelemetryState: TelemetryState (7-state machine)                            │
+│  • balloonPhase: BalloonPhase                                                          │
+│  • landingPoint: CLLocationCoordinate2D                                               │
+│  • shouldEnablePredictions: Bool                                                       │
+│  • isTelemetryStale: Bool                                                              │
+│  • aprsTelemetryIsAvailable: Bool                                                      │
+│                                                                                        │
+│  🔄 STATE MACHINE: startup → liveBLEFlying → waitingForAPRS → aprsFallbackFlying      │
+│                             → liveBLELanded              → aprsFallbackLanded          │
+│                                          → noTelemetry                                 │
+└───────────────────────────────────────────────────────────────────────────────────────┘
+                                           │
+                         ┌─────────────────┼─────────────────┐
+                         │                 │                 │
+                         ▼                 ▼                 ▼
+┌─────────────────────┐ ┌─────────────────────┐ ┌─────────────────────┐
+│ BALLOON TRACK       │ │ PREDICTION SERVICE  │ │ SERVICE COORDINATOR │
+│ SERVICE             │ │                     │ │                     │
+│                     │ │ 📊 PUBLISHED:       │ │ 📊 PUBLISHED:       │
+│ 📊 PUBLISHED:       │ │ • flightTimeString  │ │ • balloonTelemetry  │
+│ • currentBalloonTrack│ │ • landingTimeString │ │ • predictionPath    │
+│   [BalloonTrackPoint]│ │                     │ │ • userRoute         │
+│ • motionMetrics     │ │ 🎯 FEATURES:        │ │ • landingPoint      │
+│   BalloonMotionMetrics│ │ • Tawhiri API      │ │ • burstPoint        │
+│ • landingPosition   │ │ • Smart caching     │ │ • routeData         │
+│   CLLocationCoord2D │ │ • Time formatting   │ │ • deviceSettings    │
+│                     │ │                     │ │                     │
+│ 🎯 FEATURES:        │ │                     │ │ 🎯 ORCHESTRATION:   │
+│ • Track smoothing   │ │                     │ │ • Cross-service     │
+│ • Landing detection │ │                     │ │ • State merging     │
+│ • Motion analysis   │ │                     │ │ • UI coordination   │
+└─────────────────────┘ └─────────────────────┘ └─────────────────────┘
+                                           │
+                         ┌─────────────────┼─────────────────┐
+                         │                 │                 │
+                         ▼                 ▼                 ▼
+┌─────────────────────┐ ┌─────────────────────┐ ┌─────────────────────┐
+│ MAP PRESENTER       │ │ DATA PANEL VIEW     │ │ TRACKING MAP VIEW   │
+│                     │ │                     │ │                     │
+│ 📊 PUBLISHED:       │ │ 🎯 DISPLAYS:        │ │ 🎯 DISPLAYS:        │
+│ • annotations       │ │ • Telemetry data    │ │ • Map with overlays │
+│ • predictionPath    │ │ • Motion metrics    │ │ • Balloon position  │
+│ • userRoute         │ │ • Flight times      │ │ • Prediction path   │
+│ • region/camera     │ │ • Battery status    │ │ • User route        │
+│ • trackPoints       │ │ • Signal strength   │ │ • Landing point     │
+│                     │ │                     │ │ • User controls     │
+│ 🎯 FEATURES:        │ │                     │ │                     │
+│ • Map coordination  │ │                     │ │                     │
+│ • Annotation mgmt   │ │                     │ │                     │
+│ • Camera control    │ │                     │ │                     │
+└─────────────────────┘ └─────────────────────┘ └─────────────────────┘
+```
+
+### Data Structures
+
+📍 **PositionData** (Type 1 BLE + APRS):
+• sondeName, lat/lon/alt, speeds, heading
+• temperature, humidity, pressure
+• timestamp, burstKillerTime, telemetrySource
+
+📻 **RadioChannelData** (Type 0,1,2 BLE + APRS):
+• probeType, frequency, battery, signal
+• buzmute, afcFrequency, softwareVersion
+• burstKiller, timestamp, telemetrySource
+
+⚙️ **SettingsData** (Type 3 BLE only):
+• Hardware config: oled pins, led pins
+• Radio settings: bandwidths, correction
+• Device config: battery, display, callSign
+• NO overlap with Type 1 fields!
+
+🎯 **Legacy TelemetryData** (Backward compatibility):
+• Combination of Position + Radio data
+• Used by state machine during transition
+• Will be phased out for pure channels
+
+### Packet Type Routing
+
+- **BLE Type 0** (Device Status) → RadioChannelData only
+- **BLE Type 1** (Full Telemetry) → PositionData + RadioChannelData (split packet)
+- **BLE Type 2** (Partial Status) → RadioChannelData only
+- **BLE Type 3** (Configuration) → SettingsData only
+- **APRS Telemetry** → PositionData + RadioChannelData (no SettingsData)
+
+### Communication Patterns
+
+🔄 **Direct Service Communication:**
+Service @Published → View @EnvironmentObject (single service, simple data)
+
+🔄 **Coordinated Communication:**
+Multiple Services → ServiceCoordinator → Consolidated State → Views
 
 ## Dealing with Frequencies
 
@@ -549,48 +691,6 @@ Utility that records incoming telemetry frames (excluding development sondes) to
 
 Defines `UserSettings`, `DeviceSettings`, and app-level configuration structures, plus helpers for persisting and observing user-selectable preferences (transport mode, prediction defaults, etc.).
 
-
-
-
-### Architecture
-
-Our architecture keeps the coordinator-centric design while reinforcing clear separation of responsibilities.
-
-- **Separation of Concerns**  
-  Business logic lives in services and the coordinator; SwiftUI views remain declarative consumers of published state and never reach into data sources directly.
-
-- **Coordinator as Orchestrator**  
-  `ServiceCoordinator` listens to service publishers, applies cross-cutting rules (prediction cadence, routing policies), mirrors landing state emitted by `BalloonTrackService`, and republishes merged state for the UI.
-
-- **Modular Services**  
-  Location, balloon tracking, routing, prediction, and persistence each live in their own files. Caches are co-located with the services that use them, keeping APIs small and dependencies minimal.
-
-- **Presenter Layer for Complex Screens**  
-  `MapPresenter` consolidates map-specific state transformations (overlays, distance strings, intent handling) so the map view remains a pure SwiftUI layout and the coordinator stays focused on coordination.
-
-- **Combine-Driven Data Flow**  
-  Services publish via `@Published` or actors; the coordinator and presenter subscribe, transform, and re-publish. This provides a single reactive pipeline from BLE/location inputs to UI outputs.
-
-- **Environment-Driven UI**  
-  Views observe the coordinator/presenter/settings through `@EnvironmentObject`. User actions bubble up through intent methods instead of mutating state locally.
-
-- **Persistence & Caching**  
-  `PersistenceService` centralizes disk IO, `PredictionCache` and `RoutingCache` avoid redundant work, and both are injected once through `AppServices`, ensuring a single source of truth.
-
-- **Extensibility Without File Sprawl**  
-  Even though services live in multiple files now, related pieces are grouped, shared models remain in `CoreModels.swift`, and new files are added only with deliberate intent, keeping navigation simple.
-
-### Data Flow
-
-  The data flow is straightforward and centralized:
-
-1. Data In: Services like BLECommunicationService and CurrentLocationService receive data from external sources (the  BLE device, GPS).  
-
-2. Coordination: These services publish their data using Combine. The ServiceCoordinator subscribes to these publishers.  
-
-3. Logic & State Update: When the ServiceCoordinator receives new data, it runs its business logic (e.g., checks if  a new prediction is needed) and updates its own @Published state properties.  
-
-4. UI Update: Because the SwiftUI views are observing the ServiceCoordinator, they automatically re-render to display the new state.
 
 
 ## Services

@@ -337,8 +337,6 @@ final class APRSTelemetryService: ObservableObject {
         let latitude = sonde.lat
         let longitude = sonde.lon
 
-        // DEBUG: Critical debugging for frequency conversion
-        appLog("APRSTelemetryService: 🔥 CRITICAL - Frequency conversion: raw=\(sonde.frequency ?? 0.0) tx=\(sonde.tx_frequency ?? 0.0) eff=\(sonde.effectiveFrequency) final=\(frequency)", category: .service, level: .error)
 
         let coordinatesValid = latitude.isFinite && longitude.isFinite && abs(latitude) <= 90 && abs(longitude) <= 180 && !(latitude == 0 && longitude == 0)
 
@@ -355,8 +353,6 @@ final class APRSTelemetryService: ObservableObject {
         telemetry.probeType = trimmedType.uppercased()
         telemetry.frequency = frequency
 
-        // DEBUG: Verify telemetry frequency assignment
-        appLog("APRSTelemetryService: 🔥 CRITICAL - TelemetryData created: frequency=\(telemetry.frequency), sonde=\(telemetry.sondeName)", category: .service, level: .error)
 
         // Position and motion
         telemetry.latitude = latitude
