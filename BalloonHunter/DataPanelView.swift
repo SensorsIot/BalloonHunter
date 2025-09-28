@@ -31,15 +31,15 @@ struct DataPanelView: View {
                             .font(.system(size: 24))
                             .frame(width: 48, alignment: .center)
                             .accessibilityLabel(Text(flightStatusString))
-                        Text(balloonPositionService.currentTelemetry?.probeType ?? "N/A")
+                        Text(showingPlaceholders ? "N/A" : (balloonPositionService.currentRadioChannel?.probeType ?? "N/A"))
                             .frame(width: 70, alignment: .center)
                             .lineLimit(1)
                             .multilineTextAlignment(.center)
-                        Text(balloonPositionService.currentTelemetry?.sondeName ?? "N/A")
+                        Text(showingPlaceholders ? "N/A" : (balloonPositionService.currentPositionData?.sondeName ?? "N/A"))
                             .frame(width: 120, alignment: .center)
                             .lineLimit(1)
                             .multilineTextAlignment(.center)
-                        Text("\(balloonPositionService.currentTelemetry != nil ? "\(Int(balloonPositionService.currentTelemetry!.altitude)) m" : "N/A")")
+                        Text(showingPlaceholders ? "N/A" : (balloonPositionService.currentPositionData != nil ? "\(Int(balloonPositionService.currentPositionData!.altitude)) m" : "N/A"))
                             .frame(width: 80, alignment: .center)
                             .lineLimit(1)
                             .multilineTextAlignment(.center)
@@ -60,8 +60,8 @@ struct DataPanelView: View {
                     }
                     // Row 2: Vertical speed, Horizontal speed, Distance
                     GridRow {
-                        let verticalSpeed = balloonPositionService.balloonPhase == .landed ? 0.0 : balloonTrackService.motionMetrics.smoothedVerticalSpeedMS
-                        let horizontalSpeed = balloonPositionService.balloonPhase == .landed ? 0.0 : balloonTrackService.motionMetrics.smoothedHorizontalSpeedMS * 3.6
+                        let verticalSpeed = motionMetricsZeroed ? 0.0 : balloonTrackService.motionMetrics.smoothedVerticalSpeedMS
+                        let horizontalSpeed = motionMetricsZeroed ? 0.0 : balloonTrackService.motionMetrics.smoothedHorizontalSpeedMS * 3.6
                         Text("V: \(String(format: "%.1f", verticalSpeed)) m/s")
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .foregroundColor(verticalSpeed >= 0 ? .green : .red)
@@ -83,10 +83,10 @@ struct DataPanelView: View {
                     GridRow {
                         let descentRate = mapPresenter.smoothedDescentRate
                         let descentValue: String = {
-                            if balloonPositionService.balloonPhase == .ascending {
-                                return "0.0"
-                            } else {
+                            if showingDescentRate {
                                 return String(format: "%.1f", abs(descentRate ?? userSettings.descentRate))
+                            } else {
+                                return "0.0"
                             }
                         }()
                         let burstKillerExpiry = burstKillerExpiryString()
@@ -121,17 +121,43 @@ struct DataPanelView: View {
 
     // MARK: - Computed properties for presentation only (business logic moved to services)
 
+    private var motionMetricsZeroed: Bool {
+        switch balloonPositionService.currentState {
+        case .liveBLELanded, .aprsFallbackLanded, .noTelemetry:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private var showingPlaceholders: Bool {
+        switch balloonPositionService.currentState {
+        case .startup, .noTelemetry:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private var showingDescentRate: Bool {
+        switch balloonPositionService.currentState {
+        case .startup, .noTelemetry:
+            return false
+        case .liveBLEFlying, .aprsFallbackFlying, .waitingForAPRS:
+            return balloonPositionService.balloonPhase != .ascending
+        case .liveBLELanded, .aprsFallbackLanded:
+            return false
+        }
+    }
+
     private var frameStyle: (color: Color, lineWidth: CGFloat) {
-        if balloonPositionService.isTelemetryStale {
-            return (.red, 6)
+        // Simple color logic: grey = working, red = no data
+        switch balloonPositionService.currentState {
+        case .startup, .liveBLEFlying, .liveBLELanded, .waitingForAPRS, .aprsFallbackFlying, .aprsFallbackLanded:
+            return (.gray, 6)  // Working correctly (BLE or APRS data available)
+        case .noTelemetry:
+            return (.red, 6)   // No data available
         }
-        if balloonPositionService.lastTelemetrySource == .ble {
-            return (.green, 6)
-        }
-        if balloonPositionService.lastTelemetrySource == .aprs {
-            return (.orange, 6)
-        }
-        return (.clear, 6)
     }
     
     private var flightStatusString: String {
@@ -171,6 +197,9 @@ struct DataPanelView: View {
     }
     
     private var arrivalTimeString: String {
+        if showingPlaceholders {
+            return "--:--"
+        }
         if let routeData = routeCalculationService.currentRoute {
             let arrivalTime = Date().addingTimeInterval(routeData.expectedTravelTime)
             return Self.timeFormatter.string(from: arrivalTime)
@@ -179,6 +208,9 @@ struct DataPanelView: View {
     }
     
     private var distanceString: String {
+        if showingPlaceholders {
+            return "--"
+        }
         guard let distanceMeters = routeCalculationService.currentRoute?.distance else { return "--" }
         let distanceKm = distanceMeters / 1000.0
         return String(format: "%.1f", distanceKm)
@@ -193,18 +225,17 @@ struct DataPanelView: View {
     private static var lastLoggedBurstKillerTime: Int? = nil
 
     private func burstKillerExpiryString() -> String {
-        guard balloonPositionService.currentTelemetry != nil else { return "--:--" }
-        guard let sondeName = balloonPositionService.currentTelemetry?.sondeName else { return "--:--" }
+        guard balloonPositionService.currentPositionData != nil else { return "--:--" }
+        guard let sondeName = balloonPositionService.currentPositionData?.sondeName else { return "--:--" }
 
         var countdown: Int? = nil
         var referenceDate: Date? = nil
 
-        if let liveCountdown = balloonPositionService.burstKillerCountdown,
-           let liveReference = balloonPositionService.burstKillerReferenceDate,
-           liveCountdown > 0,
-           balloonPositionService.lastTelemetrySource == .ble {
-            countdown = liveCountdown
-            referenceDate = liveReference
+        if let radioData = balloonPositionService.currentRadioChannel,
+           radioData.burstKillerTime > 0,
+           balloonPositionService.dataSource == .ble {
+            countdown = radioData.burstKillerTime
+            referenceDate = Date() // Use current time since BLE data is live
         } else if let record = serviceCoordinator.persistenceService.loadBurstKillerRecord(for: sondeName),
                   record.seconds > 0 {
             countdown = record.seconds
@@ -225,28 +256,67 @@ struct DataPanelView: View {
     }
 
     private func connectionIcon() -> (name: String, color: Color) {
-        // Show icon based on actual telemetry source being used
-        if balloonPositionService.lastTelemetrySource == .ble {
-            return ("antenna.radiowaves.left.and.right", .green)
-        }
-        if balloonPositionService.lastTelemetrySource == .aprs {
-            return ("globe.americas.fill", .orange)
-        }
-        // No telemetry - show BLE connection status
-        if bleService.telemetryState.isConnected {
+        // State machine drives connection icon display
+        switch balloonPositionService.currentState {
+        case .startup:
             return ("antenna.radiowaves.left.and.right", .gray)
+        case .liveBLEFlying, .liveBLELanded:
+            // Check BLE staleness directly from BLE service
+            let isStale = bleService.lastMessageTimestamp.map { Date().timeIntervalSince($0) > 3.0 } ?? true
+            return isStale ?
+                ("antenna.radiowaves.left.and.right.slash", .red) :
+                ("antenna.radiowaves.left.and.right", .green)
+        case .waitingForAPRS:
+            return ("clock.arrow.circlepath", .yellow)
+        case .aprsFallbackFlying, .aprsFallbackLanded:
+            // APRS icon color based on API call success/failure
+            let aprsColor: Color = {
+                switch balloonPositionService.aprsService.connectionStatus {
+                case .connected:
+                    return .green  // Last API call successful
+                case .failed(_), .disconnected:
+                    return .red    // Last API call failed/timeout
+                case .connecting, .scanning:
+                    return .yellow // API call in progress
+                }
+            }()
+            return ("globe.americas.fill", aprsColor)
+        case .noTelemetry:
+            return bleService.connectionState.isConnected ?
+                ("antenna.radiowaves.left.and.right", .gray) :
+                ("antenna.radiowaves.left.and.right.slash", .red)
         }
-        return ("antenna.radiowaves.left.and.right.slash", .red)
     }
 
     private var frequencyString: String {
-        // Display the frequency programmed into RadioSondyGo
-        let frequency = bleService.deviceSettings.frequency
-        return String(format: "%.2f MHz", frequency)
+        if showingPlaceholders {
+            return "--- MHz"
+        }
+
+        // State machine drives frequency display and source indication
+        switch balloonPositionService.currentState {
+        case .startup, .noTelemetry:
+            return "--- MHz"
+        case .liveBLEFlying, .liveBLELanded, .waitingForAPRS:
+            // BLE states: show programmed frequency
+            let frequency = bleService.deviceSettings.frequency
+            return String(format: "%.2f MHz", frequency)
+        case .aprsFallbackFlying, .aprsFallbackLanded:
+            // APRS states: show APRS frequency if available, fallback to BLE
+            if let aprsFreq = balloonPositionService.currentRadioChannel?.frequency {
+                return String(format: "%.2f MHz*", aprsFreq)
+            } else {
+                let frequency = bleService.deviceSettings.frequency
+                return String(format: "%.2f MHz", frequency)
+            }
+        }
     }
 
     private var signalStrengthString: String {
-        if let val = balloonPositionService.currentTelemetry?.signalStrength {
+        if showingPlaceholders {
+            return "0"
+        }
+        if let val = balloonPositionService.currentRadioChannel?.signalStrength {
             // signalStrength is RSSI in dBm (typically negative values like -50 to -120)
             return String(format: "%d", val)
         }
@@ -254,12 +324,15 @@ struct DataPanelView: View {
     }
 
     private var batteryPercentageString: String {
+        if showingPlaceholders {
+            return "0"
+        }
         // Prioritize BLE device status (Type 0) when available
         if let deviceStatus = bleService.deviceStatus {
             return "\(deviceStatus.batteryPercentage)"
         }
-        // Fallback to telemetry data battery percentage (Type 1)
-        if let val = balloonPositionService.currentTelemetry?.batteryPercentage {
+        // Fallback to radio channel data battery percentage
+        if let val = balloonPositionService.currentRadioChannel?.batteryPercentage {
             return "\(val)"
         }
         return "0"
@@ -283,6 +356,7 @@ struct DataPanelView: View {
         balloonTrackService: mockAppServices.balloonTrackService,
         landingPointTrackingService: mockAppServices.landingPointTrackingService,
         navigationService: mockAppServices.navigationService,
+        frequencyManagementService: mockAppServices.frequencyManagementService,
         userSettings: mockAppServices.userSettings
     )
     

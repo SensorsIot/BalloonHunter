@@ -177,11 +177,10 @@ final class PredictionService: ObservableObject {
     // Time calculations (moved from DataPanelView for proper separation of concerns)
     @Published var predictedLandingTimeString: String = "--:--"
     @Published var remainingFlightTimeString: String = "--:--"
+    private var usingSmoothedDescentRate: Bool = false
     
     // MARK: - Private State
-    private var internalTimer: Timer?
-    private let predictionInterval: TimeInterval = 60.0
-    private var lastProcessedTelemetry: TelemetryData?
+    private var lastProcessedPosition: PositionData?
     private var apiCallCount: Int = 0
     private let isoWithFrac: ISO8601DateFormatter = {
         let f = ISO8601DateFormatter()
@@ -260,7 +259,7 @@ final class PredictionService: ObservableObject {
             appLog("PredictionService: Already running automatic predictions", category: .service, level: .debug)
             return
         }
-        
+
         isRunning = true
         predictionStatus = "Running (timer by coordinator)"
         appLog("PredictionService: Running; coordinator owns 60s timer", category: .service, level: .info)
@@ -268,64 +267,69 @@ final class PredictionService: ObservableObject {
     
     func stopAutomaticPredictions() {
         isRunning = false
-        stopInternalTimer()
         predictionStatus = "Stopped"
-        
+
         appLog("PredictionService: Stopped automatic predictions", category: .service, level: .info)
     }
     
     // MARK: - Manual Prediction Triggers
     
     func triggerManualPrediction() async {
-        guard let balloonPositionService = balloonPositionService,
-              let telemetry = balloonPositionService.currentTelemetry else {
-            appLog("PredictionService: Manual trigger ignored - no telemetry available", category: .service, level: .debug)
+        guard let balloonPositionService = balloonPositionService else {
+            appLog("PredictionService: Manual trigger ignored - no balloon position service", category: .service, level: .debug)
             return
         }
 
-        appLog("PredictionService: Manual trigger - performing prediction", category: .service, level: .info)
-        await performPrediction(telemetry: telemetry, trigger: "manual")
+        // Use three-channel architecture
+        if let position = balloonPositionService.currentPositionData {
+            appLog("PredictionService: Manual trigger - performing prediction with position data", category: .service, level: .info)
+            await performPrediction(position: position, trigger: "manual")
+        } else {
+            appLog("PredictionService: Manual trigger ignored - no position data available", category: .service, level: .debug)
+        }
     }
-    
+
     func triggerStartupPrediction() async {
-        guard let balloonPositionService = balloonPositionService,
-              let telemetry = balloonPositionService.currentTelemetry else {
+        guard let balloonPositionService = balloonPositionService else {
             return
         }
 
-        appLog("PredictionService: Startup trigger - first telemetry received", category: .service, level: .info)
-        await performPrediction(telemetry: telemetry, trigger: "startup")
+        // Use three-channel architecture
+        if let position = balloonPositionService.currentPositionData {
+            appLog("PredictionService: Startup trigger - first position data received", category: .service, level: .info)
+            await performPrediction(position: position, trigger: "startup")
+        }
     }
 
-    /// Trigger prediction with specific telemetry data (called by ServiceCoordinator)
-    func triggerPredictionWithTelemetry(_ telemetry: TelemetryData, trigger: String = "coordinator") async {
-        await performPrediction(telemetry: telemetry, trigger: trigger)
+    /// Trigger prediction with specific telemetry data (called by ServiceCoordinator) - Legacy
+    /// Trigger prediction with position data (three-channel architecture)
+    func triggerPredictionWithPosition(_ position: PositionData, trigger: String = "coordinator") async {
+        await performPrediction(position: position, trigger: trigger)
     }
     
-    // MARK: - Private Timer Implementation (disabled; coordinator owns timer)
-    private func startInternalTimer() { /* no-op: coordinator manages timer */ }
-    private func stopInternalTimer() { internalTimer?.invalidate(); internalTimer = nil }
-    private func handleTimerTrigger() async { /* no-op */ }
     
     // MARK: - Core Prediction Logic
     
-    private func performPrediction(telemetry: TelemetryData, trigger: String) async {
+    // TelemetryData version removed - use PositionData version below
+
+    /// Three-channel architecture: Perform prediction with PositionData
+    private func performPrediction(position: PositionData, trigger: String) async {
         predictionStatus = "Processing prediction..."
-        
+
         // Dev sondes are processed normally; CSV filtering handled elsewhere
 
         do {
             let sinceLast = lastPredictionTime.map { String(format: "%.1f", Date().timeIntervalSince($0)) } ?? "N/A"
             appLog("PredictionService: performPrediction start (trigger=\(trigger), sinceLast=\(sinceLast)s)", category: .service, level: .debug)
             // Determine if balloon is descending
-            let balloonDescends = telemetry.verticalSpeed < 0
-            appLog("PredictionService: Balloon descending: \(balloonDescends) (verticalSpeed: \(telemetry.verticalSpeed) m/s)", category: .service, level: .info)
-            
+            let balloonDescends = position.verticalSpeed < 0
+            appLog("PredictionService: Balloon descending: \(balloonDescends) (verticalSpeed: \(position.verticalSpeed) m/s)", category: .service, level: .info)
+
             // Calculate effective descent rate
-            let effectiveDescentRate = calculateEffectiveDescentRate(telemetry: telemetry)
-            
+            let effectiveDescentRate = calculateEffectiveDescentRate(position: position)
+
             // Create cache key
-            let cacheKey = createCacheKey(telemetry)
+            let cacheKey = createCacheKey(position)
             appLog("PredictionService: Trigger=\(trigger) cacheKey=\(cacheKey)", category: .service, level: .debug)
             
             // Check cache first
@@ -339,7 +343,7 @@ final class PredictionService: ObservableObject {
             apiCallCount += 1
             appLog("PredictionService: API call #\(apiCallCount) (trigger=\(trigger), key=\(cacheKey))", category: .service, level: .debug)
             let predictionData = try await fetchPrediction(
-                telemetry: telemetry,
+                position: position,
                 userSettings: userSettings,
                 measuredDescentRate: effectiveDescentRate,
                 cacheKey: cacheKey,
@@ -370,8 +374,11 @@ final class PredictionService: ObservableObject {
             appLog("PredictionService: Prediction failed from \(trigger): \(msg)", category: .service, level: .error)
         }
     }
-    
-    private func calculateEffectiveDescentRate(telemetry: TelemetryData) -> Double {
+
+
+
+    /// Three-channel architecture: Calculate effective descent rate from PositionData
+    private func calculateEffectiveDescentRate(position: PositionData) -> Double {
         guard let serviceCoordinator = serviceCoordinator else {
             let val = userSettings.descentRate
             appLog("PredictionService: Using settings descent rate: \(String(format: "%.2f", val)) m/s (no service coordinator)", category: .service, level: .info)
@@ -380,18 +387,18 @@ final class PredictionService: ObservableObject {
 
         let balloonPhase = serviceCoordinator.balloonPositionService.balloonPhase
 
-        // DEBUG: Critical debugging for descent rate logic
-
         // Use smoothed descent rate only when descending below 10k with valid smoothed data
         if balloonPhase == .descendingBelow10k,
            let balloonTrackService = balloonTrackService,
            let smoothedRate = balloonTrackService.motionMetrics.adjustedDescentRateMS,
            smoothedRate != 0 {
             let val = abs(smoothedRate)
+            usingSmoothedDescentRate = true
             appLog("PredictionService: Using smoothed descent rate: \(String(format: "%.2f", val)) m/s (descendingBelow10k)", category: .service, level: .info)
             return val
         } else {
             let val = userSettings.descentRate
+            usingSmoothedDescentRate = false
             let reason = balloonPhase == .descendingAbove10k ? "descendingAbove10k" :
                         balloonPhase == .ascending ? "ascending" :
                         balloonPhase == .landed ? "landed" :
@@ -400,15 +407,16 @@ final class PredictionService: ObservableObject {
             return val
         }
     }
-    
-    private func createCacheKey(_ telemetry: TelemetryData) -> String {
+
+    private func createCacheKey(_ position: PositionData) -> String {
         return PredictionCache.makeKey(
-            balloonID: telemetry.sondeName,
-            coordinate: CLLocationCoordinate2D(latitude: telemetry.latitude, longitude: telemetry.longitude),
-            altitude: telemetry.altitude,
+            balloonID: position.sondeName,
+            coordinate: CLLocationCoordinate2D(latitude: position.latitude, longitude: position.longitude),
+            altitude: position.altitude,
             timeBucket: Date()
         )
     }
+
     
     private func handlePredictionResult(_ predictionData: PredictionData, trigger: String) async {
         hasValidPrediction = true
@@ -433,10 +441,10 @@ final class PredictionService: ObservableObject {
         appLog("PredictionService: Updated ServiceCoordinator with prediction results", category: .service, level: .info)
     }
     
-    func fetchPrediction(telemetry: TelemetryData, userSettings: UserSettings, measuredDescentRate: Double, cacheKey: String, balloonDescends: Bool = false) async throws -> PredictionData {
+    func fetchPrediction(position: PositionData, userSettings: UserSettings, measuredDescentRate: Double, cacheKey: String, balloonDescends: Bool = false) async throws -> PredictionData {
         // Suppress verbose start-of-fetch log
         
-        let request = try buildPredictionRequest(telemetry: telemetry, userSettings: userSettings, descentRate: abs(measuredDescentRate), balloonDescends: balloonDescends)
+        let request = try buildPredictionRequest(position: position, userSettings: userSettings, descentRate: abs(measuredDescentRate), balloonDescends: balloonDescends)
         
         do {
             // Perform request and log response details for debugging
@@ -505,24 +513,25 @@ final class PredictionService: ObservableObject {
             throw error
         }
     }
-    
-    private func buildPredictionRequest(telemetry: TelemetryData, userSettings: UserSettings, descentRate: Double, balloonDescends: Bool) throws -> URLRequest {
+
+
+    private func buildPredictionRequest(position: PositionData, userSettings: UserSettings, descentRate: Double, balloonDescends: Bool) throws -> URLRequest {
         var components = URLComponents(string: "https://api.v2.sondehub.org/tawhiri")!
         let launchTime = ISO8601DateFormatter().string(from: Date().addingTimeInterval(60))
         // FSD: Use settings burst altitude while ascending; when descending, send current altitude + 10m
         // Ensure burst altitude is always greater than current altitude (API requirement)
-        let burstAlt = telemetry.verticalSpeed >= 0 ?
-            max(userSettings.burstAltitude, telemetry.altitude + 100.0) :
-            telemetry.altitude + 10.0
+        let burstAlt = position.verticalSpeed >= 0 ?
+            max(userSettings.burstAltitude, position.altitude + 100.0) :
+            position.altitude + 10.0
         
         components.queryItems = [
-            URLQueryItem(name: "launch_latitude", value: String(format: "%.4f", telemetry.latitude)),
-            URLQueryItem(name: "launch_longitude", value: String(format: "%.4f", telemetry.longitude)),
+            URLQueryItem(name: "launch_latitude", value: String(format: "%.4f", position.latitude)),
+            URLQueryItem(name: "launch_longitude", value: String(format: "%.4f", position.longitude)),
             URLQueryItem(name: "launch_datetime", value: launchTime),
             URLQueryItem(name: "ascent_rate", value: String(format: "%.2f", userSettings.ascentRate)),
             URLQueryItem(name: "burst_altitude", value: String(format: "%.1f", burstAlt)),
             URLQueryItem(name: "descent_rate", value: String(format: "%.2f", descentRate)),
-            URLQueryItem(name: "launch_altitude", value: String(format: "%.1f", telemetry.altitude)),
+            URLQueryItem(name: "launch_altitude", value: String(format: "%.1f", position.altitude)),
             URLQueryItem(name: "profile", value: "standard_profile"),
             URLQueryItem(name: "format", value: "json")
         ]
@@ -531,11 +540,13 @@ final class PredictionService: ObservableObject {
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
         appLog(String(format: "PredictionService: API request lat=%.4f lon=%.4f alt=%.0fm ↑%.1f ↓%.1f burst=%.0fm",
-                      telemetry.latitude, telemetry.longitude, telemetry.altitude,
+                      position.latitude, position.longitude, position.altitude,
                       userSettings.ascentRate, descentRate, burstAlt),
                category: .service, level: .debug)
         return request
     }
+
+    /// Three-channel architecture: Build prediction request using PositionData
     
     private func convertSondehubToPredictionData(_ response: SondehubPredictionResponse) throws -> PredictionData {
         // Extract ascent/descent trajectories and derive burst/landing points
@@ -575,7 +586,8 @@ final class PredictionService: ObservableObject {
             launchPoint: ascent!.trajectory.first.map { CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude) },
             burstAltitude: ascentLast?.altitude,
             flightTime: nil,
-            metadata: nil
+            metadata: nil,
+            usedSmoothedDescentRate: self.usingSmoothedDescentRate
         )
 
         // Update time calculations for direct API calls

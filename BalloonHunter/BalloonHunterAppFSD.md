@@ -163,88 +163,43 @@ Services @Published → MapPresenter @Published → Views @EnvironmentObject (no
 🔄 **Service Coordination:**
 ServiceCoordinator handles app infrastructure only, UI state handled by MapPresenter
 
-## Architecture Changes (2025-09-28)
-
-**NEW: Service Chain Architecture**
-- State machine now triggers single services that auto-chain to subsequent services
-- Flying states: PredictionService → LandingPointTrackingService → RouteCalculationService
-- Landed states: LandingPointTrackingService → RouteCalculationService
-- Eliminates ServiceCoordinator middleman for business logic
-
-**NEW: Direct UI Communication**
-- MapPresenter subscribes directly to services via @Published properties
-- No ServiceCoordinator middleman for UI state updates
-- Reactive UI updates with proper separation of concerns
-- ServiceCoordinator handles only app infrastructure (startup, persistence, settings)
-
 ## Dealing with Frequencies
 
-- **Startup with live BLE telemetry** — If BLE packets are received, the frequency and probe type encoded in those BLE packets are treated as the source of truth.
-- **Startup without BLE telemetry** — If BLE packets are not yet available, the app uses the most recent APRS/SondeHub frame instead. Frequency and probe type have to be transmitted to RadioSondyGo using the BLE command. If RadioSondyGo is ready for commands, immediately, otherwise when it connected (Ready for commands).
-- **APRS telemetry mismatch** — While APRS fallback is active, the app compares the APRS frequency and probe type against the current RadioSondyGo settings. When a mismatch is detected, a confirmation alert appears; accepting applies the APRS values via the BLE command, while cancelling defers the change for a short period.
+- **Startup with live BLE telemetry** — If BLE packets are received, BLE RadioChannelData are treated as the source of truth.
+- **Startup without BLE telemetry** — If BLE packets are not yet available, the app uses APRS RadioChannelData instead. Frequency and probe type have to be transmitted to RadioSondyGo using the BLE command. If RadioSondyGo is ready for commands, immediately, otherwise when it connected (Ready for commands).
+- **APRS telemetry mismatch** — While APRS fallback is active, the app compares the APRS frequency and probe type against the current RadioSondyGo settings. When a mismatch is detected, a confirmation alert appears; accepting applies the APRS values via the BLE command, while cancelling defers the change for a period of 5 minutes.
 
-## Telemetry Availability Scenarios
+## The State Machine
 
-**BLE Telemetry State Management:**
-- BLE connection and telemetry status is managed via `BLETelemetryState` enum with three states:
-  - `BLEnotconnected`: No BLE connection established
-  - `readyForCommands`: BLE connected but waiting for first telemetry packet
-  - `BLEtelemetryIsReady`: BLE connected and actively receiving telemetry
-- The enum provides computed properties: `isConnected`, `canReceiveCommands`, `hasTelemetry`
-- Replaces all previous boolean flags for BLE status management
+### Overview
 
-**APRS Telemetry:**
-- `aprsTelemetryIsAvailable`: TRUE when the latest SondeHub call returned and was parsed successfully.
-- All other telemetry availability flags are deprecated; consumers must rely on the enum and this boolean.
+The BalloonHunter app implements a sophisticated state machine that manages telemetry source selection, application behavior, and service coordination. This state machine is the central decision engine that determines which telemetry source to trust (BLE vs APRS), when to enable predictions, and how to respond to different flight phases.
 
-The app treats BLE (MySondyGo) telemetry as authoritative whenever it is available and healthy. APRS/SondeHub data is used as a fallback when BLE packets stop arriving. The following scenarios cover how the coordinator and services respond:
-
-1. **Live BLE telemetry – balloon flying**  
-   - `BalloonPositionService` publishes each packet immediately and determines `balloonPhase` based on landing detection and vertical speed.
-   - `BalloonTrackService` updates the track and motion metrics (raw + smoothed speeds, adjusted descent).  
-   - Prediction scheduling runs every 60 s and route updates follow the normal cadence.
-2. **Live BLE telemetry – balloon landed**  
-   - Landing detection latches `.landed`, averages the buffered coordinates for a stable landing point, and zeroes all motion metrics.  
-   - `ServiceCoordinator` mirrors the landing point to the map, disables further prediction requests, and the data panel/route display switch to recovery mode. 
-   - APRS polling remains stopped.
-3. **APRS fallback with fresh timestamp (balloon flying)**  
-   - APRS triggered immediately when BLE telemetry is not available. Afterwards, APRS data stays on the 15 s cadence until BLE recovers.
-   - Track and motion metrics update exactly as they would for BLE packets, keeping the coordinator UI responsive while the balloon is still airborne. 
-   - When BLE recovers, APRS is stopped again.
-   - If RadioSondyGo is ready for commands, the app regularly checks its frequency/sonde type and issues a command to change its frequency/sondetype to the one reported from APRS.
-4. **APRS fallback with old timestamp (balloon landed)**  
-   - APRS triggered immediately when BLE telemetry becomes stale. The polling cadence steps down to every 5 minutes once the latest packet is older than 120 s (indicating a landed balloon).  
-   - Motion metrics are zero, the landing point is updated with the last APRS packet, and prediction requests remain disabled.  
-   - If the last packet becomes older than 30 minutes, APRS polling reduces to once per hour to check for recovery.
-   - If RadioSondyGo is ready for commands, the app regularly checks its frequency/sonde type and issues a command to change its frequency/sondetype to the one reported from APRS.
-5. **No telemetry available**  
-   - On startup (before any BLE/APRS data) or after both feeds go silent, the UI shows placeholders (e.g., `"--"` distance, `"--:--"` arrival) while the red telemetry-stale frame alerts the user.  
-   - The flight state is set to unknown 
-   - The last landing point is still valid and the tracking map (including routing) still works.
-
-## Telemetry State Machine
-
-### Overall Architecture & Responsibilities
+### Architecture & Responsibilities
 
 The telemetry system follows a clear separation of concerns between startup, state machine, and state-specific logic:
 
 **1. Startup Responsibilities:**
+- Start services
 - Collect necessary telemetry, connection status, and other decision inputs
 - Establish BLE connections and initial APRS polling
 - Gather balloon phase, telemetry availability, and user location
 - Provide decision points for state machine evaluation
+- Exit criteria: When all decision info for th state machine is ready
 - **No business logic**: Startup only prepares inputs, does not trigger predictions or handle application logic
 
 **2. State Machine Responsibilities:**
+
 - Use collected inputs to determine appropriate state (flying, landed, etc.)
 - Manage state transitions based on telemetry availability and balloon phase
-- Control which services are enabled/disabled in each state
+- Control which services have to be used in each state
 - **Decision engine**: Pure state evaluation based on input signals
 
 **3. State-Specific Logic:**
+
 - Each state handles its own responsibilities (predictions, landing points, routing)
-- Flying states manage prediction triggers and landing point calculation
 - Landed states handle route calculation and position tracking
+- In addition to "Landed Sttes", Flying states manage prediction triggers and landing point calculation
 - **Business logic**: All application functionality lives in state handlers
 
 This architecture ensures that:
@@ -253,129 +208,146 @@ This architecture ensures that:
 - All application behavior is properly encapsulated in state-specific handlers
 - No redundant or competing logic exists between startup and states
 
-### Implementation
+### Telemetry Source Management
+
+**BLE Telemetry State Management:**
+- BLE connection and telemetry status is managed via `BLETelemetryState` enum with three states:
+  - `BLEnotconnected`: No BLE connection established
+  - `readyForCommands`: BLE connected but waiting for first telemetry packet
+  - `BLEtelemetryIsReady`: BLE connected and actively receiving telemetry
+- The enum provides computed properties: `isConnected`, `canReceiveCommands`, `hasTelemetry`
+
+**APRS Telemetry:**
+- `aprsTelemetryIsAvailable`: TRUE when the latest SondeHub call returned and was parsed successfully.
+
+### State Machine Implementation
 
 The telemetry availability scenarios are implemented as a formal state machine within `BalloonPositionService`. This state machine centralizes all telemetry source decision-making and ensures predictable, testable behavior.
 
-##### States
+#### States
 
 The state machine defines seven distinct states based on telemetry source availability and balloon phase:
 
-*   `startup`: Initial application launch before any telemetry data is received.
-*   `liveBLEFlying`: BLE telemetry is active, and the balloon is in flight.
-*   `liveBLELanded`: BLE telemetry is active, and the balloon has landed.
-*   `waitingForAPRS`: An intermediate state when BLE telemetry is lost, and the system is waiting for an APRS response.
-*   `aprsFallbackFlying`: APRS telemetry is being used as a fallback, and the balloon is in flight.
-*   `aprsFallbackLanded`: APRS telemetry is being used as a fallback, and the balloon has landed.
-*   `noTelemetry`: No telemetry sources are available.
+- `startup`: Initial application launch before any telemetry data is received.
+- `liveBLEFlying`: BLE telemetry is active, and the balloon is in flight.
+- `liveBLELanded`: BLE telemetry is active, and the balloon has landed.
+- `waitingForAPRS`: An intermediate state when BLE telemetry is lost, and the system is waiting for an APRS response.
+- `aprsFallbackFlying`: APRS telemetry is being used as a fallback, and the balloon is in flight.
+- `aprsFallbackLanded`: APRS telemetry is being used as a fallback, and the balloon has landed.
+- `noTelemetry`: No telemetry sources are available.
 
-##### Input Signals
+#### Input Signals
 
 State transitions are driven by the following input signals:
 
-*   `bleTelemetryState`: The BLE telemetry state enum (`.BLEnotconnected`, `.readyForCommands`, `.BLEtelemetryIsReady`) from the BLE service.
-*   `aprsTelemetryIsAvailable`: `true` when the `APRSTelemetryService` has successfully fetched data.
-*   `balloonPhase`: The flight phase of the balloon (`.flying`, `.landed`, `.unknown`), as determined by `BalloonPositionService` using vector analysis landing detection.
+- `bleTelemetryState`: The BLE telemetry state enum (`.BLEnotconnected`, `.readyForCommands`, `.BLEtelemetryIsReady`) from the BLE service.
+- `aprsTelemetryIsAvailable`: `true` when the `APRSTelemetryService` has successfully fetched data.
+- `balloonPhase`: The flight phase of the balloon (`.flying`, `.landed`,  `descendingAbove10k`, `descendingBelow10k`, `.unknown`), as determined by `BalloonPositionService` using vector analysis landing detection.
 
-##### State Transition Rules and Functionality
+#### State Behaviors and Transitions
 
-Each state defines explicit exit criteria and associated functionality upon entering the state.
+Each state defines explicit entry functionality and exit criteria:
 
 **State: `startup`**
-*   **Functionality**:
-    *   Collects telemetry, connection status, and decision inputs
-    *   Establishes BLE connections and initial APRS polling
-    *   Disables predictions and landing detection (business logic handled by target states)
-    *   **Input collection only**: No prediction triggers or application logic
-*   **Transitions**:
-    1.  `bleTelemetryState.hasTelemetry` AND `balloonPhase == .landed` → `liveBLELanded`
-    2.  `bleTelemetryState.hasTelemetry` → `liveBLEFlying`
-    3.  `aprsTelemetryIsAvailable` AND `balloonPhase == .landed` → `aprsFallbackLanded`
-    4.  `aprsTelemetryIsAvailable` → `aprsFallbackFlying` (defaults to flying when phase unknown)
-    5.  `ELSE` → `noTelemetry`
+- **Functionality**:
+  - Collects telemetry, connection status, and decision inputs
+  - Establishes BLE connections and initial APRS polling
+  - Disables predictions and landing detection (business logic handled by target states)
+  - **Input collection only**: No prediction triggers or application logic
+- **Transitions**:
+  1. `bleTelemetryState.hasTelemetry` AND `balloonPhase == .landed` → `liveBLELanded`
+  2. `bleTelemetryState.hasTelemetry AND balloonPhase == (not).landed` → `liveBLEFlying`
+  3. `aprsTelemetryIsAvailable` AND `balloonPhase == .landed` → `aprsFallbackLanded`
+  4. `aprsTelemetryIsAvailable AND balloonPhase == (not).landed` → `aprsFallbackFlying` 
+  5. `ELSE` → `noTelemetry`
 
 **State: `liveBLEFlying`**
-*   **Functionality**:
-    *   Disables APRS polling.
-    *   Enables predictions and landing detection.
-    *   **Business logic**: Triggers predictions when no cached prediction available
-    *   **Landing points**: Sets landing points from prediction data and triggers routing
-*   **Transitions**:
-    1.  `balloonPhase == .landed` → `liveBLELanded`
-    2.  `NOT bleTelemetryState.hasTelemetry` → `waitingForAPRS`
+- **Functionality**:
+  - Disables APRS polling
+  - Calls chain: Prediction with BLE balloon position - Landing point tracking - routing
+  - Map shows balloon track, landing point, landing point track, predicted path, route
+- **Transitions**:
+  1. `balloonPhase == .landed` → `liveBLELanded`
+  2. `NOT bleTelemetryState.hasTelemetry` → `waitingForAPRS`
 
 **State: `liveBLELanded`**
-*   **Functionality**:
-    *   Disables APRS polling.
-    *   Disables predictions. The live BLE position is used as the landing point.
-*   **Transitions**:
-    1.  `balloonPhase != .landed` → `liveBLEFlying`
-    2.  `NOT bleTelemetryState.hasTelemetry` → `waitingForAPRS`
+- **Functionality**:
+  - Disables APRS polling
+  - Calls chain: Landing point tracking with BLE balloop position - routing
+  - Map shows balloon track, landing point, landing point track, predicted path, route
+  - Data panel shows motion metrics as zero
+- **Transitions**:
+  1. `balloonPhase != .landed` → `liveBLEFlying`
+  2. `NOT bleTelemetryState.hasTelemetry` → `waitingForAPRS`
 
 **State: `waitingForAPRS`**
-*   **Functionality**:
-    *   Enables APRS polling.
-    *   Disables predictions and landing detection while waiting for a response.
-*   **Transitions**:
-    1.  `bleTelemetryState.hasTelemetry` → `liveBLEFlying` or `liveBLELanded` (based on `balloonPhase`)
-    2.  `aprsTelemetryIsAvailable` → `aprsFallbackFlying` or `aprsFallbackLanded` (based on `balloonPhase`)
-    3.  `timeInState` > 30 seconds → `noTelemetry`
+- **Functionality**:
+  - Enables APRS polling
+  - Disables predictions, routing, and landing detection while waiting for a response
+- **Transitions**:
+  1. `bleTelemetryState.hasTelemetry` AND `timeInState` ≥ 30s → `liveBLEFlying` or `liveBLELanded` (based on `balloonPhase`)
+  2. `aprsTelemetryIsAvailable` → `aprsFallbackFlying` or `aprsFallbackLanded` (based on `balloonPhase`)
+  3. `APRS timeout` → `noTelemetry`
 
 **State: `aprsFallbackFlying`**
-*   **Functionality**:
-    *   Enables APRS polling.
-    *   Enables predictions and landing detection.
-    *   Monitors for frequency mismatches between APRS and the BLE device settings.
-    *   **Business logic**: Triggers predictions when no cached prediction available
-    *   **Landing points**: Sets landing points from prediction data and triggers routing
-*   **Transitions**:
-    1.  `bleTelemetryState.hasTelemetry` AND `timeInState` ≥ 30s → `liveBLEFlying`
-    2.  `balloonPhase == .landed` → `aprsFallbackLanded`
-    3.  `NOT aprsTelemetryIsAvailable` → `noTelemetry`
+- **Functionality**: 
+  - Enables APRS polling
+  - Calls chain: Prediction with APRS balloon position - Landing point tracking - Routing
+  - Map shows balloon track, landing point, landing point track, predicted path, route
+  - If RadioSondyGo is ready for commands, the app regularly checks its frequency/sonde type and issues a command to change its frequency/sondetype to the one reported from APRS
+- **Transitions**:
+  1. `bleTelemetryState.hasTelemetry` AND `timeInState` ≥ 30s → `liveBLEFlying`
+  2. `balloonPhase == .landed` → `aprsFallbackLanded`
+  3. `APRS timeout` → `noTelemetry`
 
 **State: `aprsFallbackLanded`**
-*   **Functionality**:
-    *   Enables APRS polling.
-    *   Disables predictions. The APRS position is used as the landing point.
-*   **Transitions**:
-    1.  `bleTelemetryState.hasTelemetry` AND `timeInState` ≥ 30s → `liveBLEFlying` or `liveBLELanded` (based on `balloonPhase`)
-    2.  `balloonPhase != .landed` → `aprsFallbackFlying`
-    3.  `NOT aprsTelemetryIsAvailable` → `noTelemetry`
+- **Functionality**:
+  - Enables APRS polling
+  - Calls chain: Landing point tracking with APRS balloon position - Routing
+  - Map shows balloon track, landing point, landing point track
+  - Data panel showsmotion metrics as zero
+  - If RadioSondyGo is ready for commands, the app regularly checks its frequency/sonde type and issues a command to change its frequency/sondetype to the one reported from APRS
+- **Transitions**:
+  1. `bleTelemetryState.hasTelemetry` AND `timeInState` ≥ 30s → `liveBLEFlying` or `liveBLELanded` (based on `balloonPhase`)
+  2. `balloonPhase != .landed` → `aprsFallbackFlying`
+  3. `APRS timeout` → `noTelemetry`
 
 **State: `noTelemetry`**
-*   **Functionality**:
-    *   Disables APRS polling.
-    *   Disables predictions and landing detection.
-*   **Transitions**:
-    1.  `bleTelemetryState.hasTelemetry` AND `balloonPhase == .landed` → `liveBLELanded`
-    2.  `bleTelemetryState.hasTelemetry` → `liveBLEFlying`
-    3.  `aprsTelemetryIsAvailable` AND `balloonPhase == .landed` → `aprsFallbackLanded`
-    4.  `aprsTelemetryIsAvailable` → `aprsFallbackFlying`
+- **Functionality**:
+  - Enables APRS
+  - On startup (before any BLE/APRS data) or after both feeds go silent
+  - Data panel  shows placeholders (e.g., `"--"` distance, `"--:--"` arrival) while the red telemetry-stale frame
+  - The flight state is set to unknown
+  - Map shows balloon track, landing point, landing point track,
+  - The last landing point is still valid and the tracking map (including routing) still works
+- **Transitions**:
+  1. `bleTelemetryState.hasTelemetry` AND `balloonPhase == .landed` → `liveBLELanded`
+  2. `bleTelemetryState.hasTelemetry` → `liveBLEFlying`
+  3. `aprsTelemetryIsAvailable` AND `balloonPhase == .landed` → `aprsFallbackLanded`
+  4. `aprsTelemetryIsAvailable` → `aprsFallbackFlying`
 
-##### Key Design Principles
+### Key Design Principles
 
-*   **Input-Driven Transitions**: State changes occur only when input signals change.
-*   **30-Second Debouncing**: Transitions from APRS back to BLE require the system to be in an APRS state for at least 30 seconds to prevent rapid oscillation between telemetry sources.
-*   **External Balloon Phase**: The state machine consumes balloon phase decisions made by the `BalloonTrackService`.
-*   **APRS Polling Control**: The `APRSTelemetryService` handles polling frequency internally; the state machine enables/disables it. Exception: APRS polling starts immediately during startup (Step 2) regardless of state machine status for telemetry source evaluation.
+- **Input-Driven Transitions**: State changes occur only when input signals change.
+- **30-Second Debouncing**: Transitions from APRS back to BLE require the system to be in an APRS state for at least 30 seconds to prevent rapid oscillation between telemetry sources.
+- **APRS Polling Control**: The `APRSTelemetryService` handles polling frequency internally; the state machine enables/disables it. Exception: APRS polling starts immediately during startup (Step 2) 
 
-### Architecture
 
-  Our architecture continues to enforce a clean separation of responsibilities while embracing the new modular service layout, a coordinator, and a map presenter.
+
+## Architecture
+
+Architecture enforces a clean separation of responsibilities while embracing a modular service layout, a coordinator, and a map presenter.
 
   - Separation of Concerns
   - Business logic lives in services and the coordinator; SwiftUI views remain declarative, consuming ready-to-render state from environment objects without reaching into data sources directly.
   - Coordinator as Orchestrator
-    ServiceCoordinator listens to raw service publishers, applies cross-cutting rules that cannot be handled by one service alone, and publishes the merged app state.
+    ServiceCoordinator only is used if it adds value. It listens to service publishers, applies cross-cutting rules that cannot be handled by one service alone, and publishes the mergrf result.
   - Modular Services
-    Each service file bundles one domain: location tracking, balloon telemetry smoothing, persistence, routing, or prediction. Grouping the related caches
-    (PredictionCache, RoutingCache) alongside their services keeps the surface area small and reduces coupling.
+    Each service file bundles one domain: location tracking, balloon telemetry smoothing, persistence, routing, or prediction. Grouping the related caches (PredictionCache, RoutingCache) alongside their services keeps the surface area small and reduces coupling.
   - Presenter Layer for Complex Views
-    The MapPresenter map-specific state transformations (overlay generation, formatted strings, user intents) so TrackingMapView does not need
-    to manipulate coordinator or services state directly. This keeps the coordinator focused on orchestration and the view focused on layout.
+    The MapPresenter map-specific state transformations (overlay generation, formatted strings, user intents) so TrackingMapView does not need to manipulate coordinator or services state directly. This keeps the coordinator focused on orchestration and the view focused on layout.
   - Combine-Driven Data Flow
-    Services publish changes via @Published properties or actors; the coordinator and presenter subscribe, transform, and re-publish derived values. This
-    provides a single reactive pipeline from BLE/location inputs to UI outputs.
+    Services publish changes via @Published properties or actors; the coordinator and presenter subscribe, transform, and re-publish derived values. This provides a single reactive pipeline from BLE/APRS/location inputs to UI outputs.
   - Environment-Driven UI: Views observe the coordinator, presenter, and settings objects through @EnvironmentObject. User actions (toggle heading, trigger prediction, open Maps) bubble up through intent methods defined on the presenter/coordinator instead of mutating state locally.
   - Persistence & Caching: PersistenceService handles all disk IO (tracks, landing history, user/device prefs), and caching actors prevent redundant prediction/route work. Both are injected once through AppServices, reinforcing a single source of truth.
 
@@ -544,7 +516,7 @@ enum TransportationMode: String, CaseIterable {
 ```
 
 **Advanced Features:**
-- **Bike Mode Optimization**: 30% time reduction for conservative Apple Maps walking estimates
+- **Bike Mode Optimization**: 30% time reduction for conservative Apple Maps bicycle estimates
 - **Straight-line Fallback**: Ensures UI always has path display even without Apple Maps coverage
 - **Cache Performance**: TTL-based expiration, LRU eviction, coordinate quantization
 - **iOS Version Handling**: Cycling directions on iOS 14+, walking fallback for older versions
@@ -729,7 +701,6 @@ private func generateCacheKey(lat: Double, lon: Double, altitude: Double, time: 
 
 **State Machine Control:**
 - Predictions enabled only in flying states (ascending, descending)
-- 60-second automatic prediction timer controlled by telemetry state machine
 - Manual prediction triggers available via user interface
 - Timer paused during landed state to conserve API quota
 
@@ -845,8 +816,7 @@ Provide SondeHub-driven telemetry frames whenever BLE telemetry data is unavaila
 #### Input Triggers
 
 - Startup
-- Scheduler tick (5 s when BLE telemetry is stale, 60 s health-check cadence otherwise).
-- Notification from the coordinator that BLE telemetry has resumed (stop polling).
+- Dtate machine
 - Station-ID changes in settings (e.g., switching to a different launch site).
 
 #### Data it Consumes
@@ -856,37 +826,21 @@ Provide SondeHub-driven telemetry frames whenever BLE telemetry data is unavaila
 
 #### Data it Publishes
 
-- `TelemetryFrame` objects tagged with `.aprs` for the same consumers that read BLE frames.
+- `positionData` objects tagged with `.aprs` for the same consumers that read BLE frames.
 - Service state (current station ID, last SondeHub serial, poll cadence) for diagnostics.
-- The service should be compatible with th BLE telemetry service
-
-#### Example Data
-
-```swift
-TelemetryFrame(
-    source: .aprs,
-    sondeName: "V4210201",
-    latitude: 47.00093,
-    longitude: 7.15809,
-    altitude: 8928.4,
-    horizontalSpeed: 22.8,
-    verticalSpeed: 7.2,
-    timestamp: Date(),              // Balloon transmission time (from SondeHub)
-    apiCallTimestamp: Date()        // When API call was made
-)
-```
+- The service shall be compatible with th BLE telemetry service and use the same communication channel for telemetry
 
 #### Behavior
 
-- On startup (and whenever the station ID changes), and during active polling, call `/sondes/site/<station_id>`.
+- Call `/sondes/site/<station_id>`.
 - From the response, identify the most recent sonde by its timestamp.
-- Convert the telemetry data for that sonde directly into a `TelemetryFrame` and publish it so `BalloonTrackService` treats it exactly like BLE telemetry. This single call replaces the previous two-step process.
+- Convert the telemetry data for that sonde directly into `positionData` and publish it so `BalloonTrackService` treats it exactly like BLE telemetry. 
 - Intelligent polling for API efficiency based on telemetry age:
   - Fresh data (< 2 minutes): 15-second polling
   - Stale data (2-30 minutes): 5-minute polling
   - Very old data (> 30 minutes): 1-hour polling  
-- Suspend polling as soon as fresh BLE telemetry resumes.  
-- Flight-state decisions and landing detection are handled by `BalloonPositionService`, while smoothing remains with `BalloonTrackService`—the APRS service only supplies raw telemetry frames.
+- Suspend polling when asked
+- The APRS service only supplies raw telemetry frames
 
 ### Current Location Service
 
@@ -1066,7 +1020,6 @@ Call the SondeHub prediction API on demand (manual or scheduled), cache results 
 
 - Manual: user taps the balloon annotation.
 - Startup: first telemetry after launch.
-- Timer: every 60 s while a valid prediction has not been generated recently.
 
 #### Publishes
 
@@ -1171,61 +1124,47 @@ The `ServiceCoordinator` is responsible for determining the single, authoritativ
 
 ## Startup
 
-The coordinator runs `performCompleteStartupSequence()` in 8 sequential steps with optimized parallel execution where possible.
+The coordinator runs `performCompleteStartupSequence()` in 4 streamlined steps, waiting for definitive service answers before handing control to the state machine.
 
+### Service Answer Detection
+- **BLE Service Answer**: Connection state enum published after first packet is parsed (any state except `.scanning`)
+- **APRS Service Answer**: Data received OR network error occurred
+- **15-Second Safety Timeout**: If either service fails to answer, displays "💀 Something horrible happened"
+
+### Startup Steps
 1.  **Step 1: Service Initialization (0-100ms)**
-    *   The progress label is set to "Step 1: Services".
+    *   Progress label: "Step 1: Services"
     *   AppServices dependency injection and core service instantiation
     *   Initial property setup across all services
 
-2.  **Step 2: BLE Connection + APRS Priming (100ms-5s) [PARALLEL]**
-    *   The progress label is updated to "Step 2: BLE & APRS".
-    *   **BLE Connection**: MySondyGo device scanning and connection (5-second timeout)
-    *   **APRS Startup Polling**: Initial telemetry availability check and station evaluation (always runs during startup)
-    *   **Location Services**: GPS activation for user positioning
-    *   Both operations run in parallel for efficiency
-    *   Note: APRS polling starts immediately during startup regardless of BLE status (differs from steady-state behavior)
+2.  **Step 2: Service Startup + Answer Detection (100ms-~4s) [PARALLEL]**
+    *   Progress label: "Step 2: BLE & APRS"
+    *   **BLE Service**: Start scanning (if Bluetooth powered on)
+    *   **APRS Service**: Start polling station data
+    *   **Wait for both definitive answers**:
+        - BLE: Bluetooth off OR connection state enum published (after first packet)
+        - APRS: Telemetry data received OR network error
+    *   **No individual timeouts** - let each service handle its own timing
+    *   **Coordinator timeout**: 15 seconds maximum (only if services don't answer)
 
-3.  **Step 3: First Telemetry Package (5s+)**
-    *   The progress label is updated to "Step 3: Telemetry".
-    *   Wait for first BLE packet (any type 0-3) to establish device readiness
-    *   Evaluate APRS data availability and freshness
-    *   Determine initial telemetry source preference
+3.  **Step 3: Data Loading & State Machine Handoff**
+    *   Progress label: "Step 3: Data & Startup"
+    *   **Persistence Data**: Load user settings, tracks, and histories
+    *   **State Machine**: Call `balloonPositionService.completeStartup()`
+    *   **Service answers available** - state machine can make informed decisions
 
-4.  **Step 4: State Machine Startup**
-    *   The progress label is updated to "Step 4: State Machine".
-    *   Evaluate BLE vs APRS availability and determine initial state
-    *   Transition state machine to appropriate initial state (startup → target state)
-    *   Configure prediction timers and APRS polling based on state
-    *   Apply frequency synchronization if needed
+4.  **Step 4: UI Transition & Control Handoff**
+    *   **Startup Complete**: Set `isStartupComplete = true`
+    *   **UI Transition**: Hide logo, show tracking map
+    *   **State Machine Control**: All timeout and source decisions now handled by state machine
+    *   **Service Coordination**: 60-second prediction timer controlled by state machine state
 
-5.  **Step 5: Persistence Data Loading**
-    *   The progress label is updated to "Step 5: Data".
-    *   **UserSettings**: Already loaded during PersistenceService initialization and shared across all services (prediction parameters, descent rates, transport mode)
-    *   **Balloon tracks**: Pre-loaded in PersistenceService, automatically restored by BalloonTrackService when matching sonde telemetry arrives
-    *   **Device settings**: Pre-loaded from BLE device configuration cache
-    *   **Landing point history**: Pre-loaded in PersistenceService, accessible via persistence methods when needed
-    *   Note: This step primarily logs available data rather than performing active loading (data is loaded during service initialization)
-
-6.  **Step 6: Landing Point Determination**
-    *   The progress label is updated to "Step 6: Landing Point".
-    *   State machine determines landing point using 4-priority system:
-        1. Live balloon position if landed (BLE landing detection)
-        2. Predicted landing position (Tawhiri API)
-        3. APRS position (age-based landing detection)
-        4. Persisted landing point from previous session
-
-7.  **Step 7: Final Map Display**
-    *   The progress label is updated to "Step 7: Map Display".
-    *   Switch from startup logo to TrackingMapView
-    *   Load all map annotations and overlays
-    *   Display main tracking interface
-
-8.  **Step 8: Startup Map Zoom**
-    *   Calculate bounding box for all map elements (user, balloon, track, predictions)
-    *   Trigger automatic camera fit to show all annotations
-    *   Mark startup as complete and ready for user interaction
-    *   Set `isStartupComplete = true` and transition to steady-state tracking mode
+### Key Improvements
+- **No artificial timeouts**: Coordinator waits for actual service responses
+- **Parallel service startup**: BLE and APRS start simultaneously
+- **Immediate handoff**: Once both services answer, control goes to state machine
+- **Fault tolerance**: Handles BLE disconnects, network failures, and device unavailability
+- **Consistent 4-second startup**: Optimized from previous 8.5-second sequence
 
 ## Tracking View
 

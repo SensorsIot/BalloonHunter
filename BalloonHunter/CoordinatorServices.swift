@@ -69,146 +69,95 @@ extension ServiceCoordinator {
     /// Performs the complete startup sequence
     func performCompleteStartupSequence() async {
         let startTime = Date()
+        let maxStartupTime: TimeInterval = 15.0 // BLE timeout (5s) + APRS timeout (5s) + buffer (5s)
 
-        // Step 1: Service Initialization (already done)
-        await MainActor.run {
-            currentStartupStep = 1
-            startupProgress = "Step 1: Services"
-        }
-        appLog("STARTUP: Step 1 - Service initialization complete", category: .general, level: .info)
+        // Overall startup timeout task
+        let startupTask = Task {
+            // Step 1: Service Initialization (already done)
+            await MainActor.run {
+                currentStartupStep = 1
+                startupProgress = "Step 1: Services"
+            }
+            appLog("STARTUP: Step 1 - Service initialization complete", category: .general, level: .info)
 
-        // Step 2: BLE Connection + APRS Priming (parallel with timeout)
-        await MainActor.run {
-            currentStartupStep = 2
-            startupProgress = "Step 2: BLE & APRS"
-        }
-        async let bleResult = startBLEConnectionWithTimeout()
-        async let aprsTask: Void = primeAPRSStartupData()
+            // Step 2: Start both services and wait for definitive answers
+            await MainActor.run {
+                currentStartupStep = 2
+                startupProgress = "Step 2: BLE & APRS"
+            }
+            async let bleResult = startBLEConnectionWithTimeout()
+            async let aprsTask: Void = primeAPRSStartupData()
 
-        let _ = await bleResult
-        await aprsTask
-        appLog("STARTUP: Step 2 - BLE connection and APRS priming complete", category: .general, level: .info)
+            let (_, _) = await bleResult
+            await aprsTask
 
-        // Step 3: First Telemetry Package
-        await MainActor.run {
-            currentStartupStep = 3
-            startupProgress = "Step 3: Telemetry"
-        }
-        await waitForFirstBLEPackageAndPublishTelemetryStatus()
-        appLog("STARTUP: Step 3 - First telemetry package processed", category: .general, level: .info)
+            // Wait for definitive answers from both services
+            await waitForServiceAnswers()
 
-        // Step 4: Wait for APRS data and complete state machine startup
-        await MainActor.run {
-            currentStartupStep = 4
-            startupProgress = "Step 4: State Machine"
-        }
-        await waitForInitialAPRSData()
-        appLog("STARTUP: Step 4 - State machine startup complete", category: .general, level: .info)
-        balloonPositionService.completeStartup()
+            // Step 3: Load persistence data and complete startup
+            await MainActor.run {
+                currentStartupStep = 3
+                startupProgress = "Step 3: Data & Startup"
+            }
+            await loadAllPersistenceData()
+            balloonPositionService.completeStartup()
 
-        // Step 5: Persistence Data
-        await MainActor.run {
-            currentStartupStep = 5
-            startupProgress = "Step 5: Data"
-        }
-        await loadAllPersistenceData()
-        appLog("STARTUP: Step 5 - Persistence data loaded", category: .general, level: .info)
+            // Step 4: End startup - hand control to state machine
+            let totalTime = Date().timeIntervalSince(startTime)
+            await MainActor.run {
+                isStartupComplete = true
+                showLogo = false
+                showTrackingMap = true
+            }
 
-        // Step 6: Landing Point (state machine now provides landing detection)
-        await MainActor.run {
-            currentStartupStep = 6
-            startupProgress = "Step 6: Landing Point"
-        }
-        appLog("STARTUP: Step 6 - Landing point determined by state machine", category: .general, level: .info)
-
-        // Step 7: Final Map Display
-        await MainActor.run {
-            currentStartupStep = 7
-            startupProgress = "Step 7: Map Display"
-        }
-        await setupInitialMapDisplay()
-        appLog("STARTUP: Step 7 - Final map display complete", category: .general, level: .info)
-
-        // Mark startup as complete (automatic frequency sync now handled by BalloonPositionService)
-        let totalTime = Date().timeIntervalSince(startTime)
-        await MainActor.run {
-            isStartupComplete = true
-            showLogo = false
-            showTrackingMap = true
+            appLog("STARTUP: Complete ✅ Services answered, control handed to state machine (\(String(format: "%.1f", totalTime))s total)", category: .general, level: .info)
         }
 
-        // Brief delay to ensure services are fully initialized
-        try? await Task.sleep(nanoseconds: 300_000_000) // 0.3 seconds
+        // Create timeout task
+        let timeoutTask = Task {
+            try await Task.sleep(nanoseconds: UInt64(maxStartupTime * 1_000_000_000))
+            await MainActor.run {
+                startupProgress = "💀 Something horrible happened"
+                appLog("STARTUP: TIMEOUT ☠️ Startup exceeded \(maxStartupTime)s limit", category: .general, level: .error)
+            }
+        }
 
-        // Step 8: Startup complete - UI handles its own map zoom initialization
-        appLog("STARTUP: Step 8 - Service startup complete, UI handles map initialization", category: .general, level: .info)
-
-        appLog("STARTUP: Complete ✅ Ready for tracking (\(String(format: "%.1f", totalTime))s total)", category: .general, level: .info)
+        // Race between startup and timeout
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask {
+                await startupTask.value
+                timeoutTask.cancel()
+            }
+            group.addTask {
+                try? await timeoutTask.value
+                startupTask.cancel()
+            }
+            await group.next()
+            group.cancelAll()
+        }
     }
     
     
     // MARK: - Step 2: BLE Connection
     
     private func startBLEConnectionWithTimeout() async -> (connected: Bool, hasMessage: Bool) {
-        
-        // Wait for Bluetooth to be powered on (reasonable timeout)
-        let bluetoothTimeout = Date().addingTimeInterval(5) // 5 seconds for Bluetooth
-        while bleCommunicationService.centralManager.state != .poweredOn && Date() < bluetoothTimeout {
-            appLog("Step 2: Waiting for Bluetooth to power on", category: .general, level: .info)
-            try? await Task.sleep(nanoseconds: 1_000_000_000) // 1 second check interval
-        }
-        
+        // Just start BLE scanning if Bluetooth is available
         guard bleCommunicationService.centralManager.state == .poweredOn else {
-            appLog("Step 2: Bluetooth not powered on - proceeding without connection", category: .general, level: .info)
+            appLog("Step 2: Bluetooth not powered on", category: .general, level: .info)
             return (connected: false, hasMessage: false)
         }
-        
-        // Start scanning for MySondyGo devices
+
         bleCommunicationService.startScanning()
-        
-        // Try to establish connection with 5-second timeout
-        let connectionTimeout = Date().addingTimeInterval(5) // 5 seconds to find and connect
-        while !bleCommunicationService.telemetryState.canReceiveCommands && Date() < connectionTimeout {
-            try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 second checks
-        }
-        
-        if bleCommunicationService.telemetryState.canReceiveCommands {
-            // BLE connection established
-            return (connected: true, hasMessage: true)
-        } else {
-            appLog("Step 2: No BLE connection established within timeout", category: .general, level: .info)
-            return (connected: false, hasMessage: false)
-        }
+        appLog("Step 2: BLE scanning started", category: .general, level: .info)
+        return (connected: false, hasMessage: false)
     }
 
     // MARK: - Step 3: First Telemetry Package
 
     private func waitForFirstBLEPackageAndPublishTelemetryStatus() async {
-        // Step 3: Waiting for first BLE package (log removed)
-        
-        // Wait up to 3 seconds for the first BLE message of any type
-        let timeout = Date().addingTimeInterval(3)
-        var hasReceivedFirstMessage = false
-        
-        while Date() < timeout && !hasReceivedFirstMessage {
-            // Check if we've received any BLE messages (Type 0, 1, 2, or 3)
-            if bleCommunicationService.latestTelemetry != nil ||
-               !bleCommunicationService.deviceSettings.probeType.isEmpty ||
-               bleCommunicationService.deviceSettings.frequency != 403.5 {
-                hasReceivedFirstMessage = true
-                
-                // Publish telemetry availability status
-                let _ = bleCommunicationService.latestTelemetry != nil
-                // First BLE package received
-                break
-            }
-            
-            try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 second checks
-        }
-        
-        if !hasReceivedFirstMessage {
-            appLog("Step 3: No BLE package received within timeout", category: .general, level: .info)
-        }
+        // Step 3: Report current BLE status to state machine (no timeout)
+        appLog("Step 3: BLE service initialized - state machine will monitor telemetry", category: .general, level: .info)
+        // State machine will handle all BLE connection monitoring and timeout decisions
     }
 
     // Step 4 removed: BLE service issues o{?}o after first packet; SettingsView also requests on demand.
@@ -247,29 +196,168 @@ extension ServiceCoordinator {
     /// Start APRS service immediately during startup (Step 2 of startup sequence)
     private func primeAPRSStartupData() async {
         // Start APRS polling immediately - no separate priming step
-        balloonPositionService.aprsTelemetryService.startPolling()
+        balloonPositionService.aprsService.startPolling()
     }
 
     /// Wait for initial APRS data before completing state machine startup
     private func waitForInitialAPRSData() async {
-        // Wait up to 6 seconds for first APRS data to arrive (network dependent)
-        let timeout = Date().addingTimeInterval(6.0)
+        // Just start APRS polling - let overall startup timeout handle failures
+        appLog("STARTUP: APRS polling started", category: .general, level: .info)
+    }
 
-        while Date() < timeout {
-            // Check if APRS has provided any telemetry data AND state machine has processed it
-            if balloonPositionService.aprsTelemetryService.latestTelemetry != nil &&
-               balloonPositionService.aprsTelemetryIsAvailable {
-                appLog("STARTUP: APRS telemetry received and processed - proceeding with state machine", category: .general, level: .info)
-                // Add small delay to ensure all async processing completes
-                try? await Task.sleep(nanoseconds: 200_000_000) // 0.2 seconds
+    /// Wait for definitive answers from both BLE and APRS services
+    private func waitForServiceAnswers() async {
+        while true {
+            let bleAnswered = hasBleProvivedAnswer()
+            let aprsAnswered = hasAprsProvidedAnswer()
+
+            if bleAnswered && aprsAnswered {
+                appLog("STARTUP: Both services provided definitive answers", category: .general, level: .info)
                 return
             }
 
             try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 second checks
         }
+    }
 
-        appLog("STARTUP: APRS timeout after 6s - proceeding without APRS data (will transition to noTelemetry)", category: .general, level: .info)
+    /// Check if BLE service has provided a definitive answer (enum published after first packet)
+    private func hasBleProvivedAnswer() -> Bool {
+        // BLE answered if: Bluetooth is off OR received valid connection state (.readyForCommands or .dataReady)
+        return bleCommunicationService.centralManager.state != .poweredOn ||
+               bleCommunicationService.connectionState == .readyForCommands ||
+               bleCommunicationService.connectionState == .dataReady
+    }
+
+    /// Check if APRS service has provided a definitive answer (data or error)
+    private func hasAprsProvidedAnswer() -> Bool {
+        // APRS answered if: has data OR has error
+        return balloonPositionService.aprsService.latestPosition != nil ||
+               balloonPositionService.aprsService.lastApiError != nil
     }
 
 
+}
+
+// MARK: - Frequency Management Service
+
+@MainActor
+final class FrequencyManagementService: ObservableObject {
+    @Published var syncProposal: FrequencySyncProposal? = nil
+
+    private let bleService: BLECommunicationService
+    private var cancellables = Set<AnyCancellable>()
+
+    init(bleService: BLECommunicationService, balloonPositionService: BalloonPositionService) {
+        self.bleService = bleService
+
+        // Subscribe to state changes and radio data for frequency sync evaluation
+        Publishers.CombineLatest(
+            balloonPositionService.$currentState,
+            balloonPositionService.$currentRadioChannel
+        )
+        .sink { [weak self] state, radioData in
+            self?.evaluateFrequencySync(state: state, radioData: radioData,
+                                      positionData: balloonPositionService.currentPositionData)
+        }
+        .store(in: &cancellables)
+    }
+
+    /// Accept and execute the frequency sync proposal
+    func acceptFrequencySyncProposal() {
+        guard let proposal = syncProposal else { return }
+
+        // Delegate to BLE service for frequency sync
+        bleService.acceptFrequencySync(frequency: proposal.frequency, probeType: proposal.probeType, source: "FrequencyManagement-UserAccepted")
+
+        // Clear the proposal
+        syncProposal = nil
+    }
+
+    /// Reject the frequency sync proposal
+    func rejectFrequencySyncProposal() {
+        guard let proposal = syncProposal else { return }
+
+        // Delegate to BLE service for rejection handling
+        bleService.rejectFrequencySync(frequency: proposal.frequency, probeType: proposal.probeType)
+
+        // Clear the proposal
+        syncProposal = nil
+    }
+
+    private func evaluateFrequencySync(state: DataState, radioData: RadioChannelData?, positionData: PositionData?) {
+        switch state {
+        case .aprsFallbackFlying, .aprsFallbackLanded:
+            evaluateAPRSFrequencyProposal(radioData: radioData, positionData: positionData)
+
+        case .startup:
+            evaluateStartupFrequencySync(radioData: radioData, positionData: positionData)
+
+        case .liveBLEFlying, .liveBLELanded, .waitingForAPRS, .noTelemetry:
+            // No frequency sync in these states
+            break
+        }
+    }
+
+    private func evaluateAPRSFrequencyProposal(radioData: RadioChannelData?, positionData: PositionData?) {
+        guard let position = positionData,
+              position.telemetrySource == .aprs,
+              let radio = radioData else { return }
+
+        // Only evaluate frequency sync when BLE is ready for commands
+        guard bleService.connectionState.canReceiveCommands else {
+            appLog("FrequencyManagementService: BLE not ready for commands - skipping frequency sync evaluation", category: .service, level: .debug)
+            return
+        }
+
+        let aprsFreq = radio.frequency
+        let bleFreq = bleService.deviceSettings.frequency
+        let freqMismatch = abs(aprsFreq - bleFreq) > 0.01
+
+        let aprsProbeType = radio.probeType.isEmpty ? "RS41" : radio.probeType
+        let bleProbeType = bleService.deviceSettings.probeType
+        let probeTypeMismatch = aprsProbeType != bleProbeType
+
+        guard freqMismatch || probeTypeMismatch else {
+            appLog("FrequencyManagementService: APRS-BLE frequency/probe match, no sync needed", category: .service, level: .debug)
+            return
+        }
+
+        appLog("FrequencyManagementService: APRS fallback frequency sync needed - creating user proposal", category: .service, level: .info)
+        createFrequencySyncProposal(aprsFreq: aprsFreq, aprsProbeType: aprsProbeType, bleFreq: bleFreq, bleProbeType: bleProbeType)
+    }
+
+    private func evaluateStartupFrequencySync(radioData: RadioChannelData?, positionData: PositionData?) {
+        guard let position = positionData,
+              position.telemetrySource == .aprs,
+              let radio = radioData else { return }
+
+        // Only evaluate frequency sync when BLE is ready for commands
+        guard bleService.connectionState.canReceiveCommands else {
+            appLog("FrequencyManagementService: Startup - BLE not ready for commands - skipping frequency sync evaluation", category: .service, level: .debug)
+            return
+        }
+
+        let aprsFreq = radio.frequency
+        let bleFreq = bleService.deviceSettings.frequency
+        let freqMismatch = abs(aprsFreq - bleFreq) > 0.01
+
+        let aprsProbeType = radio.probeType.isEmpty ? "RS41" : radio.probeType
+        let bleProbeType = bleService.deviceSettings.probeType
+        let probeTypeMismatch = aprsProbeType != bleProbeType
+
+        guard freqMismatch || probeTypeMismatch else {
+            appLog("FrequencyManagementService: Startup - APRS-BLE frequency/probe match, no sync needed", category: .service, level: .debug)
+            return
+        }
+
+        appLog("FrequencyManagementService: Startup frequency sync needed - creating user proposal", category: .service, level: .info)
+        createFrequencySyncProposal(aprsFreq: aprsFreq, aprsProbeType: aprsProbeType, bleFreq: bleFreq, bleProbeType: bleProbeType)
+    }
+
+    private func createFrequencySyncProposal(aprsFreq: Double, aprsProbeType: String, bleFreq: Double, bleProbeType: String) {
+        // Create proposal for user confirmation
+        syncProposal = FrequencySyncProposal(frequency: aprsFreq, probeType: aprsProbeType)
+
+        appLog("FrequencyManagementService: Frequency sync proposal created - APRS: \(aprsFreq) MHz \(aprsProbeType) vs BLE: \(bleFreq) MHz \(bleProbeType)", category: .service, level: .info)
+    }
 }

@@ -12,13 +12,11 @@ import UIKit
 
 @MainActor
 final class ServiceCoordinator: ObservableObject {
-    // KEEP: Core services that provide real value
     let persistenceService: PersistenceService
-    let predictionCache: PredictionCache  // Keep: has real performance value
-    let routingCache: RoutingCache       // Keep: has real performance value
-    
-    // MARK: - Published Properties (moved from MapState)
+    let predictionCache: PredictionCache
+    let routingCache: RoutingCache
 
+    // MARK: - Published Properties
 
     // Startup sequence state
     @Published var startupProgress: String = "Initializing services..."
@@ -28,33 +26,20 @@ final class ServiceCoordinator: ObservableObject {
     @Published var showTrackingMap: Bool = false
 
 
-    // Core services (initialized in init for MapState dependencies)
+    // Core services
     let currentLocationService: CurrentLocationService
     let bleCommunicationService: BLECommunicationService
-    
-    // Phase 3: Prediction Service (injected from AppServices)
     let predictionService: PredictionService
-    
-    // REQUIRED: Services that generate the events and manage data (injected from AppServices)
+
+    // Domain services
     let balloonPositionService: BalloonPositionService
     let balloonTrackService: BalloonTrackService
     let landingPointTrackingService: LandingPointTrackingService
     let navigationService: NavigationService
-    
-    
-    private var cancellables = Set<AnyCancellable>()
-    private var lastPredictionTime = Date.distantPast
-    private var lastPredictionAttemptTime = Date.distantPast
-    private var isPredictionInFlight: Bool = false
-    private var predictionTimer: Timer? = nil
-    private var hasTriggeredStartupPrediction: Bool = false
-    private var lastUserLocation: CLLocationCoordinate2D?
-    private var lastLandingPoint: CLLocationCoordinate2D?
-    private var lastUserLocationUpdateTime = Date.distantPast
+    let frequencyManagementService: FrequencyManagementService
 
-    // Simple timing constants (replace complex mode machine)
-    private let predictionInterval: TimeInterval = 60  // Every 60 seconds per requirements
-    
+    private var cancellables = Set<AnyCancellable>()
+
     // User settings reference (shared instance from AppServices)
     let userSettings: UserSettings
 
@@ -64,20 +49,9 @@ final class ServiceCoordinator: ObservableObject {
     // Frequency sync proposal from APRS fallback
     @Published var frequencySyncProposal: FrequencySyncProposal? = nil
 
+    // 60-second prediction timer (as referenced in comments)
+    private var predictionTimer: Timer? = nil
 
-
-    // MARK: - Flight State Computed Properties
-    private var isFlying: Bool {
-        return balloonPositionService.balloonPhase != .landed &&
-               balloonPositionService.balloonPhase != .unknown
-    }
-
-    private var isLanded: Bool {
-        return balloonPositionService.balloonPhase == .landed
-    }
-
-
-    
     init(
         bleCommunicationService: BLECommunicationService,
         currentLocationService: CurrentLocationService,
@@ -89,6 +63,7 @@ final class ServiceCoordinator: ObservableObject {
         balloonTrackService: BalloonTrackService,
         landingPointTrackingService: LandingPointTrackingService,
         navigationService: NavigationService,
+        frequencyManagementService: FrequencyManagementService,
         userSettings: UserSettings
     ) {
         // ServiceCoordinator initialized (logged at AppServices level)
@@ -104,6 +79,7 @@ final class ServiceCoordinator: ObservableObject {
         self.balloonTrackService = balloonTrackService
         self.landingPointTrackingService = landingPointTrackingService
         self.navigationService = navigationService
+        self.frequencyManagementService = frequencyManagementService
         self.userSettings = userSettings
 
         // Set up circular reference for PredictionService
@@ -112,6 +88,11 @@ final class ServiceCoordinator: ObservableObject {
         setupDirectSubscriptions()
 
         // Architecture setup complete
+    }
+
+    deinit {
+        // Clean up prediction timer
+        predictionTimer?.invalidate()
     }
 
     private func configurePredictionService() {
@@ -143,11 +124,9 @@ final class ServiceCoordinator: ObservableObject {
         appLog("ServiceCoordinator: AppSettings reference set", category: .general, level: .debug)
     }
 
-    
-    // MARK: - Startup Sequence (moved to CoordinatorServices.swift)
-    
-    // setupInitialMapView moved to CoordinatorServices.swift
-    
+
+    // MARK: - Startup Sequence
+
     private func startBLEConnectionWithTimeout() async -> (connected: Bool, hasMessage: Bool) {
         appLog("ServiceCoordinator: BLE communication service connects to device", category: .general, level: .info)
         
@@ -169,11 +148,11 @@ final class ServiceCoordinator: ObservableObject {
         
         // Try to establish connection with 5-second timeout as per revised FSD
         let connectionTimeout = Date().addingTimeInterval(5) // 5 seconds to find and connect
-        while !bleCommunicationService.telemetryState.canReceiveCommands && Date() < connectionTimeout {
+        while !bleCommunicationService.connectionState.canReceiveCommands && Date() < connectionTimeout {
             try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 second checks
         }
         
-        if bleCommunicationService.telemetryState.canReceiveCommands {
+        if bleCommunicationService.connectionState.canReceiveCommands {
             appLog("ServiceCoordinator: Connection established, ready for commands", category: .general, level: .info)
             return (connected: true, hasMessage: true)
         } else {
@@ -191,14 +170,15 @@ final class ServiceCoordinator: ObservableObject {
         
         while Date() < timeout && !hasReceivedFirstMessage {
             // Check if we've received any BLE messages (Type 0, 1, 2, or 3)
-            if bleCommunicationService.latestTelemetry != nil || 
+            if bleCommunicationService.latestPosition != nil ||
+               bleCommunicationService.latestRadioChannel != nil ||
+               bleCommunicationService.latestSettings != nil ||
                !bleCommunicationService.deviceSettings.probeType.isEmpty ||
                bleCommunicationService.deviceSettings.frequency != 434.0 {
                 hasReceivedFirstMessage = true
-                
+
                 // Publish telemetry availability status
-                let telemetryAvailable = bleCommunicationService.latestTelemetry != nil
-                appLog("ServiceCoordinator: First BLE package received, telemetry available: \(telemetryAvailable)", category: .general, level: .info)
+                appLog("ServiceCoordinator: First BLE package received, telemetry available: \(bleCommunicationService.latestPosition != nil)", category: .general, level: .info)
                 break
             }
             
@@ -210,7 +190,6 @@ final class ServiceCoordinator: ObservableObject {
         }
     }
     
-    // Settings response handling removed from startup; BLE will fetch opportunistically
     
     private func setupInitialMapDisplay() async {
         appLog("ServiceCoordinator: Display initial map with maximum zoom level showing all annotations", category: .general, level: .info)
@@ -227,21 +206,17 @@ final class ServiceCoordinator: ObservableObject {
     // MARK: - Direct Event Handling
     
     private func setupDirectSubscriptions() {
-        // Subscribe to telemetry changes for automatic predictions  
-        balloonPositionService.$currentTelemetry
-            .receive(on: DispatchQueue.main)
-            .compactMap { $0 }  // Filter out nil values
-            .sink { [weak self] telemetryData in
-                self?.handleBalloonTelemetry(telemetryData)
-            }
-            .store(in: &cancellables)
-        
+        // Position data subscription for potential future coordinator needs
+        // Currently position data is accessed directly by consumers
+        // Frequency sync proposals: Direct pass-through (simplified forwarding)
+        frequencyManagementService.$syncProposal
+            .assign(to: &$frequencySyncProposal)
 
-        // Subscribe to frequency sync proposals
-        balloonPositionService.$frequencySyncProposal
+        // Monitor state changes to control 60-second prediction timer
+        balloonPositionService.$currentState
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] proposal in
-                self?.frequencySyncProposal = proposal
+            .sink { [weak self] state in
+                self?.handleStateChangeForPredictionTimer(state)
             }
             .store(in: &cancellables)
 
@@ -251,90 +226,65 @@ final class ServiceCoordinator: ObservableObject {
 
     /// Accept the APRS frequency sync proposal
     func acceptFrequencySyncProposal() {
-        balloonPositionService.acceptFrequencySyncProposal()
+        frequencyManagementService.acceptFrequencySyncProposal()
     }
 
     /// Reject the APRS frequency sync proposal
     func rejectFrequencySyncProposal() {
-        balloonPositionService.rejectFrequencySyncProposal()
+        frequencyManagementService.rejectFrequencySyncProposal()
     }
 
-    // MARK: - High-Level UI Methods for View Actions
-    
-    
-    // MARK: - Simplified Event Handlers
-    
-    // Direct telemetry handling with prediction timing
-    private func handleBalloonTelemetry(_ telemetry: TelemetryData) {
-        // Suppress verbose per-packet telemetry summary in debug logs
+    // MARK: - 60-Second Prediction Timer
 
-        // Telemetry now accessed directly from BalloonPositionService by consumers
-        // Keep frequency visible without waiting for device settings
-        if telemetry.frequency > 0 {
+    /// Handle state changes to control prediction timer
+    private func handleStateChangeForPredictionTimer(_ state: DataState) {
+        switch state {
+        case .liveBLEFlying, .aprsFallbackFlying:
+            // Flying states: start 60-second prediction timer
+            startPredictionTimer()
+        case .startup, .liveBLELanded, .waitingForAPRS, .aprsFallbackLanded, .noTelemetry:
+            // Non-flying states: stop timer to save API quota
+            stopPredictionTimer()
+        }
+    }
+
+    /// Start the 60-second prediction timer for flying states
+    private func startPredictionTimer() {
+        // Don't start if already running
+        guard predictionTimer == nil else { return }
+
+        appLog("ServiceCoordinator: Starting 60-second prediction timer for flying state", category: .service, level: .info)
+        predictionService.startAutomaticPredictions()
+
+        predictionTimer = Timer.scheduledTimer(withTimeInterval: 60.0, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.predictionTimerFired()
+            }
+        }
+    }
+
+    /// Stop the prediction timer
+    private func stopPredictionTimer() {
+        guard predictionTimer != nil else { return }
+
+        appLog("ServiceCoordinator: Stopping prediction timer", category: .service, level: .info)
+        predictionTimer?.invalidate()
+        predictionTimer = nil
+        predictionService.stopAutomaticPredictions()
+    }
+
+    /// Timer callback: trigger prediction with current position data
+    private func predictionTimerFired() {
+        guard let position = balloonPositionService.currentPositionData else {
+            appLog("ServiceCoordinator: Prediction timer fired but no position data available", category: .service, level: .debug)
+            return
         }
 
-
-        // Display position now managed by BalloonPositionService
-
-        // Adjusted descent rate is computed by BalloonTrackService; subscription updates UI
-        
-    }
-    
-
-    // MARK: - Prediction Logic
-    
-    // Manual prediction trigger for UI (balloon annotation tap)
-    // Note: there is already a high-level triggerPrediction() earlier; keep single definition
-    
-
-    
-    
-    // UIEvent handling removed - now handled directly by AppServices
-    
-    // MARK: - Simplified Business Logic
-    
-    // Prediction logic now handled directly in ServiceCoordinator
-    
-    
-    
-    private func checkLandingPointMovement(newLandingPoint: CLLocationCoordinate2D?) -> Bool {
-        defer { lastLandingPoint = newLandingPoint }
-        
-        guard let newPoint = newLandingPoint else { return false }
-        guard let lastPoint = lastLandingPoint else { return true } // First time
-        
-        let distance = CLLocation(latitude: lastPoint.latitude, longitude: lastPoint.longitude)
-            .distance(from: CLLocation(latitude: newPoint.latitude, longitude: newPoint.longitude))
-        
-        let landingPointMovementThreshold: Double = 100 // meters
-        let moved = distance > landingPointMovementThreshold
-        
-        if moved {
-            appLog("ServiceCoordinator: Landing point moved \(Int(distance))m - triggering route update", category: .general, level: .info)
+        Task {
+            await predictionService.triggerPredictionWithPosition(position, trigger: "60s-timer")
         }
-        
-        return moved
     }
-    
-    private func hasUserMovedSignificantly(to newLocation: CLLocationCoordinate2D) -> Bool {
-        guard let lastLocation = lastUserLocation else { return true }
-        
-        let distance = CLLocation(latitude: lastLocation.latitude, longitude: lastLocation.longitude)
-            .distance(from: CLLocation(latitude: newLocation.latitude, longitude: newLocation.longitude))
-        
-        return distance > 100.0  // 100m threshold for significant user movement
-    }
-    
-    private func shouldUpdateRouteForUserMovement() -> Bool {
-        let now = Date()
-        let timeSinceLastUserUpdate = now.timeIntervalSince(lastUserLocationUpdateTime)
-        
-        // Check every minute for user movement
-        return timeSinceLastUserUpdate > 60.0
-    }
-    
-    
-    
+
     // MARK: - Persistence Data Loading (Per FSD)
     
     func loadPersistenceData() {
@@ -357,43 +307,31 @@ final class ServiceCoordinator: ObservableObject {
         appLog("ServiceCoordinator: Persistence data loading complete - UserSettings, tracks, and histories restored", category: .general, level: .info)
 
     }
-    
-    // MARK: - Helper Methods
-    
-    
-    
-    // MARK: - Automatic Descent Rate Calculation moved to BalloonTrackService
-
-    
-    // MARK: - Landing Point Management (moved from LandingPointService)
-    
-
     // MARK: - UI Support Methods
 
 
     func openInAppleMaps() {
-        // Check multiple sources for landing point in new architecture
+        // State machine drives landing point source selection
         var landingPoint: CLLocationCoordinate2D?
 
-        // 1. Try prediction service (for flying states)
-        if let predictionLanding = predictionService.latestPrediction?.landingPoint {
-            landingPoint = predictionLanding
-        }
-        // 2. Fallback to balloon position service (for landed states)
-        else if let positionLanding = balloonPositionService.landingPoint {
-            landingPoint = positionLanding
+        switch balloonPositionService.currentState {
+        case .liveBLEFlying, .aprsFallbackFlying, .waitingForAPRS:
+            // Flying states: use prediction landing point
+            landingPoint = predictionService.latestPrediction?.landingPoint
+        case .liveBLELanded, .aprsFallbackLanded:
+            // Landed states: use balloon position service landing point
+            landingPoint = balloonPositionService.landingPoint
+        case .startup, .noTelemetry:
+            // No telemetry: no landing point available
+            landingPoint = nil
         }
 
         guard let finalLandingPoint = landingPoint else {
-            appLog("ServiceCoordinator: Cannot open Apple Maps - no landing point available from any source", category: .general, level: .error)
+            appLog("ServiceCoordinator: Cannot open Apple Maps - no landing point available for state \(balloonPositionService.currentState)", category: .general, level: .error)
             return
         }
 
-        appLog("ServiceCoordinator: Opening Apple Maps with landing point [\(String(format: "%.4f", finalLandingPoint.latitude)), \(String(format: "%.4f", finalLandingPoint.longitude))]", category: .general, level: .info)
+        appLog("ServiceCoordinator: Opening Apple Maps with landing point [\(String(format: "%.4f", finalLandingPoint.latitude)), \(String(format: "%.4f", finalLandingPoint.longitude))] from state \(balloonPositionService.currentState)", category: .general, level: .info)
         navigationService.openInAppleMaps(landingPoint: finalLandingPoint)
     }
-
-
-
-
 }

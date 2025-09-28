@@ -6,13 +6,6 @@
 	objectVersion = 77;
 	objects = {
 
-/* Begin PBXBuildFile section */
-		A7F0E0012E5C000000000001 /* BalloonHunterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7F0DFF32E5BFFFF00000001 /* BalloonHunterTests.swift */; };
-		A7F0E0022E5C000000000001 /* PredictionCacheTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7F0DFF42E5BFFFF00000001 /* PredictionCacheTests.swift */; };
-		A7F0E0032E5C000000000001 /* BLEDeviceSettingsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7F0DFF52E5BFFFF00000001 /* BLEDeviceSettingsTests.swift */; };
-		A7F0E00A2E5C000500000001 /* LaunchUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7F0E0092E5C000500000001 /* LaunchUITests.swift */; };
-/* End PBXBuildFile section */
-
 /* Begin PBXContainerItemProxy section */
 		A7F0E0042E5C000000000001 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -33,11 +26,7 @@
 /* Begin PBXFileReference section */
 		4771180D2E3B511A00C79172 /* BalloonHunter.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = BalloonHunter.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A7F0DFF22E5BFFFF00000001 /* BalloonHunterTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = BalloonHunterTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-		A7F0DFF32E5BFFFF00000001 /* BalloonHunterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BalloonHunterTests.swift; sourceTree = "<group>"; };
-		A7F0DFF42E5BFFFF00000001 /* PredictionCacheTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PredictionCacheTests.swift; sourceTree = "<group>"; };
-		A7F0DFF52E5BFFFF00000001 /* BLEDeviceSettingsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BLEDeviceSettingsTests.swift; sourceTree = "<group>"; };
 		A7F0E0082E5C000500000001 /* BalloonHunterUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = BalloonHunterUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-		A7F0E0092E5C000500000001 /* LaunchUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaunchUITests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -90,8 +79,6 @@
 			isa = PBXGroup;
 			children = (
 				4771180F2E3B511A00C79172 /* BalloonHunter */,
-				A7F0DFF62E5BFFFF00000001 /* BalloonHunterTests */,
-				A7F0E01A2E5C000500000001 /* BalloonHunterUITests */,
 				4771180E2E3B511A00C79172 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -104,24 +91,6 @@
 				A7F0E0082E5C000500000001 /* BalloonHunterUITests.xctest */,
 			);
 			name = Products;
-			sourceTree = "<group>";
-		};
-		A7F0DFF62E5BFFFF00000001 /* BalloonHunterTests */ = {
-			isa = PBXGroup;
-			children = (
-				A7F0DFF32E5BFFFF00000001 /* BalloonHunterTests.swift */,
-				A7F0DFF42E5BFFFF00000001 /* PredictionCacheTests.swift */,
-				A7F0DFF52E5BFFFF00000001 /* BLEDeviceSettingsTests.swift */,
-			);
-			path = BalloonHunterTests;
-			sourceTree = "<group>";
-		};
-		A7F0E01A2E5C000500000001 /* BalloonHunterUITests */ = {
-			isa = PBXGroup;
-			children = (
-				A7F0E0092E5C000500000001 /* LaunchUITests.swift */,
-			);
-			path = BalloonHunterUITests;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -257,9 +226,6 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				A7F0E0012E5C000000000001 /* BalloonHunterTests.swift in Sources */,
-				A7F0E0022E5C000000000001 /* PredictionCacheTests.swift in Sources */,
-				A7F0E0032E5C000000000001 /* BLEDeviceSettingsTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -267,7 +233,6 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				A7F0E00A2E5C000500000001 /* LaunchUITests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

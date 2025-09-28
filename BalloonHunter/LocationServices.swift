@@ -14,6 +14,7 @@ final class CurrentLocationService: NSObject, ObservableObject, CLLocationManage
     var significantMovementLocation: LocationData? = nil // Only updates on 10m+ movement
     @Published var distanceToBalloon: CLLocationDistance? = nil // Raw distance in meters for overlay display
     @Published var isWithin200mOfBalloon: Bool = false // For navigation logic
+    @Published var shouldUpdateRoute: Bool = false // Triggers route recalculation when user moves significantly
 
     // Dual location managers for different operational modes
     private let backgroundLocationManager = CLLocationManager() // 30-second updates, standard accuracy
@@ -28,6 +29,12 @@ final class CurrentLocationService: NSObject, ObservableObject, CLLocationManage
     private var backgroundTimer: Timer?
     private var cancellables = Set<AnyCancellable>()
     private var userLocationLogCount: Int = 0
+
+    // Movement thresholds for route updates (moved from Coordinator)
+    private var lastRouteUpdateLocation: CLLocationCoordinate2D? = nil
+    private var lastRouteUpdateTime = Date.distantPast
+    private let routeUpdateMovementThreshold: CLLocationDistance = 100.0 // meters
+    private let routeUpdateTimeThreshold: TimeInterval = 60.0 // seconds
     
     // Location service operational modes
     enum LocationMode {
@@ -182,6 +189,9 @@ final class CurrentLocationService: NSObject, ObservableObject, CLLocationManage
             self.updateDistanceToBalloon()
             self.updateProximityStatus()
 
+            // Check for route update trigger (moved from Coordinator)
+            self.checkForRouteUpdate(newLocationData)
+
             // Throttled user location logging to avoid spam (moved from ServiceCoordinator)
             self.userLocationLogCount += 1
             if isFirstUpdate {
@@ -242,6 +252,48 @@ final class CurrentLocationService: NSObject, ObservableObject, CLLocationManage
             significantMovementLocation = newLocation
             lastSignificantMovementLocation = currentCoordinate
             appLog("CurrentLocationService: Significant movement detected (\(Int(movementDistance))m) - updating significant movement location", category: .service, level: .debug)
+        }
+    }
+
+    // MARK: - Route Update Logic (moved from Coordinator)
+
+    private func checkForRouteUpdate(_ newLocation: LocationData) {
+        let currentCoordinate = CLLocationCoordinate2D(
+            latitude: newLocation.latitude,
+            longitude: newLocation.longitude
+        )
+        let now = Date()
+
+        // Check time threshold first (every minute)
+        let timeSinceLastUpdate = now.timeIntervalSince(lastRouteUpdateTime)
+        guard timeSinceLastUpdate >= routeUpdateTimeThreshold else {
+            return
+        }
+
+        // Check movement threshold
+        var shouldTriggerUpdate = false
+        if let lastLocation = lastRouteUpdateLocation {
+            let distance = CLLocation(latitude: lastLocation.latitude, longitude: lastLocation.longitude)
+                .distance(from: CLLocation(latitude: currentCoordinate.latitude, longitude: currentCoordinate.longitude))
+
+            if distance >= routeUpdateMovementThreshold {
+                shouldTriggerUpdate = true
+                appLog("CurrentLocationService: User moved \(Int(distance))m - triggering route update", category: .service, level: .info)
+            }
+        } else {
+            // First time - always trigger
+            shouldTriggerUpdate = true
+        }
+
+        if shouldTriggerUpdate {
+            lastRouteUpdateLocation = currentCoordinate
+            lastRouteUpdateTime = now
+            shouldUpdateRoute = true
+
+            // Reset flag after brief delay to allow subscribers to react
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+                self?.shouldUpdateRoute = false
+            }
         }
     }
 

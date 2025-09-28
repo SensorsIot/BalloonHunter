@@ -18,9 +18,9 @@ final class DebugCSVLogger {
         latestPredictedLanding = point
     }
 
-    func logTelemetry(_ t: TelemetryData) {
+    func logPosition(_ p: PositionData) {
         // Skip Dev* sondes (case-insensitive)
-        if t.sondeName.uppercased().hasPrefix("DEV") { return }
+        if p.sondeName.uppercased().hasPrefix("DEV") { return }
 
         let (url, isNew) = fileURL()
         ensureHeaderIfNeeded(url: url, isNew: isNew)
@@ -29,15 +29,16 @@ final class DebugCSVLogger {
         let lp = latestPredictedLanding
         let fields: [String] = [
             ts,
-            escape(t.sondeName),
-            String(format: "%.6f", t.latitude),
-            String(format: "%.6f", t.longitude),
-            String(format: "%.1f", t.altitude),
+            escape(p.sondeName),
+            String(format: "%.6f", p.latitude),
+            String(format: "%.6f", p.longitude),
+            String(format: "%.1f", p.altitude),
             lp != nil ? String(format: "%.6f", lp!.latitude) : "",
             lp != nil ? String(format: "%.6f", lp!.longitude) : ""
         ]
         appendLine(url: url, line: fields.joined(separator: ","))
     }
+
 
     // MARK: - Helpers
     private func fileURL() -> (URL, Bool) {

@@ -22,13 +22,12 @@ Manages Bluetooth communication with **MySondyGo** devices.
 ---
 
 ### Data Published
-- `@Published var telemetryState: BLETelemetryState` — Unified BLE telemetry state (.BLEnotconnected, .readyForCommands, .BLEtelemetryIsReady)
-- `@Published var latestTelemetry: TelemetryData?` — Latest parsed telemetry
+- `@Published var connectionState: BLEConnectionState` — Unified BLE connection state (.notConnected, .readyForCommands, .dataReady)
+- Three-channel architecture: `latestPosition`, `latestRadioChannel`, `latestSettings`
 - `@Published var deviceSettings: DeviceSettings` — MySondyGo device configuration
 - `@Published var deviceStatus: DeviceStatusData?` — Type 0 device status (battery %, voltage, signal strength)
 - `@Published var connectionStatus: ConnectionStatus` — `.connected`, `.disconnected`, `.connecting`
-- `@Published var lastMessageType: String?` — `"0"`, `"1"`, `"2"`, `"3"`
-- `PassthroughSubject<TelemetryData, Never>()` — Real-time telemetry stream
+- Two-channel streams: `positionDataStream`, `radioChannelDataStream`
 - `@Published var lastTelemetryUpdateTime: Date?` — Last update timestamp
 - `@Published var lastMessageTimestamp: Date?` — Last message receipt timestamp
 
@@ -36,15 +35,20 @@ Manages Bluetooth communication with **MySondyGo** devices.
 
 ### Example Data
 ```swift
-TelemetryData(
+// PositionData
+PositionData(
     sondeName: "V4210129",
-    probeType: "RS41",
-    frequency: 404.500,
     latitude: 46.9043,
     longitude: 7.3100,
     altitude: 1151.0,       // meters
     verticalSpeed: 153.0,   // m/s
-    horizontalSpeed: 25.3,  // km/h
+    horizontalSpeed: 25.3   // km/h
+)
+
+// RadioChannelData
+RadioChannelData(
+    probeType: "RS41",
+    frequency: 404.500,
     signalStrength: -90     // dBm
 )
 */
@@ -54,6 +58,9 @@ import Combine
 import SwiftUI
 import CoreBluetooth
 import OSLog
+
+// MARK: - Internal BLE Parsing Structure
+// Pure three-channel architecture - no legacy TelemetryData
 
 // MARK: - BLE Data Models
 
@@ -251,10 +258,9 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
 
     // Settings data (Type 3) - device configuration
     @Published var latestSettings: SettingsData? = nil
-    let settingsDataStream = PassthroughSubject<SettingsData, Never>()
 
     // MARK: - Legacy Properties (state machine compatibility)
-    @Published var latestTelemetry: TelemetryData? = nil
+    // Legacy latestTelemetry removed - use latestPosition and latestRadioChannel
     @Published var deviceSettings: DeviceSettings = .default
     @Published var deviceStatus: DeviceStatusData? = nil
 
@@ -262,13 +268,13 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
     @Published var afcFrequencies: [Int] = []
     @Published var afcMovingAverage: Int = 0
     @Published var connectionStatus: ConnectionStatus = .disconnected
-    var lastMessageType: String? = nil
-    @Published var telemetryData = PassthroughSubject<TelemetryData, Never>()
+    // Legacy telemetryData stream removed - use three-channel streams
     var lastTelemetryUpdateTime: Date? = nil
-    // Unified telemetry state
-    @Published var telemetryState: BLETelemetryState = .BLEnotconnected
+    // Unified connection state
+    @Published var connectionState: BLEConnectionState = .notConnected
     @Published var lastMessageTimestamp: Date? = nil
-    let centralManagerPoweredOn = PassthroughSubject<Void, Never>()
+    // Diagnostic properties (private, for internal logging only)
+    private var lastMessageType: String? = nil
 
     
 
@@ -300,17 +306,17 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
 
         if let lastUpdate = lastTelemetryUpdateTime {
             let interval = Date().timeIntervalSince(lastUpdate)
-            isAvailable = interval <= 3.0
-            reason = isAvailable ? "Valid telemetry received within last 3 seconds" : "No valid telemetry for more than 3 seconds"
+            isAvailable = interval <= 60.0
+            reason = isAvailable ? "Valid telemetry received within last 60 seconds" : "No valid telemetry for more than 60 seconds"
         } else {
             isAvailable = false
             reason = "No telemetry ever received"
         }
 
-        // Update telemetry state based on staleness
-        if !isAvailable && telemetryState == .BLEtelemetryIsReady {
-            telemetryState = .readyForCommands
-            appLog("BLECommunicationService: Telemetry state downgraded due to staleness: \(reason)", category: .ble, level: .info)
+        // Update connection state based on staleness
+        if !isAvailable && connectionState == .dataReady {
+            connectionState = .readyForCommands
+            appLog("BLECommunicationService: Connection state downgraded due to staleness: \(reason)", category: .ble, level: .info)
         }
 
         // Log telemetry availability changes only when status changes
@@ -320,18 +326,15 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
         }
     }
 
-    private func checkTelemetryAvailability(_ newTelemetry: TelemetryData?) {
-    }
 
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
         switch central.state {
         case .poweredOn:
-            centralManagerPoweredOn.send(())
             publishHealthEvent(.healthy, message: "Bluetooth powered on")
         case .poweredOff:
             appLog("BLE: Bluetooth is powered off - please enable Bluetooth in Settings", category: .ble, level: .error)
             connectionStatus = .disconnected
-            telemetryState = .BLEnotconnected
+            connectionState = .notConnected
             lastMessageTimestamp = Date()
             publishHealthEvent(.unhealthy("Bluetooth powered off"), message: "Bluetooth powered off")
         case .resetting:
@@ -407,7 +410,7 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
         // Connection established
 
         connectionStatus = .connected
-        // telemetryState remains .BLEnotconnected until first packet received
+        // connectionState remains .notConnected until first packet received
         lastMessageTimestamp = Date()
 
         // Starting service discovery
@@ -422,7 +425,7 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
         appLog("🔴 BLE: Connection error: \(errorMessage)", category: .ble, level: .error)
         
         connectionStatus = .disconnected
-        telemetryState = .BLEnotconnected
+        connectionState = .notConnected
         lastMessageTimestamp = Date()
         publishHealthEvent(.unhealthy("BLE connection failed: \(errorMessage)"), message: "BLE connection failed: \(errorMessage)")
     }
@@ -441,7 +444,7 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
         // Disconnected
         
         connectionStatus = .disconnected
-        telemetryState = .BLEnotconnected
+        connectionState = .notConnected
         lastMessageTimestamp = Date()
         publishHealthEvent(.degraded("BLE disconnected"), message: "BLE disconnected")
         
@@ -522,7 +525,7 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
 
         // Check if we have both characteristics configured
         if writeCharacteristic != nil {
-            // Note: telemetryState will be updated when first valid BLE packet is received
+            // Note: connectionState will be updated when first valid BLE packet is received
             appLog("🟢 BLE: TX characteristic configured - waiting for first BLE packet", category: .ble, level: .info)
             publishHealthEvent(.healthy, message: "BLE characteristics configured")
             
@@ -590,24 +593,22 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
         let messageType = components[0]
         // Message type: '\(messageType)'
         
-        // Store the last message type for startup sequence logic
-        DispatchQueue.main.async {
-            self.lastMessageType = messageType
-        }
-        
-        // Update telemetry state based on packet type and current state
+        // Store the last message type for internal diagnostics
+        lastMessageType = messageType
+
+        // Update connection state based on packet type and current state
         lastMessageTimestamp = Date()
 
-        if telemetryState == .BLEnotconnected {
-            telemetryState = .readyForCommands
+        if connectionState == .notConnected {
+            connectionState = .readyForCommands
             appLog("🟢 BLE: Ready for commands - first valid BLE packet received (Type \(messageType))", category: .ble, level: .info)
             publishHealthEvent(.healthy, message: "BLE ready for commands")
         }
 
-        // Upgrade to telemetry ready if this is a Type 1 (telemetry) packet
-        if messageType == "1" && telemetryState == .readyForCommands {
-            telemetryState = .BLEtelemetryIsReady
-            appLog("🟢 BLE: Telemetry ready - Type 1 packet received", category: .ble, level: .info)
+        // Upgrade to data ready if this is a Type 1 (telemetry) packet
+        if messageType == "1" && connectionState == .readyForCommands {
+            connectionState = .dataReady
+            appLog("🟢 BLE: Data ready - Type 1 packet received", category: .ble, level: .info)
         }
         
         // Check if this is the first packet and publish telemetry availability event
@@ -629,21 +630,18 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
         switch messageType {
         case "0":
             // Device Basic Info and Status - FSD: 0/probeType/frequency/RSSI/batPercentage/batVoltage/buzmute/softwareVersion/o
-            if let (status, telemetry) = parseType0Message(components) {
+            if let (status, radioData) = parseType0Message(components) {
                 deviceStatus = status
 
                 // Update deviceSettings with probe type and frequency from Type 0 packet per FSD
-                deviceSettings.probeType = telemetry.probeType
-                deviceSettings.frequency = telemetry.frequency
+                deviceSettings.probeType = radioData.probeType
+                deviceSettings.frequency = radioData.frequency
 
-                // Convert to radio channel data and update new architecture
-                let radioData = telemetry.toRadioChannelData()
                 latestRadioChannel = radioData
                 radioChannelDataStream.send(radioData)
 
                 // Type 0 packets are device status only - do NOT send as position telemetry data
                 // Position data is invalid (0,0) and would override APRS telemetry
-                latestTelemetry = telemetry
 
                 // Show all available packet data for Type 0 messages
                 let packetInfo = components.enumerated().map { (index, value) in
@@ -693,17 +691,13 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
             } else {
                 appLog("🔴 BLE MSG (Type 1): Invalid field count=\(components.count)", category: .ble, level: .error)
             }
-            if let telemetry = parseType1Message(components) {
+            if let (positionData, radioData) = parseType1Message(components) {
 
-                if telemetry.latitude == 0.0 && telemetry.longitude == 0.0 {
+                if positionData.latitude == 0.0 && positionData.longitude == 0.0 {
                     return // Skip invalid coordinates
                 }
 
                 DispatchQueue.main.async {
-                    // Convert to new three-channel architecture
-                    let positionData = telemetry.toPositionData()
-                    let radioData = telemetry.toRadioChannelData()
-
                     // Update new channels
                     self.latestPosition = positionData
                     self.latestRadioChannel = radioData
@@ -713,12 +707,10 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
                     self.positionDataStream.send(positionData)
                     // Type 1 packets focus on position data - radio channel handled by Type 0
 
-                    // State machine compatibility - maintain telemetry interface
-                    self.latestTelemetry = telemetry
-                    self.telemetryData.send(telemetry)
+                    // Three-channel architecture - direct creation from parsing
 
                     // Update AFC frequency tracking
-                    self.updateAFCTracking(telemetry)
+                    self.updateAFCTrackingFromRadioData(radioData)
 
                     // Device settings request is handled by the connection ready callback
                     // No need to request again here
@@ -747,24 +739,18 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
             } else {
                 appLog("🔴 BLE MSG (Type 2): Invalid field count=\(components.count)", category: .ble, level: .error)
             }
-            if let telemetry = parseType2Message(components) {
+            if let radioData = parseType2Message(components) {
                 // Update deviceSettings with probe type and frequency from Type 2 packet per FSD
-                deviceSettings.probeType = telemetry.probeType
-                deviceSettings.frequency = telemetry.frequency
+                deviceSettings.probeType = radioData.probeType
+                deviceSettings.frequency = radioData.frequency
 
-                // Type 2 packets focus on partial telemetry - radio channel handled by Type 0
-                let radioData = telemetry.toRadioChannelData()
                 latestRadioChannel = radioData
                 // Note: No radioChannelDataStream emission to avoid duplication with Type 0
 
-                // Type 2 packets are partial telemetry without GPS position - do NOT send as position telemetry data
-                // Position data is invalid (0,0) and would override APRS telemetry
-                latestTelemetry = telemetry
-
                 // Update AFC frequency tracking for Type 2 messages
-                updateAFCTracking(telemetry)
+                updateAFCTrackingFromRadioData(radioData)
 
-                appLog("📊 BLE PARSED (Type 2): Device status without position - \(telemetry.sondeName)", category: .ble, level: .info)
+                appLog("📊 BLE PARSED (Type 2): Device status without position - \(radioData.sondeName)", category: .ble, level: .info)
             }
             
         case "3":
@@ -832,18 +818,12 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
                         aprsName: settings.aprsName
                     )
                     self.latestSettings = settingsData
-                    self.settingsDataStream.send(settingsData)
 
                     // Type 3 packets only emit SettingsData - radio channel parameters
                     // are handled by Type 0 packets to avoid duplication
 
-                    // Update current telemetry data with device configuration
-                    if var currentTelemetry = self.latestTelemetry {
-                        currentTelemetry.frequency = settings.frequency
-                        currentTelemetry.probeType = settings.probeType
-                        self.latestTelemetry = currentTelemetry
-                        appLog("BLE: Updated telemetry with device config - freq=\(settings.frequency) probeType=\(settings.probeType)", category: .ble, level: .debug)
-                    }
+                    // Device configuration is now managed through deviceSettings
+                    appLog("BLE: Updated device config - freq=\(settings.frequency) probeType=\(settings.probeType)", category: .ble, level: .debug)
                 }
             }
             
@@ -866,7 +846,7 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
     }
 
     // Type 0: Device Basic Info and Status
-    private func parseType0Message(_ components: [String]) -> (DeviceStatusData, TelemetryData)? {
+    private func parseType0Message(_ components: [String]) -> (DeviceStatusData, RadioChannelData)? {
         guard let messageType = components.first, messageType == "0" else {
             appLog("BLE: Type 0 parse mismatch - expected leading '0', found '\(components.first ?? "nil")'", category: .ble, level: .error)
             return nil
@@ -890,29 +870,34 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
             timestamp: Date()
         )
 
-        // Create TelemetryData from Type 0 packet
-        var telemetry = TelemetryData()
-        telemetry.probeType = probeType
-        telemetry.frequency = frequency
-        telemetry.signalStrength = Int(rssiValue)
-        telemetry.batteryPercentage = batteryPercentage
-        telemetry.batteryVoltage = batteryVoltage
-        telemetry.buzmute = buzmute
-        telemetry.softwareVersion = softwareVersion
-        telemetry.timestamp = Date()
-        // Position fields remain at default 0.0 for Type 0
+        // Create RadioChannelData from Type 0 packet
+        let radioData = RadioChannelData(
+            sondeName: "", // Not provided in Type 0 packets
+            timestamp: Date(),
+            telemetrySource: .ble,
+            probeType: probeType,
+            frequency: frequency,
+            softwareVersion: softwareVersion,
+            batteryVoltage: batteryVoltage,
+            batteryPercentage: batteryPercentage,
+            signalStrength: Int(rssiValue),
+            buzmute: buzmute,
+            afcFrequency: 0, // Not provided in Type 0 packets
+            burstKillerEnabled: false,
+            burstKillerTime: 0
+        )
 
-        return (deviceStatus, telemetry)
+        return (deviceStatus, radioData)
     }
     
     // Type 1: Probe Telemetry
-    private func parseType1Message(_ components: [String]) -> TelemetryData? {
+    private func parseType1Message(_ components: [String]) -> (PositionData, RadioChannelData)? {
         guard let messageType = components.first, messageType == "1" else {
             appLog("BLE: Type 1 parse mismatch - expected leading '1', found '\(components.first ?? "nil")'", category: .ble, level: .error)
             return nil
         }
         guard components.count >= 20 else { return nil }
-        
+
         let probeTypeRaw = components[1].trimmingCharacters(in: .whitespacesAndNewlines)
         let rawFrequency = Double(components[2]) ?? 0.0
         let frequency = (rawFrequency * 100).rounded() / 100.0
@@ -936,29 +921,45 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
             return nil
         }
 
-        var telemetry = TelemetryData()
-        telemetry.sondeName = sondeName
-        telemetry.probeType = probeTypeRaw
-        telemetry.frequency = frequency
-        telemetry.latitude = latitude
-        telemetry.longitude = longitude
-        telemetry.altitude = altitude
-        telemetry.horizontalSpeed = horizontalSpeed
-        telemetry.verticalSpeed = verticalSpeed
-        telemetry.signalStrength = Int(rssi)
-        telemetry.batteryPercentage = batteryPercentage
-        telemetry.afcFrequency = Int(components[11]) ?? 0
-        telemetry.burstKillerEnabled = components[12] == "1"
-        telemetry.burstKillerTime = Int(components[13]) ?? 0
-        telemetry.batteryVoltage = batteryVoltage
-        telemetry.buzmute = buzmute
-        telemetry.softwareVersion = components[19]
-        telemetry.timestamp = Date()
-        return telemetry
+        let timestamp = Date()
+
+        let positionData = PositionData(
+            sondeName: sondeName,
+            latitude: latitude,
+            longitude: longitude,
+            altitude: altitude,
+            verticalSpeed: verticalSpeed,
+            horizontalSpeed: horizontalSpeed,
+            heading: 0.0, // Not available in Type 1 packets
+            temperature: 0.0, // Not available in Type 1 packets
+            humidity: 0.0, // Not available in Type 1 packets
+            pressure: 0.0, // Not available in Type 1 packets
+            timestamp: timestamp,
+            burstKillerTime: Int(components[13]) ?? 0,
+            telemetrySource: .ble
+        )
+
+        let radioChannelData = RadioChannelData(
+            sondeName: sondeName,
+            timestamp: timestamp,
+            telemetrySource: .ble,
+            probeType: probeTypeRaw,
+            frequency: frequency,
+            softwareVersion: components[19],
+            batteryVoltage: batteryVoltage,
+            batteryPercentage: batteryPercentage,
+            signalStrength: Int(rssi),
+            buzmute: buzmute,
+            afcFrequency: Int(components[11]) ?? 0,
+            burstKillerEnabled: components[12] == "1",
+            burstKillerTime: Int(components[13]) ?? 0
+        )
+
+        return (positionData, radioChannelData)
     }
     
     // Type 2: Partial Telemetry
-    private func parseType2Message(_ components: [String]) -> TelemetryData? {
+    private func parseType2Message(_ components: [String]) -> RadioChannelData? {
         guard let messageType = components.first, messageType == "2" else {
             appLog("BLE: Type 2 parse mismatch - expected leading '2', found '\(components.first ?? "nil")'", category: .ble, level: .error)
             return nil
@@ -976,21 +977,22 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
         let buzmute = components[8] == "1"
         let softwareVersion = components[9]
 
-        // Create TelemetryData from Type 2 packet
-        var telemetry = TelemetryData()
-        telemetry.probeType = probeType
-        telemetry.frequency = frequency
-        telemetry.sondeName = sondeName
-        telemetry.signalStrength = Int(rssiValue)
-        telemetry.batteryPercentage = batteryPercentage
-        telemetry.afcFrequency = afcFrequency
-        telemetry.batteryVoltage = batteryVoltage
-        telemetry.buzmute = buzmute
-        telemetry.softwareVersion = softwareVersion
-        telemetry.timestamp = Date()
-        // Position fields remain at default 0.0 for Type 2 per FSD note
-
-        return telemetry
+        // Create RadioChannelData directly from Type 2 packet
+        return RadioChannelData(
+            sondeName: sondeName,
+            timestamp: Date(),
+            telemetrySource: .ble,
+            probeType: probeType,
+            frequency: frequency,
+            softwareVersion: softwareVersion,
+            batteryVoltage: batteryVoltage,
+            batteryPercentage: batteryPercentage,
+            signalStrength: Int(rssiValue),
+            buzmute: buzmute,
+            afcFrequency: afcFrequency,
+            burstKillerEnabled: false,
+            burstKillerTime: 0
+        )
     }
 
     // Type 3: Device Configuration
@@ -1169,11 +1171,7 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
                 self.persistenceService.save(deviceSettings: updatedSettings)
             }
 
-            if var telemetry = self.latestTelemetry {
-                telemetry.frequency = roundedFrequency
-                telemetry.probeType = probeType.name
-                self.latestTelemetry = telemetry
-            }
+            // Frequency sync updates handled through deviceSettings
         }
     }
 
@@ -1418,7 +1416,7 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
     }
 
     func sendCommand(command: String) {
-        if !telemetryState.canReceiveCommands {
+        if !connectionState.canReceiveCommands {
             return
         }
         guard let peripheral = connectedPeripheral else {
@@ -1520,8 +1518,8 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
 
     // MARK: - AFC Frequency Tracking (moved from ServiceCoordinator)
 
-    private func updateAFCTracking(_ telemetry: TelemetryData) {
-        let afc = telemetry.afcFrequency
+    private func updateAFCTrackingFromRadioData(_ radioData: RadioChannelData) {
+        let afc = radioData.afcFrequency
         afcFrequencies.append(afc)
 
         // Keep only the last 20 values for moving average

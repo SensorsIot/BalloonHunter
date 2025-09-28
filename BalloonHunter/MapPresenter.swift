@@ -12,7 +12,13 @@ final class MapPresenter: ObservableObject {
     @Published private(set) var predictionPath: MKPolyline?
     @Published private(set) var userRoute: MKPolyline?
     @Published private(set) var landingHistory: [LandingPredictionPoint] = []
-    @Published private(set) var balloonTelemetry: TelemetryData?
+
+    // Three-channel architecture
+    @Published private(set) var balloonPosition: PositionData?
+    @Published private(set) var balloonRadioChannel: RadioChannelData?
+    @Published private(set) var balloonSettings: SettingsData?
+
+    // Legacy compatibility removed - use three-channel architecture
     @Published private(set) var balloonDisplayPosition: CLLocationCoordinate2D?
     @Published private(set) var landingPoint: CLLocationCoordinate2D?
     @Published private(set) var burstPoint: CLLocationCoordinate2D?
@@ -36,8 +42,8 @@ final class MapPresenter: ObservableObject {
     @Published private(set) var connectionStatus: ConnectionStatus = .disconnected
     @Published private(set) var smoothedDescentRate: Double? = nil
     @Published private(set) var smoothenedPredictionActive: Bool = false
-    @Published private(set) var isTelemetryStale: Bool = false
-    @Published private(set) var aprsTelemetryIsAvailable: Bool = false
+    @Published private(set) var isDataStale: Bool = false
+    @Published private(set) var aprsDataAvailable: Bool = false
     @Published private(set) var showAllAnnotations: Bool = false
     @Published private(set) var frequencySyncProposal: FrequencySyncProposal? = nil
 
@@ -48,7 +54,7 @@ final class MapPresenter: ObservableObject {
     private let balloonPositionService: BalloonPositionService
     private let landingPointTrackingService: LandingPointTrackingService
     private let currentLocationService: CurrentLocationService
-    private let aprsTelemetryService: APRSTelemetryService
+    private let aprsService: APRSDataService
     private let routeCalculationService: RouteCalculationService
     private let predictionService: PredictionService
 
@@ -60,7 +66,7 @@ final class MapPresenter: ObservableObject {
         balloonPositionService: BalloonPositionService,
         landingPointTrackingService: LandingPointTrackingService,
         currentLocationService: CurrentLocationService,
-        aprsTelemetryService: APRSTelemetryService,
+        aprsService: APRSDataService,
         routeCalculationService: RouteCalculationService,
         predictionService: PredictionService
     ) {
@@ -69,7 +75,7 @@ final class MapPresenter: ObservableObject {
         self.balloonPositionService = balloonPositionService
         self.landingPointTrackingService = landingPointTrackingService
         self.currentLocationService = currentLocationService
-        self.aprsTelemetryService = aprsTelemetryService
+        self.aprsService = aprsService
         self.routeCalculationService = routeCalculationService
         self.predictionService = predictionService
 
@@ -91,9 +97,41 @@ final class MapPresenter: ObservableObject {
         balloonPhase == .landed
     }
 
-    var shouldShowRoute: Bool {
-        guard isLanded else { return true }
-        return !isWithin200mOfBalloon
+    var routeVisible: Bool {
+        switch balloonPositionService.currentState {
+        case .startup, .noTelemetry:
+            return false
+        case .liveBLEFlying, .aprsFallbackFlying, .waitingForAPRS:
+            return true
+        case .liveBLELanded, .aprsFallbackLanded:
+            return !isWithin200mOfBalloon
+        }
+    }
+
+    private var predictionPathVisible: Bool {
+        switch balloonPositionService.currentState {
+        case .startup, .noTelemetry:
+            return false
+        case .liveBLEFlying, .aprsFallbackFlying:
+            return true
+        case .liveBLELanded, .aprsFallbackLanded:
+            return false
+        case .waitingForAPRS:
+            return balloonPositionService.balloonPhase != .landed
+        }
+    }
+
+    private var burstPointVisible: Bool {
+        switch balloonPositionService.currentState {
+        case .startup, .noTelemetry:
+            return false
+        case .liveBLEFlying, .aprsFallbackFlying:
+            return balloonPhase == .ascending
+        case .liveBLELanded, .aprsFallbackLanded:
+            return false
+        case .waitingForAPRS:
+            return balloonPhase == .ascending
+        }
     }
 
     // MARK: - Intent Handlers
@@ -150,13 +188,13 @@ final class MapPresenter: ObservableObject {
 
     func triggerPrediction() {
         // Direct service call - no coordinator middleman
-        guard let telemetry = balloonPositionService.currentTelemetry else {
-            appLog("MapPresenter: No telemetry available for manual prediction", category: .general, level: .error)
+        guard let position = balloonPositionService.currentPositionData else {
+            appLog("MapPresenter: No position data available for manual prediction", category: .general, level: .error)
             return
         }
 
         Task {
-            await predictionService.triggerPredictionWithTelemetry(telemetry, trigger: "manual")
+            await predictionService.triggerPredictionWithPosition(position, trigger: "manual")
         }
     }
 
@@ -189,12 +227,14 @@ final class MapPresenter: ObservableObject {
             .sink { [weak self] prediction in
                 guard let self = self else { return }
                 self.predictionData = prediction
+                // Update smoothed descent rate flag from prediction data
+                self.smoothenedPredictionActive = prediction?.usedSmoothedDescentRate ?? false
 
-                // Update prediction path based on flight state and prediction data
+                // Update prediction path based on state machine and prediction data
                 if let prediction = prediction,
                    let path = prediction.path,
                    !path.isEmpty,
-                   balloonPositionService.balloonPhase != .landed {
+                   self.predictionPathVisible {
                     self.predictionPath = MKPolyline(coordinates: path, count: path.count)
                 } else {
                     self.predictionPath = nil
@@ -202,7 +242,13 @@ final class MapPresenter: ObservableObject {
 
                 // Update landing and burst points from prediction
                 self.landingPoint = prediction?.landingPoint
-                self.burstPoint = prediction?.burstPoint
+
+                // State machine drives burst point availability
+                if self.burstPointVisible {
+                    self.burstPoint = prediction?.burstPoint
+                } else {
+                    self.burstPoint = nil
+                }
 
                 self.refreshAnnotations()
             }
@@ -219,10 +265,41 @@ final class MapPresenter: ObservableObject {
             }
             .store(in: &cancellables)
 
-        balloonPositionService.$currentTelemetry
-            .sink { [weak self] telemetry in
-                self?.balloonTelemetry = telemetry
+        balloonPositionService.$currentPositionData
+            .sink { [weak self] position in
+                self?.balloonPosition = position
                 self?.refreshAnnotations()
+            }
+            .store(in: &cancellables)
+
+        // MARK: - Three-Channel Architecture Subscriptions
+
+        // Subscribe to position data channel
+        balloonPositionService.$currentPositionData
+            .sink { [weak self] position in
+                self?.balloonPosition = position
+                // Update display position from position data
+                if let position = position {
+                    self?.balloonDisplayPosition = CLLocationCoordinate2D(
+                        latitude: position.latitude,
+                        longitude: position.longitude
+                    )
+                }
+                self?.refreshAnnotations()
+            }
+            .store(in: &cancellables)
+
+        // Subscribe to radio channel data
+        balloonPositionService.$currentRadioChannel
+            .sink { [weak self] radio in
+                self?.balloonRadioChannel = radio
+            }
+            .store(in: &cancellables)
+
+        // Subscribe to settings data from BLE service
+        coordinator.bleCommunicationService.$latestSettings
+            .sink { [weak self] settings in
+                self?.balloonSettings = settings
             }
             .store(in: &cancellables)
 
@@ -236,11 +313,25 @@ final class MapPresenter: ObservableObject {
         // Subscribe to BalloonPositionService for landing point updates (from state machine)
         balloonPositionService.$landingPoint
             .sink { [weak self] point in
-                // Only use BalloonPositionService landing point if no prediction available
-                // (this handles landed states where state machine sets landing point directly)
-                if let self = self, let point = point {
-                    // If we have a prediction, prioritize prediction landing point
-                    if self.predictionData?.landingPoint == nil {
+                guard let self = self else { return }
+
+                // State machine drives landing point priority
+                switch self.balloonPositionService.currentState {
+                case .liveBLELanded, .aprsFallbackLanded:
+                    // Landed states: prioritize state machine landing point
+                    if let point = point {
+                        self.landingPoint = point
+                        self.refreshAnnotations()
+                    }
+                case .liveBLEFlying, .aprsFallbackFlying, .waitingForAPRS:
+                    // Flying states: prediction landing point takes priority
+                    if self.predictionData?.landingPoint == nil, let point = point {
+                        self.landingPoint = point
+                        self.refreshAnnotations()
+                    }
+                case .startup, .noTelemetry:
+                    // No telemetry: show state machine point if available
+                    if let point = point {
                         self.landingPoint = point
                         self.refreshAnnotations()
                     }
@@ -282,22 +373,23 @@ final class MapPresenter: ObservableObject {
             }
             .store(in: &cancellables)
 
-        // Subscribe to balloon position service for telemetry state
-        balloonPositionService.$isTelemetryStale
+        // Subscribe to BLE service for staleness computation
+        coordinator.bleCommunicationService.$lastMessageTimestamp
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] stale in
-                self?.isTelemetryStale = stale
+            .sink { [weak self] (lastUpdate: Date?) in
+                let isStale = lastUpdate.map { Date().timeIntervalSince($0) > 3.0 } ?? true
+                self?.isDataStale = isStale
             }
             .store(in: &cancellables)
 
-        balloonPositionService.$aprsTelemetryIsAvailable
+        balloonPositionService.$aprsDataAvailable
             .receive(on: DispatchQueue.main)
             .sink { [weak self] available in
-                self?.aprsTelemetryIsAvailable = available
+                self?.aprsDataAvailable = available
             }
             .store(in: &cancellables)
 
-        balloonPositionService.$frequencySyncProposal
+        coordinator.frequencyManagementService.$syncProposal
             .receive(on: DispatchQueue.main)
             .sink { [weak self] proposal in
                 self?.frequencySyncProposal = proposal
@@ -337,11 +429,11 @@ final class MapPresenter: ObservableObject {
             }
             .store(in: &cancellables)
 
-        aprsTelemetryService.$bleSerialName
+        aprsService.$bleSerialName
             .map { $0 ?? "" }
             .assign(to: &$bleSerialName)
 
-        aprsTelemetryService.$aprsSerialName
+        aprsService.$aprsSerialName
             .map { $0 ?? "" }
             .assign(to: &$aprsSerialName)
     }
@@ -363,7 +455,7 @@ final class MapPresenter: ObservableObject {
             )
         }
 
-        if shouldShowUserAnnotation, let userCoordinate = userCoordinate {
+        if userAnnotationVisible, let userCoordinate = userCoordinate {
             updatedAnnotations.append(
                 MapAnnotationItem(
                     coordinate: userCoordinate,
@@ -384,7 +476,7 @@ final class MapPresenter: ObservableObject {
         }
 
         if let burstCoordinate = burstPoint,
-           balloonPhase == .ascending {
+           burstPointVisible {
             updatedAnnotations.append(
                 MapAnnotationItem(
                     coordinate: burstCoordinate,
@@ -402,8 +494,9 @@ final class MapPresenter: ObservableObject {
             return displayPosition
         }
 
-        if let telemetry = balloonTelemetry {
-            return CLLocationCoordinate2D(latitude: telemetry.latitude, longitude: telemetry.longitude)
+        // Use three-channel architecture
+        if let position = balloonPosition {
+            return CLLocationCoordinate2D(latitude: position.latitude, longitude: position.longitude)
         }
 
         return nil
@@ -414,7 +507,7 @@ final class MapPresenter: ObservableObject {
         return CLLocationCoordinate2D(latitude: userLocation.latitude, longitude: userLocation.longitude)
     }
 
-    private var shouldShowUserAnnotation: Bool {
+    private var userAnnotationVisible: Bool {
         guard let userCoordinate, let balloonCoordinate = currentBalloonCoordinate else {
             return false
         }

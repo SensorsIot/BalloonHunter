@@ -2,6 +2,9 @@ import Foundation
 import Combine
 import OSLog
 
+// MARK: - Internal APRS Parsing Structure
+// Pure three-channel architecture - no legacy TelemetryData
+
 // MARK: - APRS Data Models
 
 struct SondeHubSondeData: Codable {
@@ -31,7 +34,7 @@ typealias SondeHubSiteResponse = [String: SondeHubSondeData]
 // MARK: - APRS Telemetry Service
 
 @MainActor
-final class APRSTelemetryService: ObservableObject {
+final class APRSDataService: ObservableObject {
 
     // MARK: - Three-Channel Architecture (compatible with BLE service)
     @Published var latestPosition: PositionData? = nil
@@ -41,7 +44,7 @@ final class APRSTelemetryService: ObservableObject {
     let radioChannelDataStream = PassthroughSubject<RadioChannelData, Never>()
 
     // MARK: - Legacy Properties (state machine compatibility)
-    @Published var latestTelemetry: TelemetryData? = nil
+    // Legacy latestTelemetry removed - use latestPosition and latestRadioChannel
     @Published var connectionStatus: ConnectionStatus = .disconnected
     var lastTelemetryUpdateTime: Date? = nil
 
@@ -57,7 +60,7 @@ final class APRSTelemetryService: ObservableObject {
     @Published var aprsSerialName: String? = nil
 
     // Compatible telemetry stream with BLE service
-    let telemetryData = PassthroughSubject<TelemetryData, Never>()
+    // Legacy telemetryData stream removed - use three-channel streams
 
     // MARK: - Private State
     private var pollingTimer: Timer?
@@ -75,7 +78,7 @@ final class APRSTelemetryService: ObservableObject {
     private static let slowPollInterval: TimeInterval = 60.0
     private static let landedConfirmationInterval: TimeInterval = 300.0
     private static let verySlowPollInterval: TimeInterval = 3600.0  // 1 hour
-    private static let apiTimeout: TimeInterval = 30.0
+    private static let apiTimeout: TimeInterval = 5.0  // Reduced from 30s to 5s
 
     // Polling thresholds
     private static let freshDataThreshold: TimeInterval = 120.0  // 2 minutes - fresh data
@@ -87,7 +90,7 @@ final class APRSTelemetryService: ObservableObject {
         // Initialize station ID from user settings
         currentStationId = userSettings.stationId
 
-        appLog("APRSTelemetryService: Initialized with station ID \(currentStationId)", category: .service, level: .info)
+        appLog("APRSDataService: Initialized with station ID \(currentStationId)", category: .service, level: .info)
 
         // Set initial connection status
         connectionStatus = .disconnected
@@ -106,7 +109,7 @@ final class APRSTelemetryService: ObservableObject {
     /// Start APRS telemetry polling (called when BLE telemetry becomes stale)
     func startPolling() {
         guard !isPollingActive else {
-            appLog("APRSTelemetryService: Polling already active, ignoring start request", category: .service, level: .debug)
+            appLog("APRSDataService: Polling already active, ignoring start request", category: .service, level: .debug)
             return
         }
 
@@ -114,7 +117,7 @@ final class APRSTelemetryService: ObservableObject {
         pollCadence = Self.fastPollInterval
         connectionStatus = .connecting
 
-        appLog("APRSTelemetryService: Starting APRS polling every \(Int(pollCadence))s for station \(currentStationId)", category: .service, level: .info)
+        appLog("APRSDataService: Starting APRS polling every \(Int(pollCadence))s for station \(currentStationId)", category: .service, level: .info)
 
         // Immediate fetch + start timer
         Task {
@@ -126,7 +129,7 @@ final class APRSTelemetryService: ObservableObject {
     /// Stop APRS telemetry polling (called when BLE telemetry resumes)
     func stopPolling() {
         guard isPollingActive else {
-            appLog("APRSTelemetryService: Polling not active, ignoring stop request", category: .service, level: .debug)
+            appLog("APRSDataService: Polling not active, ignoring stop request", category: .service, level: .debug)
             return
         }
 
@@ -135,7 +138,7 @@ final class APRSTelemetryService: ObservableObject {
         pollingTimer?.invalidate()
         pollingTimer = nil
 
-        appLog("APRSTelemetryService: Stopped APRS polling (BLE telemetry resumed)", category: .service, level: .info)
+        appLog("APRSDataService: Stopped APRS polling (BLE telemetry resumed)", category: .service, level: .info)
     }
 
     /// Update station ID and restart polling if active
@@ -151,7 +154,7 @@ final class APRSTelemetryService: ObservableObject {
         currentStationId = newStationId
         lastSondeSerial = nil
 
-        appLog("APRSTelemetryService: Station ID changed to \(newStationId)", category: .service, level: .info)
+        appLog("APRSDataService: Station ID changed to \(newStationId)", category: .service, level: .info)
 
         if wasPolling {
             startPolling()
@@ -181,7 +184,7 @@ final class APRSTelemetryService: ObservableObject {
 
         // Log mismatch once per session (no resolution needed)
         if let aprsSerial = aprsSerialName, aprsSerial != sondeName, !hasLoggedSondeMismatch {
-            appLog("APRSTelemetryService: Sonde name difference - BLE: \(sondeName), APRS: \(aprsSerial)", category: .service, level: .info)
+            appLog("APRSDataService: Sonde name difference - BLE: \(sondeName), APRS: \(aprsSerial)", category: .service, level: .info)
             hasLoggedSondeMismatch = true
         }
     }
@@ -199,14 +202,14 @@ final class APRSTelemetryService: ObservableObject {
         }
     }
 
-    private func adjustPollingCadenceForAPIEfficiency(telemetryAge: TimeInterval) {
+    private func adjustPollingCadenceForAPIEfficiency(aprsDataAge: TimeInterval) {
         guard isPollingActive else { return }
 
         // Adjust polling frequency based on data freshness (API efficiency only)
-        if telemetryAge <= Self.freshDataThreshold {
+        if aprsDataAge <= Self.freshDataThreshold {
             // Fresh data - poll frequently
             updatePollingInterval(Self.fastPollInterval)
-        } else if telemetryAge <= Self.staleDataThreshold {
+        } else if aprsDataAge <= Self.staleDataThreshold {
             // Stale data - poll less frequently to confirm landing
             updatePollingInterval(Self.landedConfirmationInterval)
         } else {
@@ -219,7 +222,7 @@ final class APRSTelemetryService: ObservableObject {
         guard pollCadence != interval else { return }
         pollCadence = interval
         if isPollingActive {
-            appLog("APRSTelemetryService: Adjusting polling interval to \(Int(interval))s for API efficiency", category: .service, level: .debug)
+            appLog("APRSDataService: Adjusting polling interval to \(Int(interval))s for API efficiency", category: .service, level: .debug)
             startPollingTimer()
         }
     }
@@ -232,17 +235,14 @@ final class APRSTelemetryService: ObservableObject {
 
             // Find the most recent sonde by timestamp
             guard let latestSonde = findLatestSonde(from: Array(siteResponse.values)) else {
-                appLog("APRSTelemetryService: No sondes found for station \(currentStationId)", category: .service, level: .info)
+                appLog("APRSDataService: No sondes found for station \(currentStationId)", category: .service, level: .info)
                 return
             }
 
-            // Convert to TelemetryData and publish
-            let telemetryData = try convertToTelemetryData(latestSonde)
-            let positionData = telemetryData.toPositionData()
-            let radioChannelData = telemetryData.toRadioChannelData()
+            // Convert to three-channel data directly
+            let (positionData, radioChannelData) = try convertToThreeChannelData(latestSonde)
 
             // Update state
-            latestTelemetry = telemetryData
             latestPosition = positionData
             latestRadioChannel = radioChannelData
             lastTelemetryUpdateTime = Date()
@@ -254,21 +254,20 @@ final class APRSTelemetryService: ObservableObject {
             self.positionDataStream.send(positionData)
             self.radioChannelDataStream.send(radioChannelData)
 
-            // State machine compatibility - maintain telemetry stream
-            self.telemetryData.send(telemetryData)
+            // Three-channel architecture - telemetry synthesis removed
 
-            appLog("APRSTelemetryService: Published telemetry for sonde \(latestSonde.serial) at \(String(format: "%.5f, %.5f", latestSonde.lat, latestSonde.lon))", category: .service, level: .info)
+            appLog("APRSDataService: Published telemetry for sonde \(latestSonde.serial) at \(String(format: "%.5f, %.5f", latestSonde.lat, latestSonde.lon))", category: .service, level: .info)
 
             // Adjust polling frequency for API efficiency
-            let telemetryAge = Date().timeIntervalSince(telemetryData.timestamp)
-            adjustPollingCadenceForAPIEfficiency(telemetryAge: telemetryAge)
+            let aprsDataAge = Date().timeIntervalSince(positionData.timestamp)
+            adjustPollingCadenceForAPIEfficiency(aprsDataAge: aprsDataAge)
 
             connectionStatus = .connected
 
         } catch APRSError.invalidPayload {
-            appLog("APRSTelemetryService: Ignoring incomplete telemetry payload", category: .service, level: .info)
+            appLog("APRSDataService: Ignoring incomplete telemetry payload", category: .service, level: .info)
         } catch {
-            appLog("APRSTelemetryService: Failed to fetch telemetry: \(error.localizedDescription)", category: .service, level: .error)
+            appLog("APRSDataService: Failed to fetch telemetry: \(error.localizedDescription)", category: .service, level: .error)
 
             connectionStatus = .failed(error.localizedDescription)
             lastApiError = error.localizedDescription
@@ -284,7 +283,7 @@ final class APRSTelemetryService: ObservableObject {
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue("BalloonHunter iOS App", forHTTPHeaderField: "User-Agent")
 
-        appLog("APRSTelemetryService: GET \(url.absoluteString)", category: .service, level: .debug)
+        appLog("APRSDataService: GET \(url.absoluteString)", category: .service, level: .debug)
 
         let (data, response) = try await session.data(for: request)
 
@@ -298,7 +297,7 @@ final class APRSTelemetryService: ObservableObject {
 
         // Check if we received empty data
         if data.isEmpty {
-            appLog("APRSTelemetryService: Received empty data from API", category: .service, level: .error)
+            appLog("APRSDataService: Received empty data from API", category: .service, level: .error)
             throw APRSError.noData
         }
 
@@ -310,12 +309,12 @@ final class APRSTelemetryService: ObservableObject {
                 let freqStr = "freq=\(String(format: "%.2f", data.frequency ?? 0.0))/tx=\(String(format: "%.2f", data.tx_frequency ?? 0.0))/eff=\(String(format: "%.2f", data.effectiveFrequency))MHz"
                 return "\(serial): lat=\(String(format: "%.5f", data.lat)), lon=\(String(format: "%.5f", data.lon)), alt=\(String(format: "%.0f", data.alt))m, v_v=\(String(format: "%.1f", data.vel_v))m/s, v_h=\(String(format: "%.1f", data.vel_h))m/s, \(freqStr), type=\(data.type), time=\(data.datetime)"
             }.joined(separator: " | ")
-            appLog("APRSTelemetryService: Telemetry data: \(sondesSummary)", category: .service, level: .debug)
-            appLog("APRSTelemetryService: Received data for \(siteResponse.count) sondes", category: .service, level: .debug)
+            appLog("APRSDataService: Telemetry data: \(sondesSummary)", category: .service, level: .debug)
+            appLog("APRSDataService: Received data for \(siteResponse.count) sondes", category: .service, level: .debug)
 
             return siteResponse
         } catch {
-            appLog("APRSTelemetryService: JSON decoding failed: \(error)", category: .service, level: .error)
+            appLog("APRSDataService: JSON decoding failed: \(error)", category: .service, level: .error)
             throw APRSError.decodingError(error.localizedDescription)
         }
     }
@@ -329,7 +328,7 @@ final class APRSTelemetryService: ObservableObject {
         }
     }
 
-    private func convertToTelemetryData(_ sonde: SondeHubSondeData) throws -> TelemetryData {
+    private func convertToThreeChannelData(_ sonde: SondeHubSondeData) throws -> (PositionData, RadioChannelData) {
         let trimmedSerial = sonde.serial.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedType = sonde.type.trimmingCharacters(in: .whitespacesAndNewlines)
         // Always use exactly 2 decimal places for frequency consistency
@@ -346,47 +345,51 @@ final class APRSTelemetryService: ObservableObject {
             throw APRSError.invalidPayload
         }
 
-        var telemetry = TelemetryData()
-
-        // Basic identification
-        telemetry.sondeName = trimmedSerial
-        telemetry.probeType = trimmedType.uppercased()
-        telemetry.frequency = frequency
-
-
-        // Position and motion
-        telemetry.latitude = latitude
-        telemetry.longitude = longitude
-        telemetry.altitude = sonde.alt
-        telemetry.horizontalSpeed = sonde.vel_h
-        telemetry.verticalSpeed = sonde.vel_v
-
-        // Environmental data (optional)
-        telemetry.temperature = sonde.temp ?? 0.0
-        telemetry.humidity = sonde.humidity ?? 0.0
-        telemetry.pressure = sonde.pressure ?? 0.0
-
-        // APRS data doesn't have these BLE-specific fields, set reasonable defaults
-        telemetry.batteryVoltage = 0.0
-        telemetry.batteryPercentage = 0
-        telemetry.signalStrength = 0
-        telemetry.buzmute = false
-        telemetry.afcFrequency = 0
-        telemetry.burstKillerEnabled = false
-        telemetry.burstKillerTime = 0
-        telemetry.softwareVersion = "APRS" // Keep APRS as software version identifier
-        telemetry.telemetrySource = .aprs
-
-        // Timestamps: balloon transmission time and API call time
-        if let timestamp = parseISO8601Date(sonde.datetime) {
-            telemetry.timestamp = timestamp
+        // Parse timestamp
+        let timestamp: Date
+        if let parsedTimestamp = parseISO8601Date(sonde.datetime) {
+            timestamp = parsedTimestamp
         } else {
-            telemetry.timestamp = Date()
-            appLog("APRSTelemetryService: Failed to parse timestamp '\(sonde.datetime)', using current time", category: .service, level: .error)
+            timestamp = Date()
+            appLog("APRSDataService: Failed to parse timestamp '\(sonde.datetime)', using current time", category: .service, level: .error)
         }
-        telemetry.apiCallTimestamp = Date()
 
-        return telemetry
+        // Create PositionData directly
+        let positionData = PositionData(
+            sondeName: trimmedSerial,
+            latitude: latitude,
+            longitude: longitude,
+            altitude: sonde.alt,
+            verticalSpeed: sonde.vel_v,
+            horizontalSpeed: sonde.vel_h,
+            heading: 0.0, // Not provided by APRS
+            temperature: sonde.temp ?? 0.0,
+            humidity: sonde.humidity ?? 0.0,
+            pressure: sonde.pressure ?? 0.0,
+            timestamp: timestamp,
+            apiCallTimestamp: Date(),
+            burstKillerTime: 0,
+            telemetrySource: .aprs
+        )
+
+        // Create RadioChannelData directly
+        let radioData = RadioChannelData(
+            sondeName: trimmedSerial,
+            timestamp: timestamp,
+            telemetrySource: .aprs,
+            probeType: trimmedType.uppercased(),
+            frequency: frequency,
+            softwareVersion: "APRS", // Keep APRS as software version identifier
+            batteryVoltage: 0.0, // Not provided by APRS
+            batteryPercentage: 0, // Not provided by APRS
+            signalStrength: 0, // Not provided by APRS
+            buzmute: false, // Not provided by APRS
+            afcFrequency: 0, // Not provided by APRS
+            burstKillerEnabled: false, // Not provided by APRS
+            burstKillerTime: 0 // Not provided by APRS
+        )
+
+        return (positionData, radioData)
     }
 
     private func parseISO8601Date(_ dateString: String) -> Date? {

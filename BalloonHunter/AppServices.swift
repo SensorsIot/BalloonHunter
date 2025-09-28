@@ -18,7 +18,7 @@ final class AppServices: ObservableObject {
 
     // MARK: - Core Services
     let bleCommunicationService: BLECommunicationService
-    let aprsTelemetryService: APRSTelemetryService
+    let aprsService: APRSDataService
     let currentLocationService: CurrentLocationService
 
     // MARK: - Specialized Services
@@ -28,6 +28,7 @@ final class AppServices: ObservableObject {
     let landingPointTrackingService: LandingPointTrackingService
     let routeCalculationService: RouteCalculationService
     let navigationService: NavigationService
+    let frequencyManagementService: FrequencyManagementService
 
     // MARK: - Coordinators (moved to ServiceCoordinator)
 
@@ -43,7 +44,7 @@ final class AppServices: ObservableObject {
 
         // 2. Initialize core services with dependencies
         self.bleCommunicationService = BLECommunicationService(persistenceService: persistenceService)
-        self.aprsTelemetryService = APRSTelemetryService(userSettings: userSettings)
+        self.aprsService = APRSDataService(userSettings: userSettings)
         self.currentLocationService = CurrentLocationService()
 
         // 3. Initialize prediction service with shared dependencies
@@ -57,7 +58,7 @@ final class AppServices: ObservableObject {
 
         // 5. Initialize specialized services
         self.balloonPositionService = BalloonPositionService(bleService: bleCommunicationService,
-                                                             aprsTelemetryService: aprsTelemetryService,
+                                                             aprsService: aprsService,
                                                              currentLocationService: currentLocationService,
                                                              persistenceService: persistenceService,
                                                              predictionService: predictionService,
@@ -70,6 +71,13 @@ final class AppServices: ObservableObject {
             persistenceService: persistenceService,
             balloonTrackService: balloonTrackService
         )
+
+        // 6. Initialize frequency management service
+        self.frequencyManagementService = FrequencyManagementService(
+            bleService: bleCommunicationService,
+            balloonPositionService: balloonPositionService
+        )
+
         // LandingPointService and RouteCalculationService creation moved to ServiceCoordinator
 
         // 5. Set up inter-service communication

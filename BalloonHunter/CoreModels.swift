@@ -24,22 +24,22 @@ enum TelemetrySource: String, Codable {
     case aprs
 }
 
-enum BLETelemetryState: String, Codable, CaseIterable {
-    case BLEnotconnected = "BLEnotconnected"
+enum BLEConnectionState: String, Codable, CaseIterable {
+    case notConnected = "notConnected"
     case readyForCommands = "readyForCommands"
-    case BLEtelemetryIsReady = "BLEtelemetryIsReady"
+    case dataReady = "dataReady"
 
     // Computed properties for cleaner UI bindings
     var isConnected: Bool {
-        return self != .BLEnotconnected
+        return self != .notConnected
     }
 
     var canReceiveCommands: Bool {
-        return self == .readyForCommands || self == .BLEtelemetryIsReady
+        return self == .readyForCommands || self == .dataReady
     }
 
     var hasTelemetry: Bool {
-        return self == .BLEtelemetryIsReady
+        return self == .dataReady
     }
 }
 
@@ -115,70 +115,7 @@ struct SettingsData {
     // Additional Type 3 specific fields can be added here
 }
 
-/// TelemetryData structure - state machine format
-struct TelemetryData {
-    var sondeName: String = ""
-    var probeType: String = ""
-    var frequency: Double = 0.0
-    var latitude: Double = 0.0
-    var longitude: Double = 0.0
-    var altitude: Double = 0.0
-    var verticalSpeed: Double = 0.0
-    var horizontalSpeed: Double = 0.0
-    var heading: Double = 0.0
-    var temperature: Double = 0.0
-    var humidity: Double = 0.0
-    var pressure: Double = 0.0
-    var batteryVoltage: Double = 0.0
-    var batteryPercentage: Int = 0
-    var signalStrength: Int = 0
-    var timestamp: Date = Date()
-    var apiCallTimestamp: Date? = nil
-    var buzmute: Bool = false
-    var afcFrequency: Int = 0
-    var burstKillerEnabled: Bool = false
-    var burstKillerTime: Int = 0
-    var softwareVersion: String = ""
-    var telemetrySource: TelemetrySource = .ble
-
-    // Conversion helpers for three-channel architecture
-    func toPositionData() -> PositionData {
-        return PositionData(
-            sondeName: sondeName,
-            latitude: latitude,
-            longitude: longitude,
-            altitude: altitude,
-            verticalSpeed: verticalSpeed,
-            horizontalSpeed: horizontalSpeed,
-            heading: heading,
-            temperature: temperature,
-            humidity: humidity,
-            pressure: pressure,
-            timestamp: timestamp,
-            apiCallTimestamp: apiCallTimestamp,
-            burstKillerTime: burstKillerTime,
-            telemetrySource: telemetrySource
-        )
-    }
-
-    func toRadioChannelData() -> RadioChannelData {
-        return RadioChannelData(
-            sondeName: sondeName,
-            timestamp: timestamp,
-            telemetrySource: telemetrySource,
-            probeType: probeType,
-            frequency: frequency,
-            softwareVersion: softwareVersion,
-            batteryVoltage: batteryVoltage,
-            batteryPercentage: batteryPercentage,
-            signalStrength: signalStrength,
-            buzmute: buzmute,
-            afcFrequency: afcFrequency,
-            burstKillerEnabled: burstKillerEnabled,
-            burstKillerTime: burstKillerTime
-        )
-    }
-}
+// TelemetryData struct completely removed - app now uses pure three-channel architecture
 
 struct LocationData {
     let latitude: Double
@@ -222,6 +159,7 @@ struct PredictionData {
     let burstAltitude: Double?
     let flightTime: TimeInterval?
     let metadata: [String: Any]?
+    let usedSmoothedDescentRate: Bool
 }
 
 enum LandingPredictionSource: String, Codable {

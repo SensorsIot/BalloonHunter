@@ -61,6 +61,7 @@ struct BalloonHunterApp: App {
             balloonTrackService: services.balloonTrackService,
             landingPointTrackingService: services.landingPointTrackingService,
             navigationService: services.navigationService,
+            frequencyManagementService: services.frequencyManagementService,
             userSettings: services.userSettings
         )
         let presenter = MapPresenter(
@@ -69,7 +70,7 @@ struct BalloonHunterApp: App {
             balloonPositionService: services.balloonPositionService,
             landingPointTrackingService: services.landingPointTrackingService,
             currentLocationService: services.currentLocationService,
-            aprsTelemetryService: services.aprsTelemetryService,
+            aprsService: services.aprsService,
             routeCalculationService: services.routeCalculationService,
             predictionService: services.predictionService
         )

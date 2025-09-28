@@ -49,9 +49,13 @@ struct TrackingMapView: View {
     // MARK: - Flight State Computed Properties
     private var isFlying: Bool { mapPresenter.isFlying }
 
+    private var shouldShowNavigationButton: Bool {
+        return mapPresenter.landingPoint != nil
+    }
+
     private var isLanded: Bool { mapPresenter.isLanded }
 
-    private var shouldShowRoute: Bool { mapPresenter.shouldShowRoute }
+    private var routeVisible: Bool { mapPresenter.routeVisible }
 
     private var isWithin200mOfLandedBalloon: Bool { mapPresenter.isWithin200mOfBalloon }
 
@@ -89,12 +93,10 @@ struct TrackingMapView: View {
                         .frame(width: 100)
 
 
-                        // Show All button - no function when no landing point
+                        // Show All button - always functional
                         Button("All") {
-                            if mapPresenter.landingPoint != nil {
-                                if mapPresenter.isHeadingMode { mapPresenter.toggleHeadingMode() }
-                                mapPresenter.triggerShowAllAnnotations()
-                            }
+                            if mapPresenter.isHeadingMode { mapPresenter.toggleHeadingMode() }
+                            mapPresenter.triggerShowAllAnnotations()
                         }
                         .buttonStyle(.bordered)
 
@@ -128,7 +130,7 @@ struct TrackingMapView: View {
                         .cornerRadius(8)
 
                         // Apple Maps navigation button (only show when landing point available)
-                        if mapPresenter.landingPoint != nil {
+                        if shouldShowNavigationButton {
                             Button {
                                 mapPresenter.openInAppleMaps()
                             } label: {
@@ -167,7 +169,7 @@ struct TrackingMapView: View {
                     }
                     
                     // 3. Planned Route: Green path from user to landing point (when needed for navigation)
-                    if shouldShowRoute,
+                    if routeVisible,
                        let userRoute = mapPresenter.userRoute {
                         MapPolyline(userRoute)
                             .stroke(.green, lineWidth: 3)
@@ -209,24 +211,30 @@ struct TrackingMapView: View {
                     }
                     
                     // 6. Balloon Live Position: Color based on flight phase
-                    if let balloonTelemetry = mapPresenter.balloonTelemetry {
-                        // Use smoothed display position when available (for landed balloons), otherwise use raw telemetry
-                        let balloonCoordinate = mapPresenter.balloonDisplayPosition ?? CLLocationCoordinate2D(
-                            latitude: balloonTelemetry.latitude,
-                            longitude: balloonTelemetry.longitude
-                        )
-                        let balloonColor: Color = {
+                    // Prefer three-channel position data, fallback to legacy telemetry
+                    let balloonCoordinate: CLLocationCoordinate2D? = {
+                        if let displayPosition = mapPresenter.balloonDisplayPosition {
+                            return displayPosition
+                        }
+                        if let position = mapPresenter.balloonPosition {
+                            return CLLocationCoordinate2D(latitude: position.latitude, longitude: position.longitude)
+                        }
+                        return nil
+                    }()
+
+                    if let balloonCoordinate = balloonCoordinate {
+                        let (balloonIcon, balloonColor): (String, Color) = {
                             switch mapPresenter.balloonPhase {
-                            case .ascending: return .green
-                            case .descendingAbove10k: return .orange
-                            case .descendingBelow10k: return .red
-                            case .landed: return .purple
-                            case .unknown: return .gray
+                            case .ascending: return ("balloon.fill", .green)
+                            case .descendingAbove10k: return ("balloon.fill", .orange)
+                            case .descendingBelow10k: return ("balloon.fill", .red)
+                            case .landed: return ("target", .purple)
+                            case .unknown: return ("balloon.fill", .gray)
                             }
                         }()
-                        
+
                         Annotation("", coordinate: balloonCoordinate) {
-                            Image(systemName: "balloon.fill")
+                            Image(systemName: balloonIcon)
                                 .font(.system(size: 30))
                                 .foregroundColor(balloonColor)
                             .onTapGesture {
@@ -236,9 +244,8 @@ struct TrackingMapView: View {
                         }
                     }
 
-                    // 7. Burst Point: Only visible when balloon is ascending
-                    if let burstPoint = mapPresenter.burstPoint,
-                       mapPresenter.balloonPhase == .ascending {
+                    // 7. Burst Point: State-driven visibility handled by MapPresenter
+                    if let burstPoint = mapPresenter.burstPoint {
                         Annotation("", coordinate: burstPoint) {
                             Image(systemName: "burst.fill")
                                 .font(.title2)
@@ -426,6 +433,7 @@ struct TrackingMapView: View {
         balloonTrackService: mockAppServices.balloonTrackService,
         landingPointTrackingService: mockAppServices.landingPointTrackingService,
         navigationService: mockAppServices.navigationService,
+        frequencyManagementService: mockAppServices.frequencyManagementService,
         userSettings: mockAppServices.userSettings
     )
     let mockPresenter = MapPresenter(
@@ -434,7 +442,7 @@ struct TrackingMapView: View {
         balloonPositionService: mockAppServices.balloonPositionService,
         landingPointTrackingService: mockAppServices.landingPointTrackingService,
         currentLocationService: mockAppServices.currentLocationService,
-        aprsTelemetryService: mockAppServices.aprsTelemetryService,
+        aprsService: mockAppServices.aprsService,
         routeCalculationService: mockAppServices.routeCalculationService,
         predictionService: mockAppServices.predictionService
     )

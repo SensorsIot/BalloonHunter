@@ -317,7 +317,7 @@ struct DeviceSettingsView: View {
         deviceSettingsLoading = true
         deviceConfigReceived = false
 
-        guard bleService.telemetryState.canReceiveCommands else {
+        guard bleService.connectionState.canReceiveCommands else {
             deviceSettingsLoading = false
             return
         }
@@ -404,10 +404,10 @@ struct SettingsView: View {
                             Button("Prediction Settings") { isShowingPredictionSettings = true }
                             Spacer()
                             Button("Device Settings") { isShowingDeviceSettings = true }
-                                .disabled(!bleService.telemetryState.canReceiveCommands)
+                                .disabled(!bleService.connectionState.canReceiveCommands)
                             Spacer()
                             Button("Tune") { selectedTab = 1 }
-                                .disabled(!bleService.telemetryState.canReceiveCommands)
+                                .disabled(!bleService.connectionState.canReceiveCommands)
                         }
                     } else { // Tune
                         HStack(spacing: 16) {
@@ -509,7 +509,7 @@ struct SettingsView: View {
     // MARK: - Views
     var sondeTab: some View {
         Form {
-            if !bleService.telemetryState.canReceiveCommands {
+            if !bleService.connectionState.canReceiveCommands {
                 Section {
                     Text("Sonde not connected")
                         .foregroundColor(.red)
@@ -546,7 +546,7 @@ struct SettingsView: View {
                     Picker("Sonde Type", selection: $tempDeviceSettings.probeType) {
                         ForEach(["RS41", "M20", "M10", "PILOT", "DFM"], id: \.self) { Text($0) }
                     }
-                    .disabled(!bleService.telemetryState.canReceiveCommands)
+                    .disabled(!bleService.connectionState.canReceiveCommands)
                     
                     HStack(spacing: 4) {
                         ForEach(0..<5, id: \.self) { i in
@@ -560,7 +560,7 @@ struct SettingsView: View {
                             .pickerStyle(WheelPickerStyle())
                             .frame(maxWidth: .infinity, maxHeight: 180)
                             .clipped()
-                            .disabled(!bleService.telemetryState.canReceiveCommands)
+                            .disabled(!bleService.connectionState.canReceiveCommands)
                             .layoutPriority(1)
                             .onChange(of: freqDigits[i]) { _, _ in
                                 // Update frequency immediately when digits change
@@ -575,7 +575,7 @@ struct SettingsView: View {
 
                 Section {
                     Button("Revert") { revertSondeSettings() }
-                        .disabled(!bleService.telemetryState.canReceiveCommands)
+                        .disabled(!bleService.connectionState.canReceiveCommands)
                         .frame(maxWidth: .infinity)
                 }
             }
@@ -623,7 +623,7 @@ struct SettingsView: View {
                         saveTuneSettings(correctionValue: tempTuneFrequencyCorrection)
                     }
                     .buttonStyle(.borderedProminent)
-                    .disabled(!bleService.telemetryState.canReceiveCommands)
+                    .disabled(!bleService.connectionState.canReceiveCommands)
                 }
             }
         }
