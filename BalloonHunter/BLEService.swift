@@ -25,8 +25,6 @@ Manages Bluetooth communication with **MySondyGo** devices.
 - `@Published var connectionState: BLEConnectionState` — Unified BLE connection state (.notConnected, .readyForCommands, .dataReady)
 - Three-channel architecture: `latestPosition`, `latestRadioChannel`, `latestSettings`
 - `@Published var deviceSettings: DeviceSettings` — MySondyGo device configuration
-- `@Published var deviceStatus: DeviceStatusData?` — Type 0 device status (battery %, voltage, signal strength)
-- `@Published var connectionStatus: ConnectionStatus` — `.connected`, `.disconnected`, `.connecting`
 - Two-channel streams: `positionDataStream`, `radioChannelDataStream`
 - `@Published var lastTelemetryUpdateTime: Date?` — Last update timestamp
 - `@Published var lastMessageTimestamp: Date?` — Last message receipt timestamp
@@ -259,15 +257,17 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
     // Settings data (Type 3) - device configuration
     @Published var latestSettings: SettingsData? = nil
 
+    // AFC data with current and smoothed values
+    @Published var afcData: AFCData = AFCData(currentFrequency: 0.0, smoothedFrequency: 0.0)
+
+    // AFC tracking for business logic
+    private var afcHistory: [Double] = []
+    private let afcHistoryMaxSize = 10
+
     // MARK: - Legacy Properties (state machine compatibility)
     // Legacy latestTelemetry removed - use latestPosition and latestRadioChannel
     @Published var deviceSettings: DeviceSettings = .default
-    @Published var deviceStatus: DeviceStatusData? = nil
 
-    // MARK: - AFC Frequency Tracking
-    @Published var afcFrequencies: [Int] = []
-    @Published var afcMovingAverage: Int = 0
-    @Published var connectionStatus: ConnectionStatus = .disconnected
     // Legacy telemetryData stream removed - use three-channel streams
     var lastTelemetryUpdateTime: Date? = nil
     // Unified connection state
@@ -333,7 +333,6 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
             publishHealthEvent(.healthy, message: "Bluetooth powered on")
         case .poweredOff:
             appLog("BLE: Bluetooth is powered off - please enable Bluetooth in Settings", category: .ble, level: .error)
-            connectionStatus = .disconnected
             connectionState = .notConnected
             lastMessageTimestamp = Date()
             publishHealthEvent(.unhealthy("Bluetooth powered off"), message: "Bluetooth powered off")
@@ -409,7 +408,6 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
         appLog("🟢 BLE: SUCCESSFULLY CONNECTED to \(deviceName)", category: .ble, level: .info)
         // Connection established
 
-        connectionStatus = .connected
         // connectionState remains .notConnected until first packet received
         lastMessageTimestamp = Date()
 
@@ -424,7 +422,6 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
         appLog("🔴 BLE: FAILED TO CONNECT to \(deviceName)", category: .ble, level: .error)
         appLog("🔴 BLE: Connection error: \(errorMessage)", category: .ble, level: .error)
         
-        connectionStatus = .disconnected
         connectionState = .notConnected
         lastMessageTimestamp = Date()
         publishHealthEvent(.unhealthy("BLE connection failed: \(errorMessage)"), message: "BLE connection failed: \(errorMessage)")
@@ -443,7 +440,6 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
         
         // Disconnected
         
-        connectionStatus = .disconnected
         connectionState = .notConnected
         lastMessageTimestamp = Date()
         publishHealthEvent(.degraded("BLE disconnected"), message: "BLE disconnected")
@@ -631,13 +627,15 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
         case "0":
             // Device Basic Info and Status - FSD: 0/probeType/frequency/RSSI/batPercentage/batVoltage/buzmute/softwareVersion/o
             if let (status, radioData) = parseType0Message(components) {
-                deviceStatus = status
-
                 // Update deviceSettings with probe type and frequency from Type 0 packet per FSD
                 deviceSettings.probeType = radioData.probeType
                 deviceSettings.frequency = radioData.frequency
 
                 latestRadioChannel = radioData
+
+                // Update AFC data with business logic
+                updateAFCData(Double(radioData.afcFrequency))
+
                 radioChannelDataStream.send(radioData)
 
                 // Type 0 packets are device status only - do NOT send as position telemetry data
@@ -698,19 +696,24 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
                 }
 
                 DispatchQueue.main.async {
+                    // Update deviceSettings with probe type and frequency from Type 1 packet per FSD
+                    self.deviceSettings.probeType = radioData.probeType
+                    self.deviceSettings.frequency = radioData.frequency
+
                     // Update new channels
                     self.latestPosition = positionData
                     self.latestRadioChannel = radioData
                     self.lastTelemetryUpdateTime = Date()
 
+                    // Update AFC data with business logic
+                    self.updateAFCData(Double(radioData.afcFrequency))
+
                     // Send to new streams
                     self.positionDataStream.send(positionData)
-                    // Type 1 packets focus on position data - radio channel handled by Type 0
+                    self.radioChannelDataStream.send(radioData)
 
                     // Three-channel architecture - direct creation from parsing
 
-                    // Update AFC frequency tracking
-                    self.updateAFCTrackingFromRadioData(radioData)
 
                     // Device settings request is handled by the connection ready callback
                     // No need to request again here
@@ -745,10 +748,12 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
                 deviceSettings.frequency = radioData.frequency
 
                 latestRadioChannel = radioData
+
+                // Update AFC data with business logic
+                updateAFCData(Double(radioData.afcFrequency))
+
                 // Note: No radioChannelDataStream emission to avoid duplication with Type 0
 
-                // Update AFC frequency tracking for Type 2 messages
-                updateAFCTrackingFromRadioData(radioData)
 
                 appLog("📊 BLE PARSED (Type 2): Device status without position - \(radioData.sondeName)", category: .ble, level: .info)
             }
@@ -757,9 +762,11 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
             // Device Configuration
             if components.count >= 22 {
                 // Consolidated Type 3 message with key config info
+                let rawFreq = Double(components[2]) ?? 0.0
+                let formattedFreq = String(format: "%.2f", rawFreq)
                 let keyInfo = [
                     components[1], // probeType
-                    "freq=\(components[2])MHz",
+                    "freq=\(formattedFreq)MHz",
                     "callSign=\(components[12])",
                     "sw=\(components[21])"
                 ].joined(separator: " ")
@@ -823,7 +830,7 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
                     // are handled by Type 0 packets to avoid duplication
 
                     // Device configuration is now managed through deviceSettings
-                    appLog("BLE: Updated device config - freq=\(settings.frequency) probeType=\(settings.probeType)", category: .ble, level: .debug)
+                    appLog("BLE: Updated device config - freq=\(String(format: "%.2f", settings.frequency)) probeType=\(settings.probeType)", category: .ble, level: .debug)
                 }
             }
             
@@ -917,7 +924,7 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
         guard frequency > 0,
               !probeTypeRaw.isEmpty,
               isValidCoordinate else {
-            appLog("BLE: Discarding telemetry with invalid essentials (freq=\(frequency), probe='\(probeTypeRaw)', lat=\(latitude), lon=\(longitude))", category: .ble, level: .info)
+            appLog("BLE: Discarding telemetry with invalid essentials (freq=\(String(format: "%.2f", frequency)), probe='\(probeTypeRaw)', lat=\(latitude), lon=\(longitude))", category: .ble, level: .info)
             return nil
         }
 
@@ -1182,7 +1189,7 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
     func updateFrequency(to frequency: Double, probeType: String? = nil, source: String = "User") {
         // Input validation
         guard isValidFrequency(frequency) else {
-            appLog("BLE: Invalid frequency \(frequency) MHz rejected", category: .ble, level: .error)
+            appLog("BLE: Invalid frequency \(String(format: "%.2f", frequency)) MHz rejected from source: \(source)", category: .ble, level: .error)
             return
         }
 
@@ -1202,7 +1209,7 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
 
     /// Update frequency from digit array (for UI input)
     func updateFrequencyFromDigits(_ digits: [Int], probeType: String? = nil, source: String = "SettingsUI") {
-        guard digits.count >= 6 else {
+        guard digits.count >= 5 else {
             appLog("BLE: Invalid frequency digits array (count=\(digits.count))", category: .ble, level: .error)
             return
         }
@@ -1269,13 +1276,14 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
         return frequency >= 400.0 && frequency <= 406.0 && frequency.isFinite
     }
 
-    /// Calculate frequency from UI digit array
+    /// Calculate frequency from UI digit array (5 digits: XXX.XX format)
     private func calculateFrequencyFromDigits(_ digits: [Int]) -> Double {
-        guard digits.count >= 6 else { return 0.0 }
-        return Double(digits[0] * 100 + digits[1] * 10 + digits[2]) +
-               Double(digits[3]) * 0.1 +
-               Double(digits[4]) * 0.01 +
-               Double(digits[5]) * 0.001
+        guard digits.count >= 5 else { return 0.0 }
+        let result = Double(digits[0] * 100 + digits[1] * 10 + digits[2]) +
+                     Double(digits[3]) * 0.1 +
+                     Double(digits[4]) * 0.01
+        appLog("BLE: calculateFrequencyFromDigits(\(digits)) = \(String(format: "%.2f", result))", category: .ble, level: .debug)
+        return result
     }
 
     /// Get current frequency for UI display
@@ -1516,18 +1524,25 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
         return BLECommunicationService.ProbeType.from(int: probeTypeInt)?.name ?? ""
     }
 
-    // MARK: - AFC Frequency Tracking (moved from ServiceCoordinator)
+    // MARK: - AFC Business Logic
 
-    private func updateAFCTrackingFromRadioData(_ radioData: RadioChannelData) {
-        let afc = radioData.afcFrequency
-        afcFrequencies.append(afc)
+    private func updateAFCData(_ currentFrequency: Double) {
+        // Add to history
+        afcHistory.append(currentFrequency)
 
-        // Keep only the last 20 values for moving average
-        if afcFrequencies.count > 20 {
-            afcFrequencies.removeFirst()
+        // Keep only recent values
+        if afcHistory.count > afcHistoryMaxSize {
+            afcHistory.removeFirst()
         }
 
-        // Update moving average
-        afcMovingAverage = afcFrequencies.isEmpty ? 0 : afcFrequencies.reduce(0, +) / afcFrequencies.count
+        // Calculate smoothed value (simple moving average)
+        let smoothedFrequency = afcHistory.reduce(0, +) / Double(afcHistory.count)
+
+        // Update published data
+        afcData = AFCData(
+            currentFrequency: currentFrequency,
+            smoothedFrequency: smoothedFrequency
+        )
     }
+
 }

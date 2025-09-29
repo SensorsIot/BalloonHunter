@@ -132,6 +132,7 @@ The balloon carries a sonde that transmits its position signal. This signal is r
 • probeType, frequency, battery, signal
 • buzmute, afcFrequency, softwareVersion
 • burstKiller, timestamp, telemetrySource
+• Note: Type 1 packets now properly emit deviceSettings.probeType (fixed from showing empty)
 
 ⚙️ **SettingsData** (Type 3 BLE only):
 • Hardware config: oled pins, led pins
@@ -147,7 +148,7 @@ The balloon carries a sonde that transmits its position signal. This signal is r
 ### Packet Type Routing
 
 - **BLE Type 0** (Device Status) → RadioChannelData only (radio parameters + device status)
-- **BLE Type 1** (Full Telemetry) → PositionData only (position and movement data)
+- **BLE Type 1** (Full Telemetry) → PositionData + RadioChannelData (position, movement data, and radio parameters for three-channel consistency)
 - **BLE Type 2** (Partial Status) → No stream emission (updates internal state only)
 - **BLE Type 3** (Configuration) → SettingsData only (device configuration)
 - **APRS Telemetry** → PositionData + RadioChannelData (position + radio parameters)
@@ -165,9 +166,19 @@ ServiceCoordinator handles app infrastructure only, UI state handled by MapPrese
 
 ## Dealing with Frequencies
 
+### Frequency Sync Detection & Management
+
 - **Startup with live BLE telemetry** — If BLE packets are received, BLE RadioChannelData are treated as the source of truth.
 - **Startup without BLE telemetry** — If BLE packets are not yet available, the app uses APRS RadioChannelData instead. Frequency and probe type have to be transmitted to RadioSondyGo using the BLE command. If RadioSondyGo is ready for commands, immediately, otherwise when it connected (Ready for commands).
+- **Enhanced startup frequency sync** — Fixed startup frequency sync to trigger popup when APRS-BLE frequencies differ, with proper APRS radio data subscription and comprehensive debug logging.
 - **APRS telemetry mismatch** — While APRS fallback is active, the app compares the APRS frequency and probe type against the current RadioSondyGo settings. When a mismatch is detected, a confirmation alert appears; accepting applies the APRS values via the BLE command, while cancelling defers the change for a period of 5 minutes.
+
+### Frequency Sync Implementation Details
+
+- **APRS radio data subscription** — FrequencyManagementService directly subscribes to APRS radio data for startup frequency sync comparison, ensuring reliable frequency mismatch detection across all app states.
+- **Enhanced logging** — Comprehensive debug logging added for frequency sync evaluation and comparison to aid troubleshooting and verification.
+- **State-specific evaluation** — Improved frequency sync logic handles different app states (startup, liveBLE, waitingForAPRS) with appropriate frequency comparison strategies.
+- **Frequency comparison logic** — Fixed comparison logic to properly detect frequency differences and trigger sync proposals when needed.
 
 ## The State Machine
 
@@ -213,9 +224,10 @@ This architecture ensures that:
 **BLE Telemetry State Management:**
 - BLE connection and telemetry status is managed via `BLETelemetryState` enum with three states:
   - `BLEnotconnected`: No BLE connection established
-  - `readyForCommands`: BLE connected but waiting for first telemetry packet
-  - `BLEtelemetryIsReady`: BLE connected and actively receiving telemetry
+  - `readyForCommands`: BLE connected but waiting for first telemetry packet (UI shows red BLE icon)
+  - `BLEtelemetryIsReady`: BLE connected and actively receiving telemetry (UI shows green flashing animation when data received)
 - The enum provides computed properties: `isConnected`, `canReceiveCommands`, `hasTelemetry`
+- **UI Integration**: BLE icon color reflects connection state - red for readyForCommands (connected but no data), green flash animation for active telemetry reception
 
 **APRS Telemetry:**
 - `aprsTelemetryIsAvailable`: TRUE when the latest SondeHub call returned and was parsed successfully.
@@ -1141,9 +1153,11 @@ The coordinator runs `performCompleteStartupSequence()` in 4 streamlined steps, 
     *   Progress label: "Step 2: BLE & APRS"
     *   **BLE Service**: Start scanning (if Bluetooth powered on)
     *   **APRS Service**: Start polling station data
+    *   **Frequency Management**: APRS radio data subscription established for startup frequency sync comparison
     *   **Wait for both definitive answers**:
         - BLE: Bluetooth off OR connection state enum published (after first packet)
         - APRS: Telemetry data received OR network error
+    *   **Frequency Sync Detection**: Enhanced startup frequency sync compares APRS-BLE frequencies with comprehensive logging
     *   **No individual timeouts** - let each service handle its own timing
     *   **Coordinator timeout**: 15 seconds maximum (only if services don't answer)
 
@@ -1237,7 +1251,10 @@ No calculations or business logic in views. Search for an appropriate service to
 
 This panel covers the full width of the display and the full height left by the map. It displays the following fields (font sizes adjusted to ensure all data fits within the view without a title):
 
-    Connection status icon (BLE, APRS, or disconnected). 
+    Connection status icon (BLE, APRS, or disconnected).
+  * **BLE Icon Behavior**: Shows red when RadioSondy connected but no telemetry data (readyForCommands state), indicates device is connected but waiting for first telemetry packet
+  * **Flash Animation**: Green flashing animation triggers only when telemetry data received (dataReady state), providing visual feedback for active telemetry reception
+  * **iOS 17 Compatibility**: Fixed deprecated onChange method syntax for proper iOS 17 support
 * Sonde Identification: Sonde type, number, and frequency.  
 * Altitude: From telemetry in meters  
 * Speeds (smoothened): Horizontal speed in km/h and vertical speed in m/s. Vertical speed: Green indicates ascending, and Red indicates descending.   

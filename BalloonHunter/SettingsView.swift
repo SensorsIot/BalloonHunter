@@ -484,7 +484,68 @@ struct SettingsView: View {
         tempSettings.updateFrequencyFromDigits(freqDigits)
         return tempSettings.frequency
     }
-    
+
+    // MARK: - Frequency Validation
+
+    private func isValidDigit(_ digit: Int, for position: Int) -> Bool {
+        switch position {
+        case 0: // First digit: only 4 is valid for 400-406 MHz range
+            return digit == 4
+        case 1: // Second digit: only 0 is valid for 40X MHz
+            return digit == 0
+        case 2: // Third digit: 0-6 for 400-406 MHz
+            if freqDigits[0] == 4 && freqDigits[1] == 0 {
+                return digit <= 6
+            }
+            return true
+        case 3: // Fourth digit (first decimal): 0-9, but limited if frequency = 406.XX
+            if freqDigits[0] == 4 && freqDigits[1] == 0 && freqDigits[2] == 6 {
+                return digit == 0 // Only 406.0X allowed
+            }
+            return true
+        case 4: // Fifth digit (second decimal): 0-9, but limited if frequency = 406.0X
+            if freqDigits[0] == 4 && freqDigits[1] == 0 && freqDigits[2] == 6 && freqDigits[3] == 0 {
+                return digit == 0 // Only 406.00 allowed
+            }
+            return true
+        default:
+            return true
+        }
+    }
+
+    private func validateAndAdjustFrequencyDigits(changedPosition: Int) {
+        // Ensure digits stay within valid ranges based on the changed position
+        switch changedPosition {
+        case 0, 1: // If first or second digit changed, validate all subsequent digits
+            for i in 2..<5 {
+                if !isValidDigit(freqDigits[i], for: i) {
+                    freqDigits[i] = getFirstValidDigit(for: i)
+                }
+            }
+        case 2: // If third digit changed, validate decimal digits
+            for i in 3..<5 {
+                if !isValidDigit(freqDigits[i], for: i) {
+                    freqDigits[i] = getFirstValidDigit(for: i)
+                }
+            }
+        case 3: // If fourth digit changed, validate fifth digit
+            if !isValidDigit(freqDigits[4], for: 4) {
+                freqDigits[4] = getFirstValidDigit(for: 4)
+            }
+        default:
+            break
+        }
+    }
+
+    private func getFirstValidDigit(for position: Int) -> Int {
+        for digit in 0..<10 {
+            if isValidDigit(digit, for: position) {
+                return digit
+            }
+        }
+        return 0 // Fallback
+    }
+
     // MARK: - Tune Settings Logic
     
     private func loadTuneSettings() {
@@ -524,10 +585,11 @@ struct SettingsView: View {
                     HStack(spacing: 4) {
                         ForEach(0..<5, id: \.self) { i in
                             Picker("", selection: $freqDigits[i]) {
-                                ForEach(0..<10) {
-                                    Text("\($0)")
+                                ForEach(0..<10, id: \.self) { digit in
+                                    Text("\(digit)")
                                         .font(.system(size: 40, weight: .bold))
-                                        .tag($0)
+                                        .foregroundColor(isValidDigit(digit, for: i) ? .primary : .gray)
+                                        .tag(digit)
                                 }
                             }
                             .pickerStyle(WheelPickerStyle())
@@ -551,10 +613,11 @@ struct SettingsView: View {
                     HStack(spacing: 4) {
                         ForEach(0..<5, id: \.self) { i in
                             Picker("", selection: $freqDigits[i]) {
-                                ForEach(0..<10) {
-                                    Text("\($0)")
+                                ForEach(0..<10, id: \.self) { digit in
+                                    Text("\(digit)")
                                         .font(.system(size: 40, weight: .bold))
-                                        .tag($0)
+                                        .foregroundColor(isValidDigit(digit, for: i) ? .primary : .gray)
+                                        .tag(digit)
                                 }
                             }
                             .pickerStyle(WheelPickerStyle())
@@ -562,9 +625,16 @@ struct SettingsView: View {
                             .clipped()
                             .disabled(!bleService.connectionState.canReceiveCommands)
                             .layoutPriority(1)
-                            .onChange(of: freqDigits[i]) { _, _ in
-                                // Update frequency immediately when digits change
-                                tempDeviceSettings.frequency = frequencyFromDigits()
+                            .onChange(of: freqDigits[i]) { oldValue, newValue in
+                                // Validate the new digit and revert if invalid
+                                if !isValidDigit(newValue, for: i) {
+                                    freqDigits[i] = oldValue // Revert to previous valid value
+                                } else {
+                                    // Validate and adjust dependent digits when a digit changes
+                                    validateAndAdjustFrequencyDigits(changedPosition: i)
+                                    // Update frequency immediately when digits change
+                                    tempDeviceSettings.frequency = frequencyFromDigits()
+                                }
                             }
                         }
                         Text("MHz")
@@ -585,20 +655,25 @@ struct SettingsView: View {
     
     var tuneTab: some View {
         Form {
-            Section(header: Text("Live AFC Value")) {
-                VStack(spacing: 15) {
-                    Text("\(bleService.afcMovingAverage) Hz")
-                        .font(.system(size: 30, weight: .bold, design: .monospaced))
-                        .padding(.vertical, 10)
-
-                    Button("Transfer") {
-                        tempTuneFrequencyCorrection = bleService.afcMovingAverage
-                    }
-                    .buttonStyle(.borderedProminent)
+            Section(header: Text("AFC Live Values")) {
+                HStack {
+                    Text("Current:")
+                        .font(.system(size: 25, weight: .bold, design: .monospaced))
+                    Spacer()
+                    Text("\(String(format: "%.0f", bleService.afcData.currentFrequency))")
+                        .font(.system(size: 25, weight: .bold, design: .monospaced))
+                        .foregroundColor(.blue)
                 }
-                .frame(maxWidth: .infinity)
+                HStack {
+                    Text("Smoothed:")
+                        .font(.system(size: 25, weight: .bold, design: .monospaced))
+                    Spacer()
+                    Text("\(String(format: "%.0f", bleService.afcData.smoothedFrequency))")
+                        .font(.system(size: 25, weight: .bold, design: .monospaced))
+                        .foregroundColor(.green)
+                }
             }
-            
+
             Section(header: Text("Current Offset")) {
                 HStack {
                     Text("Current:")
@@ -629,11 +704,10 @@ struct SettingsView: View {
         }
         .onAppear {
             loadTuneSettings()
-            // AFC tracking moved to BLEService for proper separation of concerns
-            // No need to manage subscription here - just observe bleService.afcFrequencies
+            // AFC functionality removed - moved to device-specific handling
         }
         .onDisappear {
-            // AFC tracking managed by BLEService - no cleanup needed
+            // AFC functionality removed - no cleanup needed
             // Removed any selectedTab = 0 here to prevent automatic tab switching
         }
         .tabItem { Label("Tune", systemImage: "slider.horizontal.3") }

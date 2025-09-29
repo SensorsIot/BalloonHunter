@@ -150,6 +150,11 @@ struct FrequencySyncProposal: Identifiable, Equatable {
     let probeType: String
 }
 
+struct AFCData {
+    let currentFrequency: Double
+    let smoothedFrequency: Double
+}
+
 struct PredictionData {
     let path: [CLLocationCoordinate2D]?
     let burstPoint: CLLocationCoordinate2D?

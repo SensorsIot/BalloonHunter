@@ -14,6 +14,10 @@ struct DataPanelView: View {
     @EnvironmentObject var balloonPositionService: BalloonPositionService
     @EnvironmentObject var routeCalculationService: RouteCalculationService
 
+    // Flash animation state for BLE icon
+    @State private var isFlashing = false
+    @State private var lastBLETimestamp: Date? = nil
+
     var body: some View {
         GeometryReader { geometry in // Added GeometryReader
 
@@ -26,6 +30,8 @@ struct DataPanelView: View {
                             .foregroundColor(icon.color)
                             .font(.system(size: 24))
                             .frame(width: 48, alignment: .center)
+                            .scaleEffect(isFlashing ? 1.3 : 1.0)
+                            .animation(.easeInOut(duration: 0.1), value: isFlashing)
                         Image(systemName: flightStatusIconName)
                             .foregroundColor(flightStatusTint)
                             .font(.system(size: 24))
@@ -115,6 +121,16 @@ struct DataPanelView: View {
             }
             .onReceive(predictionService.$remainingFlightTimeString) { value in
                 appLog("DataPanelView: remaining flight time string updated -> \(value)", category: .ui, level: .debug)
+            }
+            .onChange(of: bleService.lastMessageTimestamp) { _, newTimestamp in
+                // Trigger flash animation when new BLE data arrives from RadioSondy
+                // Only flash when telemetry data is received (dataReady state)
+                if let newTimestamp = newTimestamp,
+                   lastBLETimestamp != newTimestamp,
+                   bleService.connectionState == .dataReady {
+                    lastBLETimestamp = newTimestamp
+                    triggerFlashAnimation()
+                }
             }
         } // End GeometryReader
     }
@@ -267,7 +283,16 @@ struct DataPanelView: View {
                 ("antenna.radiowaves.left.and.right.slash", .red) :
                 ("antenna.radiowaves.left.and.right", .green)
         case .waitingForAPRS:
-            return ("clock.arrow.circlepath", .yellow)
+            // In waitingForAPRS state, show BLE connection status
+            // Red if connected but no telemetry, gray if not connected
+            switch bleService.connectionState {
+            case .readyForCommands:
+                return ("antenna.radiowaves.left.and.right", .red)  // Connected but no telemetry
+            case .dataReady:
+                return ("antenna.radiowaves.left.and.right", .green) // Connected with telemetry
+            case .notConnected:
+                return ("antenna.radiowaves.left.and.right.slash", .red) // Not connected
+            }
         case .aprsFallbackFlying, .aprsFallbackLanded:
             // APRS icon color based on API call success/failure
             let aprsColor: Color = {
@@ -282,9 +307,29 @@ struct DataPanelView: View {
             }()
             return ("globe.americas.fill", aprsColor)
         case .noTelemetry:
-            return bleService.connectionState.isConnected ?
-                ("antenna.radiowaves.left.and.right", .gray) :
-                ("antenna.radiowaves.left.and.right.slash", .red)
+            // Show red when connected but no telemetry, red when not connected
+            switch bleService.connectionState {
+            case .readyForCommands:
+                return ("antenna.radiowaves.left.and.right", .red)  // Connected but no telemetry
+            case .dataReady:
+                return ("antenna.radiowaves.left.and.right", .green) // Connected with telemetry (shouldn't happen in noTelemetry state)
+            case .notConnected:
+                return ("antenna.radiowaves.left.and.right.slash", .red) // Not connected
+            }
+        }
+    }
+
+    // MARK: - Flash Animation
+
+    private func triggerFlashAnimation() {
+        withAnimation(.easeInOut(duration: 0.1)) {
+            isFlashing = true
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            withAnimation(.easeInOut(duration: 0.1)) {
+                isFlashing = false
+            }
         }
     }
 
@@ -327,11 +372,7 @@ struct DataPanelView: View {
         if showingPlaceholders {
             return "0"
         }
-        // Prioritize BLE device status (Type 0) when available
-        if let deviceStatus = bleService.deviceStatus {
-            return "\(deviceStatus.batteryPercentage)"
-        }
-        // Fallback to radio channel data battery percentage
+        // Use radio channel data battery percentage
         if let val = balloonPositionService.currentRadioChannel?.batteryPercentage {
             return "\(val)"
         }

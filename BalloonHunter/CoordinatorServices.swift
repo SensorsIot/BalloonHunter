@@ -256,10 +256,26 @@ final class FrequencyManagementService: ObservableObject {
             balloonPositionService.$currentRadioChannel
         )
         .sink { [weak self] state, radioData in
+            let freqString = radioData.map { String(format: "%.2f", $0.frequency) } ?? "nil"
+            appLog("FrequencyManagementService: Subscriber triggered - state: \(state), radioData frequency: \(freqString) MHz", category: .service, level: .debug)
             self?.evaluateFrequencySync(state: state, radioData: radioData,
                                       positionData: balloonPositionService.currentPositionData)
         }
         .store(in: &cancellables)
+
+        // Subscribe to APRS radio data for startup frequency sync comparison
+        balloonPositionService.aprsService.$latestRadioChannel
+            .sink { [weak self] aprsRadioData in
+                if let aprsData = aprsRadioData, aprsData.telemetrySource == .aprs {
+                    let state = balloonPositionService.currentState
+                    appLog("FrequencyManagementService: APRS radio data received - state: \(state), freq: \(String(format: "%.2f", aprsData.frequency)) MHz", category: .service, level: .debug)
+
+                    // Trigger frequency sync evaluation with APRS radio data
+                    self?.evaluateFrequencySync(state: state, radioData: aprsData,
+                                              positionData: balloonPositionService.currentPositionData)
+                }
+            }
+            .store(in: &cancellables)
     }
 
     /// Accept and execute the frequency sync proposal
@@ -285,37 +301,74 @@ final class FrequencyManagementService: ObservableObject {
     }
 
     private func evaluateFrequencySync(state: DataState, radioData: RadioChannelData?, positionData: PositionData?) {
+        appLog("FrequencyManagementService: evaluateFrequencySync called with state: \(state), radioData: \(radioData != nil ? "present" : "nil"), positionData: \(positionData != nil ? "present" : "nil")", category: .service, level: .debug)
+
+        if let radio = radioData {
+            appLog("FrequencyManagementService: Radio data - source: \(radio.telemetrySource), freq: \(String(format: "%.2f", radio.frequency)) MHz, probe: '\(radio.probeType)'", category: .service, level: .debug)
+        }
+        if let position = positionData {
+            appLog("FrequencyManagementService: Position data - source: \(position.telemetrySource), sonde: '\(position.sondeName)'", category: .service, level: .debug)
+        }
+
         switch state {
         case .aprsFallbackFlying, .aprsFallbackLanded:
+            appLog("FrequencyManagementService: APRS fallback state - evaluating frequency proposal", category: .service, level: .debug)
             evaluateAPRSFrequencyProposal(radioData: radioData, positionData: positionData)
 
         case .startup:
+            appLog("FrequencyManagementService: Startup state - evaluating frequency sync", category: .service, level: .debug)
             evaluateStartupFrequencySync(radioData: radioData, positionData: positionData)
 
-        case .liveBLEFlying, .liveBLELanded, .waitingForAPRS, .noTelemetry:
-            // No frequency sync in these states
+        case .liveBLEFlying, .liveBLELanded, .waitingForAPRS:
+            // Evaluate frequency sync when APRS data is available for comparison
+            if let radio = radioData, radio.telemetrySource == .aprs {
+                appLog("FrequencyManagementService: Evaluating APRS-BLE frequency sync in state \(state) - APRS freq: \(String(format: "%.2f", radio.frequency)) MHz", category: .service, level: .info)
+                evaluateAPRSFrequencyProposal(radioData: radioData, positionData: positionData)
+            } else {
+                let radioSource = radioData?.telemetrySource.rawValue ?? "nil"
+                let radioFreq = radioData.map { String(format: "%.2f", $0.frequency) } ?? "nil"
+                let bleDeviceFreq = String(format: "%.2f", bleService.deviceSettings.frequency)
+                appLog("FrequencyManagementService: No APRS radio data available for frequency sync evaluation in state \(state) (radio source: \(radioSource), radio freq: \(radioFreq), BLE device freq: \(bleDeviceFreq))", category: .service, level: .debug)
+            }
+
+        case .noTelemetry:
+            appLog("FrequencyManagementService: No telemetry state - skipping frequency sync evaluation", category: .service, level: .debug)
             break
         }
     }
 
     private func evaluateAPRSFrequencyProposal(radioData: RadioChannelData?, positionData: PositionData?) {
-        guard let position = positionData,
-              position.telemetrySource == .aprs,
-              let radio = radioData else { return }
+        appLog("FrequencyManagementService: evaluateAPRSFrequencyProposal called", category: .service, level: .debug)
+
+        guard let radio = radioData else {
+            appLog("FrequencyManagementService: No radio data available", category: .service, level: .debug)
+            return
+        }
+
+        // For frequency sync, we need radio data with APRS frequency information
+        // This can be triggered in BLE states when APRS data is available for comparison
+        guard radio.telemetrySource == .aprs else {
+            appLog("FrequencyManagementService: Radio data source is not APRS: \(radio.telemetrySource)", category: .service, level: .debug)
+            return
+        }
 
         // Only evaluate frequency sync when BLE is ready for commands
         guard bleService.connectionState.canReceiveCommands else {
-            appLog("FrequencyManagementService: BLE not ready for commands - skipping frequency sync evaluation", category: .service, level: .debug)
+            appLog("FrequencyManagementService: BLE not ready for commands (state: \(bleService.connectionState)) - skipping frequency sync evaluation", category: .service, level: .debug)
             return
         }
 
         let aprsFreq = radio.frequency
         let bleFreq = bleService.deviceSettings.frequency
-        let freqMismatch = abs(aprsFreq - bleFreq) > 0.01
+        let freqDifference = abs(aprsFreq - bleFreq)
+        let freqMismatch = freqDifference > 0.01
 
         let aprsProbeType = radio.probeType.isEmpty ? "RS41" : radio.probeType
         let bleProbeType = bleService.deviceSettings.probeType
         let probeTypeMismatch = aprsProbeType != bleProbeType
+
+        appLog("FrequencyManagementService: Frequency comparison - APRS: \(String(format: "%.2f", aprsFreq)) MHz, BLE: \(String(format: "%.2f", bleFreq)) MHz, difference: \(String(format: "%.2f", freqDifference)) MHz, mismatch: \(freqMismatch)", category: .service, level: .info)
+        appLog("FrequencyManagementService: Probe type comparison - APRS: '\(aprsProbeType)', BLE: '\(bleProbeType)', mismatch: \(probeTypeMismatch)", category: .service, level: .info)
 
         guard freqMismatch || probeTypeMismatch else {
             appLog("FrequencyManagementService: APRS-BLE frequency/probe match, no sync needed", category: .service, level: .debug)
@@ -327,23 +380,37 @@ final class FrequencyManagementService: ObservableObject {
     }
 
     private func evaluateStartupFrequencySync(radioData: RadioChannelData?, positionData: PositionData?) {
-        guard let position = positionData,
-              position.telemetrySource == .aprs,
-              let radio = radioData else { return }
+        appLog("FrequencyManagementService: evaluateStartupFrequencySync called", category: .service, level: .debug)
+
+        guard let radio = radioData else {
+            appLog("FrequencyManagementService: Startup - No radio data available", category: .service, level: .debug)
+            return
+        }
+
+        // During startup, we can have APRS radio data without position data
+        // Check if this is APRS radio data (from API response)
+        guard radio.telemetrySource == .aprs else {
+            appLog("FrequencyManagementService: Startup - Radio data source is not APRS: \(radio.telemetrySource)", category: .service, level: .debug)
+            return
+        }
 
         // Only evaluate frequency sync when BLE is ready for commands
         guard bleService.connectionState.canReceiveCommands else {
-            appLog("FrequencyManagementService: Startup - BLE not ready for commands - skipping frequency sync evaluation", category: .service, level: .debug)
+            appLog("FrequencyManagementService: Startup - BLE not ready for commands (state: \(bleService.connectionState)) - skipping frequency sync evaluation", category: .service, level: .debug)
             return
         }
 
         let aprsFreq = radio.frequency
         let bleFreq = bleService.deviceSettings.frequency
-        let freqMismatch = abs(aprsFreq - bleFreq) > 0.01
+        let freqDifference = abs(aprsFreq - bleFreq)
+        let freqMismatch = freqDifference > 0.01
 
         let aprsProbeType = radio.probeType.isEmpty ? "RS41" : radio.probeType
         let bleProbeType = bleService.deviceSettings.probeType
         let probeTypeMismatch = aprsProbeType != bleProbeType
+
+        appLog("FrequencyManagementService: Startup frequency comparison - APRS: \(String(format: "%.2f", aprsFreq)) MHz, BLE: \(String(format: "%.2f", bleFreq)) MHz, difference: \(String(format: "%.2f", freqDifference)) MHz, mismatch: \(freqMismatch)", category: .service, level: .info)
+        appLog("FrequencyManagementService: Startup probe type comparison - APRS: '\(aprsProbeType)', BLE: '\(bleProbeType)', mismatch: \(probeTypeMismatch)", category: .service, level: .info)
 
         guard freqMismatch || probeTypeMismatch else {
             appLog("FrequencyManagementService: Startup - APRS-BLE frequency/probe match, no sync needed", category: .service, level: .debug)
@@ -358,6 +425,6 @@ final class FrequencyManagementService: ObservableObject {
         // Create proposal for user confirmation
         syncProposal = FrequencySyncProposal(frequency: aprsFreq, probeType: aprsProbeType)
 
-        appLog("FrequencyManagementService: Frequency sync proposal created - APRS: \(aprsFreq) MHz \(aprsProbeType) vs BLE: \(bleFreq) MHz \(bleProbeType)", category: .service, level: .info)
+        appLog("FrequencyManagementService: Frequency sync proposal created - APRS: \(String(format: "%.2f", aprsFreq)) MHz \(aprsProbeType) vs BLE: \(String(format: "%.2f", bleFreq)) MHz \(bleProbeType)", category: .service, level: .info)
     }
 }

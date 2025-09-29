@@ -264,7 +264,7 @@ final class BalloonPositionService: ObservableObject {
             let timeInState = Date().timeIntervalSince(stateEntryTime)
 
             // Comprehensive system state logging with all decision factors
-            let deviceInfo = bleService.connectionStatus == .connected ? "connected" : "disconnected"
+            let deviceInfo = bleService.connectionState.isConnected ? "connected" : "disconnected"
             let msgAge = bleService.lastMessageTimestamp != nil ? "\(Int(Date().timeIntervalSince(bleService.lastMessageTimestamp!)))s" : "∞"
             let sondeInfo = currentPositionData?.sondeName ?? "none"
             let altInfo = currentPositionData != nil ? "\(Int(currentPositionData!.altitude))m" : "none"

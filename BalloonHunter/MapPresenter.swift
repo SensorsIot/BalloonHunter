@@ -357,11 +357,11 @@ final class MapPresenter: ObservableObject {
             }
             .store(in: &cancellables)
 
-        // Subscribe to BLE service for connection status
-        bleService.$connectionStatus
+        // Subscribe to BLE service for connection state
+        bleService.$connectionState
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] status in
-                self?.connectionStatus = status
+            .sink { [weak self] state in
+                self?.connectionStatus = state.isConnected ? .connected : .disconnected
             }
             .store(in: &cancellables)
 
