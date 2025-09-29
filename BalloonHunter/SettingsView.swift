@@ -1,5 +1,6 @@
 import SwiftUI
 import Combine
+import OSLog
 
 // MARK: - Device Settings View (Sheet)
 struct DeviceSettingsView: View {
@@ -34,7 +35,6 @@ struct DeviceSettingsView: View {
                         pinsSettingsTab.tabItem { Label("Pins", systemImage: "pin") }
                         batterySettingsTab.tabItem { Label("Battery", systemImage: "battery.100") }
                         radioSettingsTab.tabItem { Label("Radio", systemImage: "dot.radiowaves.left.and.right") }
-                        predictionSettingsTab.tabItem { Label("Prediction", systemImage: "cloud.sun") }
                         otherSettingsTab.tabItem { Label("Other", systemImage: "ellipsis") }
                     }
                     .tabViewStyle(.automatic)
@@ -322,18 +322,51 @@ struct DeviceSettingsView: View {
             return
         }
 
+        // Store cached settings before requesting fresh data from device
+        let cachedSettings = persistenceService.deviceSettings
+
+        // Send command to read current device settings
         bleService.sendCommand(command: "o{?}o")
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-            if let devSettings = persistenceService.deviceSettings {
-                deviceSettingsCopy = devSettings
-                initialDeviceSettings = devSettings
-                deviceConfigReceived = true
-            } else {
-                deviceConfigReceived = false
-            }
-            deviceSettingsLoading = false
-        }
+        // Subscribe to deviceSettings changes to detect when fresh data arrives from device
+        var settingsSubscription: AnyCancellable?
+        settingsSubscription = bleService.$deviceSettings
+            .dropFirst() // Skip the initial value
+            .timeout(.seconds(5), scheduler: DispatchQueue.main) // 5 second timeout
+            .sink(
+                receiveCompletion: { completion in
+                    settingsSubscription?.cancel()
+                    if case .failure = completion {
+                        // Timeout occurred - use cached settings if available
+                        appLog("DeviceSettings: Timeout waiting for BLE response, using cached settings", category: .ble, level: .error)
+                        DispatchQueue.main.async {
+                            if let cached = cachedSettings {
+                                deviceSettingsCopy = cached
+                                initialDeviceSettings = cached
+                                deviceConfigReceived = true
+                            } else {
+                                deviceConfigReceived = false
+                            }
+                            deviceSettingsLoading = false
+                        }
+                    }
+                },
+                receiveValue: { deviceSettings in
+                    settingsSubscription?.cancel()
+                    appLog("DeviceSettings: Received device settings from BLE - updating cache and UI", category: .ble, level: .info)
+
+                    DispatchQueue.main.async {
+                        // Use fresh device settings from RadioSondyGo
+                        deviceSettingsCopy = deviceSettings
+                        initialDeviceSettings = deviceSettings
+                        deviceConfigReceived = true
+                        deviceSettingsLoading = false
+
+                        // Update cache with fresh device data
+                        persistenceService.save(deviceSettings: deviceSettings)
+                    }
+                }
+            )
     }
 
     private func saveDeviceSettings() {
@@ -371,6 +404,7 @@ struct SettingsView: View {
     @State private var isShowingPredictionSettings = false
     
     // For Sonde Settings
+    @State private var tempRadioSettings: RadioSettings = .default
     @State private var tempDeviceSettings: DeviceSettings = .default
     @State private var freqDigits: [Int] = Array(repeating: 0, count: 5)
     @State private var initialSondeType: String = ""
@@ -454,33 +488,41 @@ struct SettingsView: View {
     
     // MARK: - Sonde Settings Logic
     private func loadSondeSettings() {
+        // Load radio settings (frequency + probe type)
+        tempRadioSettings = persistenceService.radioSettings ?? .default
+
+        // Load device settings (hardware config)
         tempDeviceSettings = persistenceService.deviceSettings ?? .default
         tempTuneFrequencyCorrection = tempDeviceSettings.frequencyCorrection
+
+        appLog("SettingsView: loadSondeSettings() - cached frequency: \(String(format: "%.2f", tempRadioSettings.frequency)) MHz", category: .ui, level: .info)
         updateFreqDigitsFromFrequency()
-        initialSondeType = tempDeviceSettings.probeType
-        initialFrequency = tempDeviceSettings.frequency
+        appLog("SettingsView: loadSondeSettings() - freqDigits set to: \(freqDigits)", category: .ui, level: .info)
+        initialSondeType = tempRadioSettings.probeType
+        initialFrequency = tempRadioSettings.frequency
     }
     
     private func saveSondeSettingsOnDismiss() {
         // Delegate all frequency business logic to BLE service
-        bleService.updateFrequencyFromDigits(freqDigits, probeType: tempDeviceSettings.probeType, source: "SettingsView")
+        appLog("SettingsView: saveSondeSettingsOnDismiss() - freqDigits: \(freqDigits), probeType: \(tempRadioSettings.probeType)", category: .ui, level: .info)
+        bleService.updateFrequencyFromDigits(freqDigits, probeType: tempRadioSettings.probeType, source: "SettingsView")
     }
     
     private func revertSondeSettings() {
-        tempDeviceSettings.probeType = initialSondeType
-        tempDeviceSettings.frequency = initialFrequency
+        tempRadioSettings.probeType = initialSondeType
+        tempRadioSettings.frequency = initialFrequency
         updateFreqDigitsFromFrequency()
     }
     
     
     private func updateFreqDigitsFromFrequency() {
-        // Business logic moved to DeviceSettings model for proper separation of concerns
-        freqDigits = tempDeviceSettings.frequencyToDigits()
+        // Business logic moved to RadioSettings model for proper separation of concerns
+        freqDigits = tempRadioSettings.frequencyToDigits()
     }
 
     private func frequencyFromDigits() -> Double {
-        // Use DeviceSettings method for proper separation of concerns
-        var tempSettings = tempDeviceSettings
+        // Use RadioSettings method for proper separation of concerns
+        var tempSettings = tempRadioSettings
         tempSettings.updateFrequencyFromDigits(freqDigits)
         return tempSettings.frequency
     }
@@ -515,26 +557,34 @@ struct SettingsView: View {
 
     private func validateAndAdjustFrequencyDigits(changedPosition: Int) {
         // Ensure digits stay within valid ranges based on the changed position
+        appLog("SettingsView: validateAndAdjustFrequencyDigits(changedPosition: \(changedPosition)) - before: \(freqDigits)", category: .ui, level: .info)
         switch changedPosition {
         case 0, 1: // If first or second digit changed, validate all subsequent digits
             for i in 2..<5 {
                 if !isValidDigit(freqDigits[i], for: i) {
+                    let oldValue = freqDigits[i]
                     freqDigits[i] = getFirstValidDigit(for: i)
+                    appLog("SettingsView: Adjusted freqDigits[\(i)] from \(oldValue) to \(freqDigits[i])", category: .ui, level: .info)
                 }
             }
         case 2: // If third digit changed, validate decimal digits
             for i in 3..<5 {
                 if !isValidDigit(freqDigits[i], for: i) {
+                    let oldValue = freqDigits[i]
                     freqDigits[i] = getFirstValidDigit(for: i)
+                    appLog("SettingsView: Adjusted freqDigits[\(i)] from \(oldValue) to \(freqDigits[i])", category: .ui, level: .info)
                 }
             }
         case 3: // If fourth digit changed, validate fifth digit
             if !isValidDigit(freqDigits[4], for: 4) {
+                let oldValue = freqDigits[4]
                 freqDigits[4] = getFirstValidDigit(for: 4)
+                appLog("SettingsView: Adjusted freqDigits[4] from \(oldValue) to \(freqDigits[4])", category: .ui, level: .info)
             }
         default:
             break
         }
+        appLog("SettingsView: validateAndAdjustFrequencyDigits(changedPosition: \(changedPosition)) - after: \(freqDigits)", category: .ui, level: .info)
     }
 
     private func getFirstValidDigit(for position: Int) -> Int {
@@ -577,7 +627,7 @@ struct SettingsView: View {
                         .fontWeight(.semibold)
                 }
                 Section(header: Text("Sonde Type & Frequency")) {
-                    Picker("Sonde Type", selection: $tempDeviceSettings.probeType) {
+                    Picker("Sonde Type", selection: $tempRadioSettings.probeType) {
                         ForEach(["RS41", "M20", "M10", "PILOT", "DFM"], id: \.self) { Text($0) }
                     }
                     .disabled(true)
@@ -605,7 +655,7 @@ struct SettingsView: View {
                 }
             } else {
                 Section(header: Text("Sonde Type & Frequency")) {
-                    Picker("Sonde Type", selection: $tempDeviceSettings.probeType) {
+                    Picker("Sonde Type", selection: $tempRadioSettings.probeType) {
                         ForEach(["RS41", "M20", "M10", "PILOT", "DFM"], id: \.self) { Text($0) }
                     }
                     .disabled(!bleService.connectionState.canReceiveCommands)
@@ -626,14 +676,17 @@ struct SettingsView: View {
                             .disabled(!bleService.connectionState.canReceiveCommands)
                             .layoutPriority(1)
                             .onChange(of: freqDigits[i]) { oldValue, newValue in
+                                appLog("SettingsView: freqDigits[\(i)] changed from \(oldValue) to \(newValue)", category: .ui, level: .info)
                                 // Validate the new digit and revert if invalid
                                 if !isValidDigit(newValue, for: i) {
+                                    appLog("SettingsView: Invalid digit \(newValue) at position \(i), reverting to \(oldValue)", category: .ui, level: .info)
                                     freqDigits[i] = oldValue // Revert to previous valid value
                                 } else {
                                     // Validate and adjust dependent digits when a digit changes
                                     validateAndAdjustFrequencyDigits(changedPosition: i)
                                     // Update frequency immediately when digits change
-                                    tempDeviceSettings.frequency = frequencyFromDigits()
+                                    tempRadioSettings.frequency = frequencyFromDigits()
+                                    appLog("SettingsView: After validation, freqDigits: \(freqDigits), calculated frequency: \(String(format: "%.2f", tempRadioSettings.frequency))", category: .ui, level: .info)
                                 }
                             }
                         }
@@ -671,6 +724,11 @@ struct SettingsView: View {
                     Text("\(String(format: "%.0f", bleService.afcData.smoothedFrequency))")
                         .font(.system(size: 25, weight: .bold, design: .monospaced))
                         .foregroundColor(.green)
+                    Button("Transfer") {
+                        tempTuneFrequencyCorrection = Int(bleService.afcData.smoothedFrequency)
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(!bleService.connectionState.canReceiveCommands)
                 }
             }
 

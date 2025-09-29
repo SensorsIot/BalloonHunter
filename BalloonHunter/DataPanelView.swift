@@ -344,14 +344,14 @@ struct DataPanelView: View {
             return "--- MHz"
         case .liveBLEFlying, .liveBLELanded, .waitingForAPRS:
             // BLE states: show programmed frequency
-            let frequency = bleService.deviceSettings.frequency
+            let frequency = bleService.radioSettings.frequency
             return String(format: "%.2f MHz", frequency)
         case .aprsFallbackFlying, .aprsFallbackLanded:
             // APRS states: show APRS frequency if available, fallback to BLE
             if let aprsFreq = balloonPositionService.currentRadioChannel?.frequency {
-                return String(format: "%.2f MHz*", aprsFreq)
+                return String(format: "%.2f MHz", aprsFreq)
             } else {
-                let frequency = bleService.deviceSettings.frequency
+                let frequency = bleService.radioSettings.frequency
                 return String(format: "%.2f MHz", frequency)
             }
         }
@@ -397,7 +397,6 @@ struct DataPanelView: View {
         balloonTrackService: mockAppServices.balloonTrackService,
         landingPointTrackingService: mockAppServices.landingPointTrackingService,
         navigationService: mockAppServices.navigationService,
-        frequencyManagementService: mockAppServices.frequencyManagementService,
         userSettings: mockAppServices.userSettings
     )
     

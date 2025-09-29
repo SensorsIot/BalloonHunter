@@ -36,7 +36,6 @@ final class ServiceCoordinator: ObservableObject {
     let balloonTrackService: BalloonTrackService
     let landingPointTrackingService: LandingPointTrackingService
     let navigationService: NavigationService
-    let frequencyManagementService: FrequencyManagementService
 
     private var cancellables = Set<AnyCancellable>()
 
@@ -46,7 +45,7 @@ final class ServiceCoordinator: ObservableObject {
     // App settings reference (for transport mode and other app-level settings)
     var appSettings: AppSettings?
 
-    // Frequency sync proposal from APRS fallback
+    // Frequency sync proposal forwarded from APRS service
     @Published var frequencySyncProposal: FrequencySyncProposal? = nil
 
     // 60-second prediction timer (as referenced in comments)
@@ -63,7 +62,6 @@ final class ServiceCoordinator: ObservableObject {
         balloonTrackService: BalloonTrackService,
         landingPointTrackingService: LandingPointTrackingService,
         navigationService: NavigationService,
-        frequencyManagementService: FrequencyManagementService,
         userSettings: UserSettings
     ) {
         // ServiceCoordinator initialized (logged at AppServices level)
@@ -79,7 +77,6 @@ final class ServiceCoordinator: ObservableObject {
         self.balloonTrackService = balloonTrackService
         self.landingPointTrackingService = landingPointTrackingService
         self.navigationService = navigationService
-        self.frequencyManagementService = frequencyManagementService
         self.userSettings = userSettings
 
         // Set up circular reference for PredictionService
@@ -99,6 +96,71 @@ final class ServiceCoordinator: ObservableObject {
         predictionService.setServiceCoordinator(self)
         predictionService.setBalloonPositionService(balloonPositionService)
         // Shared dependencies (predictionCache, userSettings) now passed via constructor
+    }
+
+    // MARK: - Frequency Sync Interface
+
+    /// Accept the frequency sync proposal
+    func acceptFrequencySyncProposal() {
+        guard let proposal = frequencySyncProposal else { return }
+
+        // Delegate to BLE service for frequency sync
+        bleCommunicationService.acceptFrequencySync(frequency: proposal.frequency, probeType: proposal.probeType, source: "ServiceCoordinator-UserAccepted")
+
+        // Clear the proposal
+        frequencySyncProposal = nil
+
+        appLog("ServiceCoordinator: Frequency sync proposal accepted and executed", category: .service, level: .info)
+    }
+
+    /// Reject the frequency sync proposal
+    func rejectFrequencySyncProposal() {
+        guard let proposal = frequencySyncProposal else { return }
+
+        // Delegate to BLE service for rejection handling
+        bleCommunicationService.rejectFrequencySync(frequency: proposal.frequency, probeType: proposal.probeType)
+
+        // Clear the proposal
+        frequencySyncProposal = nil
+
+        appLog("ServiceCoordinator: Frequency sync proposal rejected", category: .service, level: .info)
+    }
+
+    /// Evaluate frequency sync when APRS data is received and RadioSondyGo is connected
+    private func evaluateFrequencySync(with radioData: RadioChannelData) {
+
+        // Only evaluate frequency sync when BLE is ready for commands
+        guard bleCommunicationService.connectionState.canReceiveCommands else {
+            appLog("ServiceCoordinator: BLE not ready for commands (state: \(bleCommunicationService.connectionState)) - skipping frequency sync evaluation", category: .service, level: .debug)
+            return
+        }
+
+        let aprsFreq = radioData.frequency
+        let bleFreq = bleCommunicationService.radioSettings.frequency
+        let freqDifference = abs(aprsFreq - bleFreq)
+        let freqMismatch = freqDifference > 0.01
+
+        let aprsProbeType = radioData.probeType.isEmpty ? "RS41" : radioData.probeType
+        let bleProbeType = bleCommunicationService.radioSettings.probeType
+        let probeTypeMismatch = aprsProbeType != bleProbeType
+
+        appLog("ServiceCoordinator: Frequency comparison - APRS: \(String(format: "%.2f", aprsFreq)) MHz, BLE: \(String(format: "%.2f", bleFreq)) MHz, difference: \(String(format: "%.2f", freqDifference)) MHz, mismatch: \(freqMismatch)", category: .service, level: .info)
+        appLog("ServiceCoordinator: Probe type comparison - APRS: '\(aprsProbeType)', BLE: '\(bleProbeType)', mismatch: \(probeTypeMismatch)", category: .service, level: .info)
+
+        guard freqMismatch || probeTypeMismatch else {
+            appLog("ServiceCoordinator: APRS-BLE frequency/probe match, no sync needed", category: .service, level: .debug)
+            return
+        }
+
+        appLog("ServiceCoordinator: APRS-BLE frequency sync needed - creating user proposal", category: .service, level: .info)
+        createFrequencySyncProposal(aprsFreq: aprsFreq, aprsProbeType: aprsProbeType, bleFreq: bleFreq, bleProbeType: bleProbeType)
+    }
+
+    private func createFrequencySyncProposal(aprsFreq: Double, aprsProbeType: String, bleFreq: Double, bleProbeType: String) {
+        // Create proposal for user confirmation
+        frequencySyncProposal = FrequencySyncProposal(frequency: aprsFreq, probeType: aprsProbeType)
+
+        appLog("ServiceCoordinator: Frequency sync proposal created - APRS: \(String(format: "%.2f", aprsFreq)) MHz \(aprsProbeType) vs BLE: \(String(format: "%.2f", bleFreq)) MHz \(bleProbeType)", category: .service, level: .info)
     }
 
     func initialize() {
@@ -173,8 +235,8 @@ final class ServiceCoordinator: ObservableObject {
             if bleCommunicationService.latestPosition != nil ||
                bleCommunicationService.latestRadioChannel != nil ||
                bleCommunicationService.latestSettings != nil ||
-               !bleCommunicationService.deviceSettings.probeType.isEmpty ||
-               bleCommunicationService.deviceSettings.frequency != 434.0 {
+               !bleCommunicationService.radioSettings.probeType.isEmpty ||
+               bleCommunicationService.radioSettings.frequency != 434.0 {
                 hasReceivedFirstMessage = true
 
                 // Publish telemetry availability status
@@ -208,9 +270,15 @@ final class ServiceCoordinator: ObservableObject {
     private func setupDirectSubscriptions() {
         // Position data subscription for potential future coordinator needs
         // Currently position data is accessed directly by consumers
-        // Frequency sync proposals: Direct pass-through (simplified forwarding)
-        frequencyManagementService.$syncProposal
-            .assign(to: &$frequencySyncProposal)
+
+        // Frequency sync evaluation: Listen for APRS radio data changes
+        balloonPositionService.aprsService.$latestRadioChannel
+            .sink { [weak self] radioData in
+                if let radioData = radioData, radioData.telemetrySource == .aprs {
+                    self?.evaluateFrequencySync(with: radioData)
+                }
+            }
+            .store(in: &cancellables)
 
         // Monitor state changes to control 60-second prediction timer
         balloonPositionService.$currentState
@@ -224,15 +292,6 @@ final class ServiceCoordinator: ObservableObject {
     }
 
 
-    /// Accept the APRS frequency sync proposal
-    func acceptFrequencySyncProposal() {
-        frequencyManagementService.acceptFrequencySyncProposal()
-    }
-
-    /// Reject the APRS frequency sync proposal
-    func rejectFrequencySyncProposal() {
-        frequencyManagementService.rejectFrequencySyncProposal()
-    }
 
     // MARK: - 60-Second Prediction Timer
 

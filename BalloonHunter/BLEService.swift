@@ -62,8 +62,34 @@ import OSLog
 
 // MARK: - BLE Data Models
 
-struct DeviceSettings: Codable {
+// Radio/Sonde Settings - from Type 0/1/2 packets (live telemetry)
+struct RadioSettings: Codable {
     var frequency: Double = 403.5
+    var probeType: String = ""
+
+    static let `default` = RadioSettings()
+
+    // Convert frequency to digit array for UI
+    func frequencyToDigits() -> [Int] {
+        let intFreq = Int(frequency * 100)
+        return [
+            intFreq / 10000,        // First digit (4)
+            (intFreq / 1000) % 10,  // Second digit (0)
+            (intFreq / 100) % 10,   // Third digit (0-6)
+            (intFreq / 10) % 10,    // Fourth digit (first decimal)
+            intFreq % 10            // Fifth digit (second decimal)
+        ]
+    }
+
+    // Update frequency from digit array
+    mutating func updateFrequencyFromDigits(_ digits: [Int]) {
+        guard digits.count >= 5 else { return }
+        frequency = Double(digits[0] * 1000 + digits[1] * 100 + digits[2] * 10 + digits[3]) / 10.0 + Double(digits[4]) / 100.0
+    }
+}
+
+// Device Settings - from Type 3 packets (hardware configuration)
+struct DeviceSettings: Codable {
     var bandwidth: Double = 125.0
     var spreadingFactor: Int = 7
     var codingRate: Int = 5
@@ -72,9 +98,8 @@ struct DeviceSettings: Codable {
     var preambleLength: Int = 8
     var crcEnabled: Bool = true
     var implicitHeader: Bool = false
-    
-    // Additional fields from Type 3 packets
-    var probeType: String = ""
+
+    // Hardware configuration fields from Type 3 packets
     var oledSDA: Int = 21
     var oledSCL: Int = 22
     var oledRST: Int = 16
@@ -110,31 +135,7 @@ struct DeviceSettings: Codable {
         
         // Type 3: Device Configuration (22 fields)
         if components[0] == "3" {
-            // Handle probe type - could be integer (1-5) or string ("RS41", "M20", etc.)
-            let probeTypeComponent = components[1]
-            appLog("DeviceSettings: Parsing probeType from '\(probeTypeComponent)'", category: .ble, level: .debug)
-            
-            if let probeTypeInt = Int(probeTypeComponent) {
-                // Device sent integer - convert to string
-                probeType = convertProbeTypeIntToString(probeTypeInt)
-                appLog("DeviceSettings: Converted integer \(probeTypeInt) to: '\(probeType)'", category: .ble, level: .debug)
-            } else {
-                // Device sent string directly - validate and use it (handle both full and short forms)
-                let upperCaseType = probeTypeComponent.uppercased()
-                if ["RS41", "M20", "M10", "PILOT", "DFM"].contains(upperCaseType) {
-                    probeType = upperCaseType
-                    appLog("DeviceSettings: Using string probeType: '\(probeType)'", category: .ble, level: .debug)
-                } else if upperCaseType == "PIL" {
-                    // Handle shortened PILOT form
-                    probeType = "PILOT"
-                    appLog("DeviceSettings: Converted shortened 'PIL' to 'PILOT'", category: .ble, level: .debug)
-                } else {
-                    probeType = ""
-                    appLog("DeviceSettings: Invalid probeType string '\(probeTypeComponent)' - setting to empty", category: .ble, level: .debug)
-                }
-            }
-            let rawFrequency = Double(components[2]) ?? 434.0
-            frequency = (rawFrequency * 100).rounded() / 100.0
+            // Skip components[1] (probeType) and components[2] (frequency) - these are handled in radioSettings
             oledSDA = Int(components[3]) ?? 21
             oledSCL = Int(components[4]) ?? 22
             oledRST = Int(components[5]) ?? 16
@@ -166,29 +167,6 @@ struct DeviceSettings: Codable {
     // Helper function to convert probe type integer to string
     private func convertProbeTypeIntToString(_ probeTypeInt: Int) -> String {
         return BLECommunicationService.ProbeType.from(int: probeTypeInt)?.name ?? ""
-    }
-    
-    // MARK: - Frequency Calculations (moved from SettingsView for proper separation of concerns)
-    
-    /// Converts frequency to array of digits (moved from SettingsView)
-    func frequencyToDigits() -> [Int] {
-        let freqInt = Int((frequency * 100).rounded())
-        var digits = Array(repeating: 0, count: 5)
-        var remainder = freqInt
-        for i in (0..<5).reversed() {
-            digits[i] = remainder % 10
-            remainder /= 10
-        }
-        return digits
-    }
-    
-    /// Updates frequency from array of digits (moved from SettingsView)
-    mutating func updateFrequencyFromDigits(_ digits: [Int]) {
-        var total = 0
-        for digit in digits {
-            total = total * 10 + digit
-        }
-        frequency = Double(total) / 100.0
     }
 }
 
@@ -264,8 +242,10 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
     private var afcHistory: [Double] = []
     private let afcHistoryMaxSize = 10
 
-    // MARK: - Legacy Properties (state machine compatibility)
-    // Legacy latestTelemetry removed - use latestPosition and latestRadioChannel
+    // MARK: - Settings Properties
+    // Radio/Sonde settings (from Type 0/1/2 packets)
+    @Published var radioSettings: RadioSettings = .default
+    // Device hardware configuration (from Type 3 packets)
     @Published var deviceSettings: DeviceSettings = .default
 
     // Legacy telemetryData stream removed - use three-channel streams
@@ -627,9 +607,17 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
         case "0":
             // Device Basic Info and Status - FSD: 0/probeType/frequency/RSSI/batPercentage/batVoltage/buzmute/softwareVersion/o
             if let (status, radioData) = parseType0Message(components) {
-                // Update deviceSettings with probe type and frequency from Type 0 packet per FSD
-                deviceSettings.probeType = radioData.probeType
-                deviceSettings.frequency = radioData.frequency
+                // Update radioSettings with probe type and frequency from Type 0 packet
+                let previousRadioSettings = radioSettings
+                var updatedRadioSettings = radioSettings
+                updatedRadioSettings.probeType = radioData.probeType
+                updatedRadioSettings.frequency = radioData.frequency
+                radioSettings = updatedRadioSettings
+
+                // Update radio settings in memory if they changed
+                if abs(previousRadioSettings.frequency - radioData.frequency) > 0.005 || previousRadioSettings.probeType != radioData.probeType {
+                    persistenceService.update(radioSettings: radioSettings)
+                }
 
                 latestRadioChannel = radioData
 
@@ -696,9 +684,17 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
                 }
 
                 DispatchQueue.main.async {
-                    // Update deviceSettings with probe type and frequency from Type 1 packet per FSD
-                    self.deviceSettings.probeType = radioData.probeType
-                    self.deviceSettings.frequency = radioData.frequency
+                    // Update radioSettings with probe type and frequency from Type 1 packet
+                    let previousRadioSettings = self.radioSettings
+                    var updatedRadioSettings = self.radioSettings
+                    updatedRadioSettings.probeType = radioData.probeType
+                    updatedRadioSettings.frequency = radioData.frequency
+                    self.radioSettings = updatedRadioSettings
+
+                    // Update radio settings in memory if they changed
+                    if abs(previousRadioSettings.frequency - radioData.frequency) > 0.005 || previousRadioSettings.probeType != radioData.probeType {
+                        self.persistenceService.update(radioSettings: self.radioSettings)
+                    }
 
                     // Update new channels
                     self.latestPosition = positionData
@@ -743,9 +739,17 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
                 appLog("🔴 BLE MSG (Type 2): Invalid field count=\(components.count)", category: .ble, level: .error)
             }
             if let radioData = parseType2Message(components) {
-                // Update deviceSettings with probe type and frequency from Type 2 packet per FSD
-                deviceSettings.probeType = radioData.probeType
-                deviceSettings.frequency = radioData.frequency
+                // Update radioSettings with probe type and frequency from Type 2 packet
+                let previousRadioSettings = radioSettings
+                var updatedRadioSettings = radioSettings
+                updatedRadioSettings.probeType = radioData.probeType
+                updatedRadioSettings.frequency = radioData.frequency
+                radioSettings = updatedRadioSettings
+
+                // Update radio settings in memory if they changed
+                if abs(previousRadioSettings.frequency - radioData.frequency) > 0.005 || previousRadioSettings.probeType != radioData.probeType {
+                    persistenceService.update(radioSettings: radioSettings)
+                }
 
                 latestRadioChannel = radioData
 
@@ -785,44 +789,41 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
             } else {
                 appLog("🔴 BLE MSG (Type 3): Invalid field count=\(components.count)", category: .ble, level: .error)
             }
-            if let settings = parseType3Message(components) {
-                appLog("⚙️ BLE PARSED (Type 3): Device config - callSign=\(settings.callSign) freq=\(String(format: "%.2f", settings.frequency))MHz probeType=\(settings.probeType)", category: .ble, level: .info)
+            if let deviceConfig = parseType3Message(components) {
+                appLog("⚙️ BLE PARSED (Type 3): Device config - callSign=\(deviceConfig.callSign)", category: .ble, level: .info)
                 DispatchQueue.main.async {
-                    let previousSettings = self.deviceSettings
-                    self.deviceSettings = settings
-                    if abs(previousSettings.frequency - settings.frequency) > 0.005 || previousSettings.probeType != settings.probeType {
-                        appLog("BLE: Device settings updated -> freq=\(String(format: "%.2f", settings.frequency))MHz (prev=\(String(format: "%.2f", previousSettings.frequency))) type=\(settings.probeType)", category: .ble, level: .info)
-                    }
-                    self.persistenceService.save(deviceSettings: settings)
+                    self.deviceSettings = deviceConfig
+                    appLog("BLE: Device settings updated from Type 3 packet", category: .ble, level: .info)
+                    self.persistenceService.save(deviceSettings: deviceConfig)
 
                     // Convert to settings data (pure Type 3 configuration, no shared fields)
                     let settingsData = SettingsData(
                         sondeName: "",
                         timestamp: Date(),
                         telemetrySource: .ble,
-                        oledSDA: settings.oledSDA,
-                        oledSCL: settings.oledSCL,
-                        oledRST: settings.oledRST,
-                        ledPin: settings.ledPin,
-                        RS41Bandwidth: settings.RS41Bandwidth,
-                        M20Bandwidth: settings.M20Bandwidth,
-                        M10Bandwidth: settings.M10Bandwidth,
-                        PILOTBandwidth: settings.PILOTBandwidth,
-                        DFMBandwidth: settings.DFMBandwidth,
-                        frequencyCorrection: settings.frequencyCorrection,
-                        batPin: settings.batPin,
-                        batMin: settings.batMin,
-                        batMax: settings.batMax,
-                        batType: settings.batType,
-                        lcdType: settings.lcdType,
-                        nameType: settings.nameType,
-                        buzPin: settings.buzPin,
-                        callSign: settings.callSign,
-                        bluetoothStatus: settings.bluetoothStatus,
-                        lcdStatus: settings.lcdStatus,
-                        serialSpeed: settings.serialSpeed,
-                        serialPort: settings.serialPort,
-                        aprsName: settings.aprsName
+                        oledSDA: deviceConfig.oledSDA,
+                        oledSCL: deviceConfig.oledSCL,
+                        oledRST: deviceConfig.oledRST,
+                        ledPin: deviceConfig.ledPin,
+                        RS41Bandwidth: deviceConfig.RS41Bandwidth,
+                        M20Bandwidth: deviceConfig.M20Bandwidth,
+                        M10Bandwidth: deviceConfig.M10Bandwidth,
+                        PILOTBandwidth: deviceConfig.PILOTBandwidth,
+                        DFMBandwidth: deviceConfig.DFMBandwidth,
+                        frequencyCorrection: deviceConfig.frequencyCorrection,
+                        batPin: deviceConfig.batPin,
+                        batMin: deviceConfig.batMin,
+                        batMax: deviceConfig.batMax,
+                        batType: deviceConfig.batType,
+                        lcdType: deviceConfig.lcdType,
+                        nameType: deviceConfig.nameType,
+                        buzPin: deviceConfig.buzPin,
+                        callSign: deviceConfig.callSign,
+                        bluetoothStatus: deviceConfig.bluetoothStatus,
+                        lcdStatus: deviceConfig.lcdStatus,
+                        serialSpeed: deviceConfig.serialSpeed,
+                        serialPort: deviceConfig.serialPort,
+                        aprsName: deviceConfig.aprsName
                     )
                     self.latestSettings = settingsData
 
@@ -830,7 +831,7 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
                     // are handled by Type 0 packets to avoid duplication
 
                     // Device configuration is now managed through deviceSettings
-                    appLog("BLE: Updated device config - freq=\(String(format: "%.2f", settings.frequency)) probeType=\(settings.probeType)", category: .ble, level: .debug)
+                    appLog("BLE: Updated device config (hardware only)", category: .ble, level: .debug)
                 }
             }
             
@@ -850,6 +851,26 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
             return String(adjusted)
         }
         return rawValue
+    }
+
+    // MARK: - Shared Radio Channel Parsing (eliminates duplication)
+
+    private func parseRadioChannelData(probeType: String, frequency: Double, rssi: Double, batteryPercentage: Int, batteryVoltage: Double, buzmute: Bool, sondeName: String = "", softwareVersion: String = "", afcFrequency: Int = 0, burstKillerTime: Int = 0) -> RadioChannelData {
+        return RadioChannelData(
+            sondeName: sondeName,
+            timestamp: Date(),
+            telemetrySource: .ble,
+            probeType: probeType,
+            frequency: frequency,
+            softwareVersion: softwareVersion,
+            batteryVoltage: batteryVoltage,
+            batteryPercentage: batteryPercentage,
+            signalStrength: Int(rssi),
+            buzmute: buzmute,
+            afcFrequency: afcFrequency,
+            burstKillerEnabled: burstKillerTime > 0,
+            burstKillerTime: burstKillerTime
+        )
     }
 
     // Type 0: Device Basic Info and Status
@@ -877,21 +898,15 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
             timestamp: Date()
         )
 
-        // Create RadioChannelData from Type 0 packet
-        let radioData = RadioChannelData(
-            sondeName: "", // Not provided in Type 0 packets
-            timestamp: Date(),
-            telemetrySource: .ble,
+        // Create RadioChannelData from Type 0 packet using shared parser
+        let radioData = parseRadioChannelData(
             probeType: probeType,
             frequency: frequency,
-            softwareVersion: softwareVersion,
-            batteryVoltage: batteryVoltage,
+            rssi: rssiValue,
             batteryPercentage: batteryPercentage,
-            signalStrength: Int(rssiValue),
+            batteryVoltage: batteryVoltage,
             buzmute: buzmute,
-            afcFrequency: 0, // Not provided in Type 0 packets
-            burstKillerEnabled: false,
-            burstKillerTime: 0
+            softwareVersion: softwareVersion
         )
 
         return (deviceStatus, radioData)
@@ -946,19 +961,16 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
             telemetrySource: .ble
         )
 
-        let radioChannelData = RadioChannelData(
-            sondeName: sondeName,
-            timestamp: timestamp,
-            telemetrySource: .ble,
+        let radioChannelData = parseRadioChannelData(
             probeType: probeTypeRaw,
             frequency: frequency,
-            softwareVersion: components[19],
-            batteryVoltage: batteryVoltage,
+            rssi: rssi,
             batteryPercentage: batteryPercentage,
-            signalStrength: Int(rssi),
+            batteryVoltage: batteryVoltage,
             buzmute: buzmute,
+            sondeName: sondeName,
+            softwareVersion: components[19],
             afcFrequency: Int(components[11]) ?? 0,
-            burstKillerEnabled: components[12] == "1",
             burstKillerTime: Int(components[13]) ?? 0
         )
 
@@ -984,21 +996,17 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
         let buzmute = components[8] == "1"
         let softwareVersion = components[9]
 
-        // Create RadioChannelData directly from Type 2 packet
-        return RadioChannelData(
-            sondeName: sondeName,
-            timestamp: Date(),
-            telemetrySource: .ble,
+        // Create RadioChannelData from Type 2 packet using shared parser
+        return parseRadioChannelData(
             probeType: probeType,
             frequency: frequency,
-            softwareVersion: softwareVersion,
-            batteryVoltage: batteryVoltage,
+            rssi: rssiValue,
             batteryPercentage: batteryPercentage,
-            signalStrength: Int(rssiValue),
+            batteryVoltage: batteryVoltage,
             buzmute: buzmute,
-            afcFrequency: afcFrequency,
-            burstKillerEnabled: false,
-            burstKillerTime: 0
+            sondeName: sondeName,
+            softwareVersion: softwareVersion,
+            afcFrequency: afcFrequency
         )
     }
 
@@ -1008,21 +1016,39 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
             appLog("BLE: Type 3 parse mismatch - expected leading '3', found '\(components.first ?? "nil")'", category: .ble, level: .error)
             return nil
         }
-        guard components.count >= 22 else { 
+        guard components.count >= 22 else {
             appLog("BLE: Type 3 message has insufficient components: \(components.count), expected 22", category: .ble, level: .error)
-            return nil 
+            return nil
         }
-        
+
         appLog("BLE: Parsing Type 3 message with \(components.count) components", category: .ble, level: .debug)
-        appLog("BLE: Type 3 components[1] (probeType): '\(components[1])'", category: .ble, level: .debug)
-        
-        // Reconstruct the message string and use DeviceSettings.parse()
-        let messageString = components.joined(separator: "/")
+
+        // Parse device settings (hardware configuration only)
         var deviceSettings = DeviceSettings.default
-        deviceSettings.parse(message: messageString)
-        
-        appLog("BLE: Parsed deviceSettings.probeType: '\(deviceSettings.probeType)'", category: .ble, level: .debug)
-        
+
+        // Skip components[1] (probeType) and components[2] (frequency) - these go to radioSettings via Type 0/1/2 packets
+        deviceSettings.oledSDA = Int(components[3]) ?? 21
+        deviceSettings.oledSCL = Int(components[4]) ?? 22
+        deviceSettings.oledRST = Int(components[5]) ?? 16
+        deviceSettings.ledPin = Int(components[6]) ?? 25
+        deviceSettings.RS41Bandwidth = Int(components[7]) ?? 1
+        deviceSettings.M20Bandwidth = Int(components[8]) ?? 7
+        deviceSettings.M10Bandwidth = Int(components[9]) ?? 7
+        deviceSettings.PILOTBandwidth = Int(components[10]) ?? 7
+        deviceSettings.DFMBandwidth = Int(components[11]) ?? 6
+        deviceSettings.frequencyCorrection = Int(components[12]) ?? 0
+        deviceSettings.callSign = components[13]
+        deviceSettings.batPin = Int(components[14]) ?? 35
+        deviceSettings.batMin = Int(components[15]) ?? 2950
+        deviceSettings.batMax = Int(components[16]) ?? 4180
+        deviceSettings.batType = Int(components[17]) ?? 1
+        deviceSettings.lcdType = Int(components[18]) ?? 0
+        deviceSettings.nameType = Int(components[19]) ?? 0
+        deviceSettings.buzPin = Int(components[20]) ?? 0
+        deviceSettings.softwareVersion = components[21]
+
+        appLog("BLE: Parsed device settings (hardware config only)", category: .ble, level: .debug)
+
         return deviceSettings
     }
 
@@ -1169,16 +1195,16 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
         sendCommand(command: command)
 
         DispatchQueue.main.async {
-            var updatedSettings = self.deviceSettings
-            if abs(updatedSettings.frequency - roundedFrequency) > 0.005 || updatedSettings.probeType != probeType.name {
-                updatedSettings.frequency = roundedFrequency
-                updatedSettings.probeType = probeType.name
-                self.deviceSettings = updatedSettings
-                appLog("BLE: Updated cached device settings after frequency change (freq=\(formattedFrequency) type=\(probeType.name))", category: .ble, level: .debug)
-                self.persistenceService.save(deviceSettings: updatedSettings)
+            var updatedRadioSettings = self.radioSettings
+            if abs(updatedRadioSettings.frequency - roundedFrequency) > 0.005 || updatedRadioSettings.probeType != probeType.name {
+                updatedRadioSettings.frequency = roundedFrequency
+                updatedRadioSettings.probeType = probeType.name
+                self.radioSettings = updatedRadioSettings
+                appLog("BLE: Updated cached radio settings after frequency change (freq=\(formattedFrequency) type=\(probeType.name))", category: .ble, level: .debug)
+                self.persistenceService.update(radioSettings: updatedRadioSettings)
             }
 
-            // Frequency sync updates handled through deviceSettings
+            // Frequency sync updates handled through radioSettings
         }
     }
 
@@ -1196,9 +1222,9 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
         // Determine probe type
         let targetProbeType: ProbeType
         if let probeTypeString = probeType {
-            targetProbeType = ProbeType.from(string: probeTypeString) ?? ProbeType.from(string: deviceSettings.probeType) ?? .rs41
+            targetProbeType = ProbeType.from(string: probeTypeString) ?? ProbeType.from(string: radioSettings.probeType) ?? .rs41
         } else {
-            targetProbeType = ProbeType.from(string: deviceSettings.probeType) ?? .rs41
+            targetProbeType = ProbeType.from(string: radioSettings.probeType) ?? .rs41
         }
 
         appLog("BLE: Frequency update request from \(source) - \(String(format: "%.2f", frequency)) MHz (\(targetProbeType.name))", category: .ble, level: .info)
@@ -1266,7 +1292,7 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
         let proposalKey = "\(String(format: "%.2f", frequency))-\(probeType)"
         rejectedProposals[proposalKey] = Date()
 
-        appLog("BLE: User rejected frequency sync proposal - keeping current settings (\(String(format: "%.2f", deviceSettings.frequency)) MHz, \(deviceSettings.probeType)). Cooldown: 5 minutes", category: .ble, level: .info)
+        appLog("BLE: User rejected frequency sync proposal - keeping current settings (\(String(format: "%.2f", radioSettings.frequency)) MHz, \(radioSettings.probeType)). Cooldown: 5 minutes", category: .ble, level: .info)
     }
 
     // MARK: - Frequency Validation and Utilities
@@ -1288,12 +1314,12 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
 
     /// Get current frequency for UI display
     func getCurrentFrequency() -> Double {
-        return deviceSettings.frequency
+        return radioSettings.frequency
     }
 
     /// Get current probe type for UI display
     func getCurrentProbeType() -> String {
-        return deviceSettings.probeType
+        return radioSettings.probeType
     }
 
 

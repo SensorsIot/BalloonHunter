@@ -389,7 +389,7 @@ final class MapPresenter: ObservableObject {
             }
             .store(in: &cancellables)
 
-        coordinator.frequencyManagementService.$syncProposal
+        coordinator.$frequencySyncProposal
             .receive(on: DispatchQueue.main)
             .sink { [weak self] proposal in
                 self?.frequencySyncProposal = proposal

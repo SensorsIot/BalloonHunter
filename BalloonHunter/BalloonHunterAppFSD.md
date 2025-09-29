@@ -164,22 +164,6 @@ Services @Published → MapPresenter @Published → Views @EnvironmentObject (no
 🔄 **Service Coordination:**
 ServiceCoordinator handles app infrastructure only, UI state handled by MapPresenter
 
-## Dealing with Frequencies
-
-### Frequency Sync Detection & Management
-
-- **Startup with live BLE telemetry** — If BLE packets are received, BLE RadioChannelData are treated as the source of truth.
-- **Startup without BLE telemetry** — If BLE packets are not yet available, the app uses APRS RadioChannelData instead. Frequency and probe type have to be transmitted to RadioSondyGo using the BLE command. If RadioSondyGo is ready for commands, immediately, otherwise when it connected (Ready for commands).
-- **Enhanced startup frequency sync** — Fixed startup frequency sync to trigger popup when APRS-BLE frequencies differ, with proper APRS radio data subscription and comprehensive debug logging.
-- **APRS telemetry mismatch** — While APRS fallback is active, the app compares the APRS frequency and probe type against the current RadioSondyGo settings. When a mismatch is detected, a confirmation alert appears; accepting applies the APRS values via the BLE command, while cancelling defers the change for a period of 5 minutes.
-
-### Frequency Sync Implementation Details
-
-- **APRS radio data subscription** — FrequencyManagementService directly subscribes to APRS radio data for startup frequency sync comparison, ensuring reliable frequency mismatch detection across all app states.
-- **Enhanced logging** — Comprehensive debug logging added for frequency sync evaluation and comparison to aid troubleshooting and verification.
-- **State-specific evaluation** — Improved frequency sync logic handles different app states (startup, liveBLE, waitingForAPRS) with appropriate frequency comparison strategies.
-- **Frequency comparison logic** — Fixed comparison logic to properly detect frequency differences and trigger sync proposals when needed.
-
 ## The State Machine
 
 ### Overview
@@ -820,7 +804,7 @@ Discover and connect to MySondyGo devices over Bluetooth Low Energy, subscribe t
 
 
 
-### APRS Telemetry Service
+### APRS Service
 
 **Purpose**  
 Provide SondeHub-driven telemetry frames whenever BLE telemetry data is unavailable. It is also used to program the correct frequendy/sonde type in RadioSondyGo.
@@ -1133,6 +1117,7 @@ The `ServiceCoordinator` is responsible for determining the single, authoritativ
 6. **UI state management** — Owns camera mode (`isHeadingMode`), overlay toggles, buzzer mute, centre-on-all logic, and guards against updates while sheets (settings) are open.
 7. **Apple Maps hand-off** — `openInAppleMaps()` launches navigation using the selected transport mode (car → driving, bike → cycling on iOS 14+ with walking fallback). Tracks the last destination so the coordinator can detect navigation updates.
 8. **Optional APRS bridge** — When an APRS provider is enabled, the coordinator brokers SondeHub serial prompts, pauses APRS polling whenever fresh BLE telemetry is available, and synchronises RadioSondyGo frequency/probe type to match APRS telemetry when the streams differ.
+9. **Frequency Mismatch** - If a RadioSondyGo is connected, it compares its freuqncy with the APRS frequency and, if a mismatch is detected, a confirmation alert appears on screen. This screen asks if the user wants to accept the frequency change of the RadioSondyGo to the APRS frequency. If accepted, APRS frequency is transmittes via the BLE command, while cancelling defers the change for a period of 5 minutes.
 
 ## Startup
 
@@ -1324,45 +1309,35 @@ While the `MapPresenter` handles complex presentation logic for the map, simpler
 
 ## Settings
 
-### Settings Views
-
-No calculations or business logic in views. Search for an appropriate service to place and publish them.
-
-### Secondary Settings Views
-
-The following views are accessed from the top navigation bar of the main settings screen. Each is presented as a separate sub-view.
-
-#### Prediction Settings
-* **Purpose**: Allows the user to configure the parameters used for flight predictions.
-* **Controls**: Provides fields for "Burst Altitude", "Ascent Rate", "Descent Rate", and "Station ID".
-* **Navigation**: Accessed via "Prediction Settings" button in the top toolbar. Three buttons ("Prediction Settings", "Device Settings", "Tune") are arranged evenly across the toolbar using Spacer elements.
-* **Saving**: This view has a "Done" button. When tapped or when the view disappears (via onDisappear), the values are saved to the UserSettings object via PersistenceService, and the user is returned to the main settings screen.
-
-#### Device Settings
-* **Purpose**: Allows for detailed configuration of the MySondyGo device hardware and radio parameters.
-* **Layout**: This view is organized into tabs for "Pins", "Battery", "Radio", and "Other".
-* **Navigation**: Accessed via "Device Settings" button in the top toolbar, evenly spaced with other buttons.
-* **Saving**: This view has a "Done" button. When tapped or when the view disappears (via onDisappear), the app compares the modified settings to their initial values, sends the necessary update commands to the device, saves the complete configuration to PersistenceService, and returns the user to the main settings screen.
-
-#### Tune View
-* **Purpose**: Provides an interface for the AFC (Automatic Frequency Control) tune function.
-* **Controls**: Displays the live AFC value, a "Transfer" button to copy the value, and an input field with a "Save" button to apply the new frequency correction.
-* **Navigation**: Accessed via "Tune" button in the top toolbar, evenly spaced with other buttons. Has a "Done" button that returns the user to the main settings screen (selectedTab = 0).
-* **Saving**: The "Save" button within the view is used to apply the tune value immediately to the device and PersistenceService. No onDisappear save needed as values are saved explicitly.
+The settings window is triggered by a button in the button bar. It enters the Sonde Settings window and, with a swipe down, saves the sonde settings (frequency and sonde type). If a mismatch with the current settings exists, transmits it to the device via BLE command ("o{f=frequency/tipo=probeType}o"),  and closes the window.  If no sonde is for command or transmitting telemetry, it displays a red warning text.
 
 ### Sonde Settings Window
 
-In long range state, triggered by a swipe-up in the data panel. In final approach state, triggered by a swipe-up in the map.. 
+When opened, this window displays the currently configured sonde type and frequency, allowing the user to change them. 
 
-When opened, this window will display the currently configured sonde type and frequency, allowing the user to change them. If no valid data is available, a message is displayed instead (Sonde not connected). The frequency input has to be done without keyboard. All digits with the exception of the first have to be selectable independently.
+#### Keyboard-free interface: 
+
+ \- **5 Independent Wheel Pickers**: Each digit of the frequency (XXX.XX MHz) has its own wheel picker
+
+ \- **Large Font Display**: Each digit displays in 40pt bold font for clear visibility
+
+ \- **Horizontal Layout**: The 5 pickers are arranged horizontally with "MHz" label at the end
+
+ \- **Fixed Height**: Each picker has a 180pt height with clipped overflow
+
+ \- **Restricted Range**: Only 400-406 MHz frequencies are allowed
+
+ \- **Real-time Validation**: Invalid digits show in gray, valid ones in primary color
+
+ \- **Cascading Adjustments**: When a digit changes, dependent positions auto-adjust
+
+ \- **Reversion Protection**: Invalid selections automatically revert to previous valid value
 
 **Navigation**: The main settings screen shows three buttons evenly distributed across the top toolbar: "Prediction Settings", "Device Settings", and "Tune". These provide access to the secondary settings views.
 
 **Revert Button**: A "Revert" button is located below the frequency selector in the main content area as a full-width button. This button resets the values to the values present when the screen was entered.
 
-**Saving**: Settings are automatically saved when the view disappears (onDisappear). A BLE message to set the sonde type and its frequency "o{f=frequency/tipo=probeType}o" according to the MySondyGo specs is sent, and settings are persisted via PersistenceService.
-
-5.2.1 Available sonde types (enum)
+#### Sonde types (enum)
 
 1 RS41
 
@@ -1376,30 +1351,31 @@ When opened, this window will display the currently configured sonde type and fr
 
 The human readable text (e.g. RS41) should be used in the display. However, the single number (e.g. 1\) has to be transferred in the command
 
-### Device Settings
+### Secondary Settings Views
 
-**Access**: Triggered by the "Device Settings" button in the main settings toolbar (evenly spaced with "Prediction Settings" and "Tune" buttons).
+The following views are accessed from the top navigation bar of the main settings screen. Each is presented as a separate sub-view.
 
-**Layout**: Opens a new sheet with four tabs: "Pins", "Battery", "Radio", and "Other" (Note: "Prediction" tab was removed as those settings moved to the separate Prediction Settings view).
+#### Prediction Settings
+* **Purpose**: Allows the user to configure the parameters used for flight predictions.
+* **Controls**: Provides fields for "Burst Altitude", "Ascent Rate", "Descent Rate", and "Station ID".
+* **Navigation**: Accessed via "Prediction Settings" button in the top toolbar. Three buttons ("Prediction Settings", "Device Settings", "Tune") are arranged evenly across the toolbar using Spacer elements.
+* **Saving**: This view has a "Done" button. When tapped or when the view disappears (via onDisappear), the values are saved to the UserSettings object via PersistenceService, and the user is returned to the main settings screen.
 
-**Implementation**: Uses DeviceSettings struct with `@Published` properties and PersistenceService integration.
+#### Tune View
+* **Purpose**: Provides an interface for the AFC (Automatic Frequency Control) tune function.
+* **Controls**: Displays the live AFC value, a "Transfer" button to copy the value, and an input field with a "Save" button to apply the new frequency correction.
+* **Navigation**: Accessed via "Tune" button in the top toolbar, evenly spaced with other buttons. Has a "Done" button that returns the user to the main settings screen (selectedTab = 0).
+* **Saving**: The "Save" button within the view is used to apply the tune value immediately to the device and PersistenceService. No onDisappear save needed as values are saved explicitly.
 
-**Process Flow**:
+#### Device Settings
 
-* **onAppear**: The view calls `loadDeviceSettings()` which:
-  - Requests current settings from MySondyGo via BLE `getParameters()` command
-  - Loads persisted settings from PersistenceService as fallback
-  - Initializes `deviceSettingsCopy` with current values and `initialDeviceSettings` for comparison
+**Access**: Triggered by the "Device Settings" button in the main settings toolbar.
 
-* **User Modifications**: Changes are made directly to `deviceSettingsCopy` which provides immediate UI feedback via SwiftUI bindings.
+**Startup**: The device settings have to be read from RadioSondyGo via BLE command and the cache has to be updated
 
-* **onDisappear**: The view calls `saveDeviceSettings()` which:
-  - Compares `deviceSettingsCopy` against `initialDeviceSettings` to identify changes
-  - Calls `sendDeviceSettingsToBLE()` to send only modified settings via BLE commands
-  - Saves complete configuration to PersistenceService via `save(deviceSettings:)` and `save(userSettings:)`
-  - Handles connection state validation (`guard deviceConfigReceived else { return }`)
+**Layout**: Opens a new sheet with four tabs: "Pins", "Battery", "Radio", and "Other" 
 
-**Navigation**: "Done" button calls `dismiss()` which triggers the onDisappear save process and returns to main settings.
+**Done**: "Done" button  saves the changed settings to RadioSondyGo via BLE and returns to main settings.
 
 
 ### Tab Structure & Contents in Settings
@@ -1431,9 +1407,9 @@ Each tab contains logically grouped settings:
 
 * vBatType (batType)  
 
-  * 0: Linear  
-    1: Sigmoidal  
-    2: Asigmoidal
+  0: Linear  
+  1: Sigmoidal  
+  2: Asigmoidal
 
 
 #### Radio Tab
@@ -1450,7 +1426,8 @@ Each tab contains logically grouped settings:
 
 * dfm.rxbw (DFMBandwidth)
 
-  4. #### Others Tab
+
+#### Others Tab
 
 * lcdOn (lcdStatus)  
 
@@ -1463,15 +1440,16 @@ Each tab contains logically grouped settings:
 * aprsName (aprsName / nameType)
 
 
-#### Prediction Tab
+#### Prediction View
 
 (These values are stored permanently on the iPhone via PersistenceService and are never transmitted to the device)
 
 * burstAltitude  
-
 * ascentRate  
-
 * descentRate
+* Station ID (shown in a different block)
+
+The values are saved when the Done button is pressed
 
 
 ### Tune Function

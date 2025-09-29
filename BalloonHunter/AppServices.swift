@@ -28,7 +28,6 @@ final class AppServices: ObservableObject {
     let landingPointTrackingService: LandingPointTrackingService
     let routeCalculationService: RouteCalculationService
     let navigationService: NavigationService
-    let frequencyManagementService: FrequencyManagementService
 
     // MARK: - Coordinators (moved to ServiceCoordinator)
 
@@ -72,11 +71,6 @@ final class AppServices: ObservableObject {
             balloonTrackService: balloonTrackService
         )
 
-        // 6. Initialize frequency management service
-        self.frequencyManagementService = FrequencyManagementService(
-            bleService: bleCommunicationService,
-            balloonPositionService: balloonPositionService
-        )
 
         // LandingPointService and RouteCalculationService creation moved to ServiceCoordinator
 

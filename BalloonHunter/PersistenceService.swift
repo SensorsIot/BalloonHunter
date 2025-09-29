@@ -17,6 +17,7 @@ final class PersistenceService: ObservableObject {
     // Internal storage for cached data
     @Published var userSettings: UserSettings
     @Published var deviceSettings: DeviceSettings?
+    @Published var radioSettings: RadioSettings?
     private var internalTracks: [String: [BalloonTrackPoint]] = [:]
     private var internalLandingHistories: [String: [LandingPredictionPoint]] = [:]
     private var burstKillerRecords: [String: BurstKillerRecord] = [:]
@@ -29,6 +30,9 @@ final class PersistenceService: ObservableObject {
         
         // Load device settings
         self.deviceSettings = Self.loadDeviceSettings()
+
+        // Radio settings are ephemeral - populated from live telemetry packets
+        self.radioSettings = nil
         
         // Load tracks
         self.internalTracks = Self.loadAllTracks()
@@ -91,7 +95,15 @@ final class PersistenceService: ObservableObject {
         }
         return nil
     }
-    
+
+    // MARK: - Radio Settings (Ephemeral - In-Memory Only)
+
+    func update(radioSettings: RadioSettings) {
+        self.radioSettings = radioSettings
+        // Note: Radio settings are NOT persisted - they come fresh from telemetry
+        appLog("PersistenceService: radioSettings updated in memory: freq=\(String(format: "%.2f", radioSettings.frequency))MHz type=\(radioSettings.probeType)", category: .service, level: .debug)
+    }
+
     // MARK: - Track Management
     
     func saveBalloonTrack(sondeName: String, track: [BalloonTrackPoint]) {

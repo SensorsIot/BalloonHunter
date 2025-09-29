@@ -71,7 +71,6 @@ struct TrackingMapView: View {
                     HStack(spacing: 12) {
                         // Settings button
                         Button {
-                            mapPresenter.requestDeviceParameters()
                             showSettings = true
                         } label: {
                             Image(systemName: "gearshape")
@@ -433,7 +432,6 @@ struct TrackingMapView: View {
         balloonTrackService: mockAppServices.balloonTrackService,
         landingPointTrackingService: mockAppServices.landingPointTrackingService,
         navigationService: mockAppServices.navigationService,
-        frequencyManagementService: mockAppServices.frequencyManagementService,
         userSettings: mockAppServices.userSettings
     )
     let mockPresenter = MapPresenter(
