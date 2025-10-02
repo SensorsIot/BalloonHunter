@@ -21,6 +21,7 @@ struct SondeHubSondeData: Codable {
     let temp: Double?
     let humidity: Double?
     let pressure: Double?
+    let uploader_position: String?
 
     // Computed property to get the best available frequency
     var effectiveFrequency: Double {
@@ -233,9 +234,12 @@ final class APRSDataService: ObservableObject {
         do {
             let siteResponse = try await fetchSiteData()
 
+            // Filter out ground-based test sondes before selecting
+            let flyingSondes = filterGroundTestSondes(from: Array(siteResponse.values))
+
             // Find the most recent sonde by timestamp
-            guard let latestSonde = findLatestSonde(from: Array(siteResponse.values)) else {
-                appLog("APRSDataService: No sondes found for station \(currentStationId)", category: .service, level: .info)
+            guard let latestSonde = findLatestSonde(from: flyingSondes) else {
+                appLog("APRSDataService: No flying sondes found for station \(currentStationId)", category: .service, level: .info)
                 return
             }
 
@@ -317,6 +321,55 @@ final class APRSDataService: ObservableObject {
             appLog("APRSDataService: JSON decoding failed: \(error)", category: .service, level: .error)
             throw APRSError.decodingError(error.localizedDescription)
         }
+    }
+
+    private func filterGroundTestSondes(from sondes: [SondeHubSondeData]) -> [SondeHubSondeData] {
+        // Filter out ground-based test sondes (distance < 1km from uploader)
+        return sondes.filter { sonde in
+            guard let uploaderPosString = sonde.uploader_position else {
+                // No uploader position available, include by default
+                return true
+            }
+
+            // Parse uploader position "lat,lon"
+            let components = uploaderPosString.split(separator: ",")
+            guard components.count == 2,
+                  let uploaderLat = Double(components[0]),
+                  let uploaderLon = Double(components[1]) else {
+                return true // Can't parse, include by default
+            }
+
+            // Calculate distance between sonde and uploader
+            let distance = calculateDistance(
+                lat1: sonde.lat, lon1: sonde.lon,
+                lat2: uploaderLat, lon2: uploaderLon
+            )
+
+            // Filter out if distance < 1000 meters (1 km)
+            let isGroundTest = distance < 1000.0
+
+            if isGroundTest {
+                appLog("APRSDataService: Ground test sonde \(sonde.serial) filtered out (distance: \(Int(distance))m from uploader)", category: .service, level: .info)
+            }
+
+            return !isGroundTest
+        }
+    }
+
+    private func calculateDistance(lat1: Double, lon1: Double, lat2: Double, lon2: Double) -> Double {
+        // Haversine formula for distance between two coordinates
+        let earthRadius = 6371000.0 // meters
+
+        let dLat = (lat2 - lat1) * .pi / 180.0
+        let dLon = (lon2 - lon1) * .pi / 180.0
+
+        let a = sin(dLat / 2) * sin(dLat / 2) +
+                cos(lat1 * .pi / 180.0) * cos(lat2 * .pi / 180.0) *
+                sin(dLon / 2) * sin(dLon / 2)
+
+        let c = 2 * atan2(sqrt(a), sqrt(1 - a))
+
+        return earthRadius * c
     }
 
     private func findLatestSonde(from sondes: [SondeHubSondeData]) -> SondeHubSondeData? {

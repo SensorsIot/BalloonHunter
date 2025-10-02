@@ -201,11 +201,8 @@ final class BalloonPositionService: ObservableObject {
 
         let now = Date()
 
-        // Throttle repetitive position processing logs - only log every 10 packets
-        processingCount += 1
-        if processingCount % 10 == 1 {
-            appLog("BalloonPositionService: Processing \(source) position (\(processingCount), every 10th) for \(position.sondeName)", category: .service, level: .info)
-        }
+        // Log every APRS position for tracking
+        appLog("BalloonPositionService: Processing \(source) position for \(position.sondeName) at [\(String(format: "%.5f", position.latitude)), \(String(format: "%.5f", position.longitude))] alt=\(Int(position.altitude))m", category: .service, level: .info)
 
         // Update position data
         currentPositionData = position
@@ -671,13 +668,14 @@ final class BalloonPositionService: ObservableObject {
         }
 
         // Check for old APRS data (age-based landing)
+        // Use telemetry timestamp (when balloon last transmitted) to detect landing
         let positionAge = Date().timeIntervalSince(currentPosition.timestamp)
         let isAprsPosition = currentPosition.telemetrySource == .aprs
         let aprsLandingAgeThreshold = 120.0 // 2 minutes
 
         if isAprsPosition && positionAge > aprsLandingAgeThreshold {
             balloonPhase = .landed
-            appLog("BalloonPositionService: APRS age-based landing detected - balloon marked as LANDED", category: .service, level: .info)
+            appLog("BalloonPositionService: APRS age-based landing detected - balloon marked as LANDED (telemetry age: \(Int(positionAge))s)", category: .service, level: .info)
             return
         }
 
@@ -688,10 +686,12 @@ final class BalloonPositionService: ObservableObject {
             balloonPhase = .landed
         } else {
             // Determine flight phase based on vertical speed
-            if currentPosition.verticalSpeed >= 0 {
+            if currentPosition.verticalSpeed > 0 {
                 balloonPhase = .ascending
-            } else {
+            } else if currentPosition.verticalSpeed < 0 {
                 balloonPhase = currentPosition.altitude < 10_000 ? .descendingBelow10k : .descendingAbove10k
+            } else {
+                balloonPhase = .unknown
             }
         }
 
@@ -705,10 +705,14 @@ final class BalloonPositionService: ObservableObject {
         if balloonPhase == .landed, let balloonTrackService = balloonTrackService, let landingPosition = balloonTrackService.landingPosition {
             balloonDisplayPosition = landingPosition
             currentLocationService.updateBalloonDisplayPosition(landingPosition)
+            appLog("BalloonPositionService: Display position set to landing point [\(String(format: "%.5f", landingPosition.latitude)), \(String(format: "%.5f", landingPosition.longitude))]", category: .service, level: .info)
         } else if let position = currentPositionData {
             let livePosition = CLLocationCoordinate2D(latitude: position.latitude, longitude: position.longitude)
             balloonDisplayPosition = livePosition
             currentLocationService.updateBalloonDisplayPosition(livePosition)
+            appLog("BalloonPositionService: Display position set to live position [\(String(format: "%.5f", livePosition.latitude)), \(String(format: "%.5f", livePosition.longitude))]", category: .service, level: .info)
+        } else {
+            appLog("BalloonPositionService: Cannot update display position - no position data available (phase=\(balloonPhase))", category: .service, level: .debug)
         }
     }
 }

@@ -206,12 +206,18 @@ This architecture ensures that:
 ### Telemetry Source Management
 
 **BLE Telemetry State Management:**
-- BLE connection and telemetry status is managed via `BLETelemetryState` enum with three states:
-  - `BLEnotconnected`: No BLE connection established
-  - `readyForCommands`: BLE connected but waiting for first telemetry packet (UI shows red BLE icon)
-  - `BLEtelemetryIsReady`: BLE connected and actively receiving telemetry (UI shows green flashing animation when data received)
+- BLE connection and telemetry status is managed via `BLEConnectionState` enum with three states:
+  - `notConnected`: No BLE connection established
+  - `readyForCommands`: BLE connected but not receiving Type 1 telemetry packets (UI shows red BLE icon)
+  - `dataReady`: BLE connected and actively receiving Type 1 telemetry packets with position data (UI shows green flashing animation)
 - The enum provides computed properties: `isConnected`, `canReceiveCommands`, `hasTelemetry`
-- **UI Integration**: BLE icon color reflects connection state - red for readyForCommands (connected but no data), green flash animation for active telemetry reception
+- **Connection State Transitions:**
+  - `notConnected` → `readyForCommands`: When first BLE packet (any type) is received
+  - `readyForCommands` → `dataReady`: When Type 1 packet (telemetry with position) is received
+  - `dataReady` → `readyForCommands`: When no Type 1 packets received for 10 seconds (only Type 0/2/3 status packets)
+  - Background staleness check runs every 3 seconds with 60-second threshold for final downgrade
+- **Type 1 Packet Requirement:** `hasTelemetry` returns `true` only when in `dataReady` state (actively receiving Type 1 packets with position data). Type 0 (device status), Type 2 (partial telemetry), and Type 3 (settings) packets do NOT qualify as telemetry.
+- **UI Integration**: BLE icon color reflects connection state - red for readyForCommands (connected but no position data), green flash animation for active telemetry reception
 
 **APRS Telemetry:**
 - `aprsTelemetryIsAvailable`: TRUE when the latest SondeHub call returned and was parsed successfully.
@@ -806,14 +812,22 @@ Discover and connect to MySondyGo devices over Bluetooth Low Energy, subscribe t
 
 ### APRS Service
 
-**Purpose**  
+**Purpose**
 Provide SondeHub-driven telemetry frames whenever BLE telemetry data is unavailable. It is also used to program the correct frequendy/sonde type in RadioSondyGo.
 
 #### Input Triggers
 
 - Startup
-- Dtate machine
+- State machine
 - Station-ID changes in settings (e.g., switching to a different launch site).
+
+#### Ground Test Sonde Filtering
+
+The APRS service filters out ground-based test sondes to prevent them from being selected as the target balloon:
+- **Distance Filtering**: Sondes within 1 km of the uploader position are automatically filtered out
+- **Uploader Position Source**: Uses the `uploader_position` field from SondeHub API (format: "latitude,longitude")
+- **Haversine Calculation**: Accurate distance calculation between sonde and uploader using Earth's curvature
+- **Logging**: Filtered ground test sondes are logged with their distance from uploader for debugging
 
 #### Data it Consumes
 
@@ -944,6 +958,12 @@ Store the most recent telemetry snapshot (coordinates, altitude, sonde name, ver
 - **Telemetry Management**: Subscribes to both BLE and APRS telemetry streams, implementing arbitration logic (APRS only used when BLE unavailable).
 - **Availability State**: Manages `aprsTelemetryIsAvailable` based on APRS connection status and telemetry flow. BLE state managed by BLECommunicationService.
 - **Position Tracking**: Caches the latest packet, updating timestamp and derived values. Recomputes distance when user location changes.
+- **Balloon Phase Detection**: Determines flight phase based on vertical speed:
+  - `ascending`: vertical speed > 0
+  - `descendingAbove10k`: vertical speed < 0 AND altitude ≥ 10,000m
+  - `descendingBelow10k`: vertical speed < 0 AND altitude < 10,000m
+  - `unknown`: vertical speed = 0
+  - `landed`: Detected via vector analysis (BalloonTrackService) or APRS age > 120s
 - **Staleness Detection**: A 1 Hz timer updates `timeSinceLastUpdate` and `isTelemetryStale` for downstream consumers.
 - **APRS Integration**: Automatically notifies APRSTelemetryService of BLE health changes to control APRS polling.
 - **Burst Killer**: Manages burst killer countdown from BLE, with persistence fallback for APRS sessions.
@@ -972,6 +992,7 @@ Build the flight history, smooth velocities, detect landings, derive descent met
 2. **Track updates** — Each telemetry sample is converted into a `BalloonTrackPoint`; if a previous point exists the service recomputes horizontal speed via great-circle distance and vertical speed via altitude delta for consistency. The point is appended, descent regression is updated, and observers receive `trackUpdated`.
 3. **Speed smoothing** — Maintains Hampel buffers (window 10, k=3) to reject outliers, applies deadbands near zero, and feeds an exponential moving average (τ = 10 s) to publish smoothed horizontal/vertical speeds alongside the raw telemetry values within `motionMetrics`.
 4. **Adjusted descent rate** — Looks back 60 s over the track, computes interval descent rates, takes the median, and keeps a 20-entry rolling average; the latest value is exposed through `motionMetrics` (and zeroed when the balloon is landed).
+
 5. **Landing detection** — **MOVED TO BALLOONPOSITIONSERVICE**: Vector analysis algorithm calculates net movement across dynamic 5-20 packet windows. Landing detected when net speed < 3 km/h AND altitude < 3000m. Confidence ≥ 75 % flips `balloonPhase` to `.landed` and averages the buffered coordinates for the landing point; confidence < 40 % for three consecutive updates (or too few samples) returns the phase to the appropriate flight state. APRS packets older than 120 s also force `.landed` so stale data doesn’t masquerade as an in-flight balloon.
 6. **Staleness** — A 1 Hz timer flips `isTelemetryStale = true` whenever the latest telemetry is more than 3 s old.
 7. **Persistence** — Saves the track every 10 telemetry points via `saveBalloonTrack`. Helpers expose the full track for app-shutdown persistence (`saveOnAppClose`). CSV logging for each telemetry sample is routed to `DebugCSVLogger`.

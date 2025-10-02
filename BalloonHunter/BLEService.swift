@@ -256,7 +256,12 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
     // Diagnostic properties (private, for internal logging only)
     private var lastMessageType: String? = nil
 
-    
+    // Scan timeout tracking
+    var scanStartTime: Date? = nil
+    private var scanTimeoutTask: Task<Void, Never>? = nil
+    let scanTimeout: TimeInterval = 5.0 // 5 seconds to find a device
+
+
 
     init(persistenceService: PersistenceService) {
         self.persistenceService = persistenceService
@@ -344,27 +349,41 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
             appLog("BLE: Cannot start scanning - Bluetooth not powered on", category: .ble, level: .error)
             return
         }
-        
+
         appLog("BLE: Starting scan for MySondyGo devices", category: .ble, level: .info)
-        
+
+        // Track scan start time
+        scanStartTime = Date()
+
         centralManager.scanForPeripherals(withServices: [UART_SERVICE_UUID], options: [CBCentralManagerScanOptionAllowDuplicatesKey: false])
         publishHealthEvent(.healthy, message: "BLE scanning started")
-        
-        // Secondary scan removed - production mode
+
+        // Start scan timeout timer
+        scanTimeoutTask?.cancel()
+        scanTimeoutTask = Task { @MainActor [weak self] in
+            guard let self = self else { return }
+            try? await Task.sleep(nanoseconds: UInt64(self.scanTimeout * 1_000_000_000))
+            self.handleScanTimeout()
+        }
     }
 
     func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral, advertisementData: [String : Any], rssi RSSI: NSNumber) {
         let peripheralName = peripheral.name ?? "Unknown"
         let _ = peripheral.identifier.uuidString
-        
-        // Basic device discovery logging
-        
+
+        // Log all discovered devices for debugging
+        appLog("🔍 BLE: Discovered device '\(peripheralName)' (RSSI: \(RSSI)dBm)", category: .ble, level: .info)
+
         // MySondyGo device detection with enhanced matching
         let isMySondyDevice = peripheral.name?.contains("MySondy") == true
-        
+
         if isMySondyDevice {
             appLog("🎯 BLE: Found MySondyGo device: \(peripheralName)", category: .ble, level: .info)
-            
+
+            // Cancel scan timeout since we found a device
+            scanTimeoutTask?.cancel()
+            scanTimeoutTask = nil
+
             // Stop scanning and connect
             central.stopScan()
             connectedPeripheral = peripheral
@@ -381,6 +400,16 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
                 appLog("🔍 BLE: Device services: [\(serviceList)]", category: .ble, level: .debug)
             }
         }
+    }
+
+    private func handleScanTimeout() {
+        guard connectionState == .notConnected else { return }
+
+        appLog("BLE: Scan timeout - no MySondyGo device found after \(scanTimeout)s", category: .ble, level: .info)
+        centralManager.stopScan()
+        publishHealthEvent(.healthy, message: "BLE scan timeout - no device found")
+
+        // Connection state remains .notConnected, which is a valid "answer" for startup
     }
 
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
@@ -585,6 +614,21 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
         if messageType == "1" && connectionState == .readyForCommands {
             connectionState = .dataReady
             appLog("🟢 BLE: Data ready - Type 1 packet received", category: .ble, level: .info)
+        }
+
+        // Downgrade from dataReady if receiving non-telemetry packets (Type 0, 2, 3)
+        // and no Type 1 packet in the last 10 seconds
+        if messageType != "1" && connectionState == .dataReady {
+            if let lastUpdate = lastTelemetryUpdateTime {
+                let interval = Date().timeIntervalSince(lastUpdate)
+                if interval > 10.0 {
+                    connectionState = .readyForCommands
+                    appLog("🟡 BLE: Downgraded to readyForCommands - no Type 1 telemetry for \(Int(interval))s (receiving Type \(messageType) only)", category: .ble, level: .info)
+                }
+            } else {
+                connectionState = .readyForCommands
+                appLog("🟡 BLE: Downgraded to readyForCommands - no Type 1 telemetry ever received", category: .ble, level: .info)
+            }
         }
         
         // Check if this is the first packet and publish telemetry availability event

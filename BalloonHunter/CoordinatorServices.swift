@@ -220,12 +220,19 @@ extension ServiceCoordinator {
         }
     }
 
-    /// Check if BLE service has provided a definitive answer (enum published after first packet)
+    /// Check if BLE service has provided a definitive answer
     private func hasBleProvivedAnswer() -> Bool {
-        // BLE answered if: Bluetooth is off OR received valid connection state (.readyForCommands or .dataReady)
-        return bleCommunicationService.centralManager.state != .poweredOn ||
-               bleCommunicationService.connectionState == .readyForCommands ||
-               bleCommunicationService.connectionState == .dataReady
+        // BLE answered if:
+        // 1. Bluetooth is off, OR
+        // 2. Connected/ready state reached (.readyForCommands or .dataReady), OR
+        // 3. Scan timeout occurred (BLE service stopped scanning after 5s timeout)
+        let bluetoothOff = bleCommunicationService.centralManager.state != .poweredOn
+        let connected = bleCommunicationService.connectionState == .readyForCommands ||
+                       bleCommunicationService.connectionState == .dataReady
+        let scanTimedOut = bleCommunicationService.scanStartTime != nil &&
+                          Date().timeIntervalSince(bleCommunicationService.scanStartTime!) >= bleCommunicationService.scanTimeout
+
+        return bluetoothOff || connected || scanTimedOut
     }
 
     /// Check if APRS service has provided a definitive answer (data or error)

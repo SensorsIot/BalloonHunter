@@ -520,6 +520,7 @@ final class PredictionService: ObservableObject {
         let launchTime = ISO8601DateFormatter().string(from: Date().addingTimeInterval(60))
         // FSD: Use settings burst altitude while ascending; when descending, send current altitude + 10m
         // Ensure burst altitude is always greater than current altitude (API requirement)
+        // Determine burst altitude based on whether balloon is descending
         let burstAlt = position.verticalSpeed >= 0 ?
             max(userSettings.burstAltitude, position.altitude + 100.0) :
             position.altitude + 10.0
