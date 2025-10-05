@@ -146,9 +146,41 @@ final class RouteCalculationService: ObservableObject {
     private let currentLocationService: CurrentLocationService
     private var lastDestination: CLLocationCoordinate2D?
     private var appSettings: AppSettings?
+    private var cancellables = Set<AnyCancellable>()
 
     init(currentLocationService: CurrentLocationService) {
         self.currentLocationService = currentLocationService
+
+        // CRITICAL: Subscribe to user location updates
+        // This ensures route calculation happens automatically when location becomes available,
+        // even if calculateRoute() was called before GPS fix was ready
+        currentLocationService.$locationData
+            .sink { [weak self] locationData in
+                guard let self = self else { return }
+
+                // If location becomes unavailable, clear the route
+                guard let locationData = locationData else {
+                    if self.currentRoute != nil {
+                        appLog("RouteCalculationService: User location lost, clearing route", category: .service, level: .error)
+                        self.currentRoute = nil
+                    }
+                    return
+                }
+
+                // Only calculate if we have a pending destination
+                guard let destination = self.lastDestination else {
+                    return  // No destination stored, nothing to calculate
+                }
+
+                // Only calculate if we don't have a route yet (avoid redundant calculations)
+                guard self.currentRoute == nil else {
+                    return  // Route already exists for this destination
+                }
+
+                appLog("RouteCalculationService: ✅ User location now available at [\(String(format: "%.4f", locationData.latitude)), \(String(format: "%.4f", locationData.longitude))], calculating pending route to destination", category: .service, level: .info)
+                self.calculateAndPublishRoute(from: locationData, to: destination)
+            }
+            .store(in: &cancellables)
     }
 
     /// Set AppSettings reference for transport mode persistence
@@ -175,10 +207,16 @@ final class RouteCalculationService: ObservableObject {
 
     /// Calculate route with internal user location lookup - called by service chain
     func calculateRoute(to destination: CLLocationCoordinate2D) {
+        appLog("RouteCalculationService: calculateRoute called to destination [\(String(format: "%.4f", destination.latitude)), \(String(format: "%.4f", destination.longitude))]", category: .service, level: .info)
+
+        // Store destination for retry when user location becomes available
+        lastDestination = destination
+
         guard let userLocation = currentLocationService.locationData else {
-            appLog("RouteCalculationService: Cannot calculate route - no user location available", category: .service, level: .debug)
+            appLog("RouteCalculationService: User location not yet available, will calculate route automatically when location is ready", category: .service, level: .info)
             return
         }
+        appLog("RouteCalculationService: User location available at [\(String(format: "%.4f", userLocation.latitude)), \(String(format: "%.4f", userLocation.longitude))], proceeding with route calculation", category: .service, level: .info)
         calculateAndPublishRoute(from: userLocation, to: destination)
     }
 
@@ -192,11 +230,13 @@ final class RouteCalculationService: ObservableObject {
 
         Task { @MainActor in
             isCalculatingRoute = true
+            appLog("RouteCalculationService: Starting route calculation with transport mode: \(effectiveTransportMode)", category: .service, level: .info)
             do {
                 let route = try await calculateRoute(from: userLocation, to: destination, transportMode: effectiveTransportMode)
                 currentRoute = route
+                appLog("RouteCalculationService: Route calculated successfully - distance: \(String(format: "%.1f", route.distance))m, time: \(String(format: "%.0f", route.expectedTravelTime))s, \(route.coordinates.count) points", category: .service, level: .info)
             } catch {
-                appLog("RouteCalculationService: Failed to calculate route: \(error.localizedDescription)", category: .service, level: .info)
+                appLog("RouteCalculationService: Failed to calculate route: \(error.localizedDescription)", category: .service, level: .error)
                 currentRoute = nil
             }
             isCalculatingRoute = false

@@ -26,7 +26,6 @@ final class CurrentLocationService: NSObject, ObservableObject, CLLocationManage
     private var lastSignificantMovementLocation: CLLocationCoordinate2D? = nil
     private var currentBalloonDisplayPosition: CLLocationCoordinate2D?
     private var isHeadingModeActive: Bool = false
-    private var backgroundTimer: Timer?
     private var cancellables = Set<AnyCancellable>()
     private var userLocationLogCount: Int = 0
 
@@ -46,8 +45,8 @@ final class CurrentLocationService: NSObject, ObservableObject, CLLocationManage
     override init() {
         super.init()
         setupLocationManagers()
-        startBackgroundLocationService()
-        appLog("CurrentLocationService: Initialized with dual-mode architecture (background active)", category: .service, level: .info)
+        // Background location service disabled - location fetched on-demand and on foreground resume
+        appLog("CurrentLocationService: Initialized with dual-mode architecture (on-demand mode)", category: .service, level: .info)
     }
 
     private func setupLocationManagers() {
@@ -76,26 +75,14 @@ final class CurrentLocationService: NSObject, ObservableObject, CLLocationManage
         guard isHeadingModeActive else { return }
         isHeadingModeActive = false
 
-        appLog("CurrentLocationService: Disabling precision mode, returning to background mode", category: .service, level: .info)
+        appLog("CurrentLocationService: Disabling precision mode", category: .service, level: .info)
         precisionLocationManager.stopUpdatingLocation()
     }
 
-    private func startBackgroundLocationService() {
-        // Start 30-second timer for background location updates
-        backgroundTimer?.invalidate()
-        backgroundTimer = Timer.scheduledTimer(withTimeInterval: 30.0, repeats: true) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                self?.requestSingleBackgroundUpdate()
-            }
-        }
-
-        // Get initial location immediately
-        requestSingleBackgroundUpdate()
-        appLog("CurrentLocationService: Background location service started (30-second intervals)", category: .service, level: .info)
-    }
-
-    private func requestSingleBackgroundUpdate() {
+    /// Request a single location update (used for on-demand location fetching)
+    func requestCurrentLocation() {
         backgroundLocationManager.requestLocation()
+        appLog("CurrentLocationService: Requesting current location (on-demand)", category: .service, level: .debug)
     }
 
     func requestPermission() {
@@ -110,25 +97,19 @@ final class CurrentLocationService: NSObject, ObservableObject, CLLocationManage
         switch status {
         case .authorizedWhenInUse:
             isLocationPermissionGranted = true
-            backgroundLocationManager.startUpdatingLocation()
-
-            // Request "Always" permission for better background operation
-            backgroundLocationManager.requestAlwaysAuthorization()
+            // On-demand location only - fetch when app is active
             publishHealthEvent(.healthy, message: "Location permission granted (when in use)")
 
         case .authorizedAlways:
             isLocationPermissionGranted = true
-            backgroundLocationManager.startUpdatingLocation()
-
-            // Enable significant location changes for background updates
-            backgroundLocationManager.startMonitoringSignificantLocationChanges()
+            // On-demand location only - no background updates needed
             publishHealthEvent(.healthy, message: "Location permission granted (always)")
 
         case .denied, .restricted:
             isLocationPermissionGranted = false
             publishHealthEvent(.unhealthy("Location permission denied"), message: "Location permission denied")
         case .notDetermined:
-            // Request when-in-use first, then upgrade to always
+            // Request when-in-use only (no need for "Always" permission)
             backgroundLocationManager.requestWhenInUseAuthorization()
             publishHealthEvent(.degraded("Location permission not determined"), message: "Location permission not determined")
         @unknown default:

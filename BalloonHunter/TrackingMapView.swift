@@ -110,7 +110,7 @@ struct TrackingMapView: View {
                         .background(.ultraThinMaterial)
                         .cornerRadius(8)
 
-                        // Buzzer mute toggle
+                        // Buzzer mute toggle (hidden but keeps space when BLE not connected)
                         Button {
                             let newMuteState = !mapPresenter.isBuzzerMuted
                             mapPresenter.setMuteState(newMuteState)
@@ -127,6 +127,8 @@ struct TrackingMapView: View {
                         }
                         .background(.ultraThinMaterial)
                         .cornerRadius(8)
+                        .opacity(mapPresenter.connectionStatus == .connected ? 1.0 : 0.0)
+                        .disabled(mapPresenter.connectionStatus != .connected)
 
                         // Apple Maps navigation button (only show when landing point available)
                         if shouldShowNavigationButton {
@@ -153,9 +155,14 @@ struct TrackingMapView: View {
                     
                     // 1. Balloon Track: Historic track as thin red line
                     let trackPoints = mapPresenter.trackPoints
+                    let _ = appLog("🗺️ MAP: Track rendering - \(trackPoints.count) points available", category: .ui, level: .info)
                     if trackPoints.count >= 2 {
                         let coordinates = trackPoints.map { CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude) }
                         let trackPolyline = MKPolyline(coordinates: coordinates, count: coordinates.count)
+                        if let first = coordinates.first, let last = coordinates.last {
+                            let _ = appLog("🗺️ MAP: Track from [\(String(format: "%.5f", first.latitude)), \(String(format: "%.5f", first.longitude))] to [\(String(format: "%.5f", last.latitude)), \(String(format: "%.5f", last.longitude))]", category: .ui, level: .info)
+                        }
+                        let _ = appLog("🗺️ MAP: Drawing track polyline with \(coordinates.count) coordinates, RED color, 2pt width", category: .ui, level: .info)
                         MapPolyline(trackPolyline)
                             .stroke(.red, lineWidth: 2)
                     }
@@ -170,8 +177,15 @@ struct TrackingMapView: View {
                     // 3. Planned Route: Green path from user to landing point (when needed for navigation)
                     if routeVisible,
                        let userRoute = mapPresenter.userRoute {
+                        let _ = appLog("🗺️ MAP: Drawing route polyline, GREEN color, 3pt width", category: .ui, level: .info)
                         MapPolyline(userRoute)
                             .stroke(.green, lineWidth: 3)
+                    } else {
+                        if !routeVisible {
+                            let _ = appLog("🗺️ MAP: Route NOT visible (routeVisible=false, state=\(mapPresenter.balloonPositionService.currentState.description), within200m=\(isWithin200mOfLandedBalloon))", category: .ui, level: .info)
+                        } else if mapPresenter.userRoute == nil {
+                            let _ = appLog("🗺️ MAP: Route NOT visible (userRoute is nil)", category: .ui, level: .info)
+                        }
                     }
 
                     // 4. Landing prediction history: Purple polyline connecting Sondehub landing estimates

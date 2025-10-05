@@ -19,15 +19,11 @@
 	<string>This app uses Bluetooth to communicate with MySondyGo weather balloon tracking devices.</string>
 	<key>NSBluetoothPeripheralUsageDescription</key>
 	<string>This app uses Bluetooth to communicate with MySondyGo weather balloon tracking devices.</string>
-	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-	<string>This app needs location access to track your position relative to the weather balloon landing site for navigation during recovery operations.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>This app needs location access to show your position on the map and provide navigation to the balloon landing site.</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>bluetooth-central</string>
-		<string>location</string>
-		<string>background-processing</string>
 	</array>
 	<key>NSServices</key>
 	<array>

@@ -24,6 +24,7 @@ in‑code markup for quick reference while working on the startup sequence.
 1) Service Initialization
    - Initialize core services as early as possible.
    - Present the logo page immediately during startup.
+   - Request user location EARLY so GPS has time to resolve before route calculation.
 
 2) Connect Device
    - BLE service attempts to connect to MySondyGo.
@@ -71,70 +72,49 @@ extension ServiceCoordinator {
         let startTime = Date()
         let maxStartupTime: TimeInterval = 15.0 // BLE timeout (5s) + APRS timeout (5s) + buffer (5s)
 
-        // Overall startup timeout task
-        let startupTask = Task {
-            // Step 1: Service Initialization (already done)
-            await MainActor.run {
-                currentStartupStep = 1
-                startupProgress = "Step 1: Services"
-            }
-            appLog("STARTUP: Step 1 - Service initialization complete", category: .general, level: .info)
-
-            // Step 2: Start both services and wait for definitive answers
-            await MainActor.run {
-                currentStartupStep = 2
-                startupProgress = "Step 2: BLE & APRS"
-            }
-            async let bleResult = startBLEConnectionWithTimeout()
-            async let aprsTask: Void = primeAPRSStartupData()
-
-            let (_, _) = await bleResult
-            await aprsTask
-
-            // Wait for definitive answers from both services
-            await waitForServiceAnswers()
-
-            // Step 3: Load persistence data and complete startup
-            await MainActor.run {
-                currentStartupStep = 3
-                startupProgress = "Step 3: Data & Startup"
-            }
-            await loadAllPersistenceData()
-            balloonPositionService.completeStartup()
-
-            // Step 4: End startup - hand control to state machine
-            let totalTime = Date().timeIntervalSince(startTime)
-            await MainActor.run {
-                isStartupComplete = true
-                showLogo = false
-                showTrackingMap = true
-            }
-
-            appLog("STARTUP: Complete ✅ Services answered, control handed to state machine (\(String(format: "%.1f", totalTime))s total)", category: .general, level: .info)
+        // Step 1: Service Initialization (already done) + Request user location early
+        await MainActor.run {
+            currentStartupStep = 1
+            startupProgress = "Step 1: Services"
         }
 
-        // Create timeout task
-        let timeoutTask = Task {
-            try await Task.sleep(nanoseconds: UInt64(maxStartupTime * 1_000_000_000))
-            await MainActor.run {
-                startupProgress = "💀 Something horrible happened"
-                appLog("STARTUP: TIMEOUT ☠️ Startup exceeded \(maxStartupTime)s limit", category: .general, level: .error)
-            }
+        // Request user location EARLY so it has time to resolve before route calculation
+        appLog("STARTUP: Step 1 - Requesting user location (early for route calculation)", category: .general, level: .info)
+        currentLocationService.requestCurrentLocation()
+
+        appLog("STARTUP: Step 1 - Service initialization complete", category: .general, level: .info)
+
+        // Step 2: Start both services and wait for definitive answers
+        await MainActor.run {
+            currentStartupStep = 2
+            startupProgress = "Step 2: BLE & APRS"
+        }
+        async let bleResult = startBLEConnectionWithTimeout()
+        async let aprsTask: Void = primeAPRSStartupData()
+
+        let (_, _) = await bleResult
+        await aprsTask
+
+        // Wait for definitive answers from both services (with timeout)
+        await waitForServiceAnswers(maxWaitTime: maxStartupTime - Date().timeIntervalSince(startTime))
+
+        // Step 3: Load persistence data and complete startup
+        await MainActor.run {
+            currentStartupStep = 3
+            startupProgress = "Step 3: Data & Startup"
+        }
+        await loadAllPersistenceData()
+        balloonPositionService.completeStartup()
+
+        // Step 4: End startup - hand control to state machine
+        let totalTime = Date().timeIntervalSince(startTime)
+        await MainActor.run {
+            isStartupComplete = true
+            showLogo = false
+            showTrackingMap = true
         }
 
-        // Race between startup and timeout
-        await withTaskGroup(of: Void.self) { group in
-            group.addTask {
-                await startupTask.value
-                timeoutTask.cancel()
-            }
-            group.addTask {
-                try? await timeoutTask.value
-                startupTask.cancel()
-            }
-            await group.next()
-            group.cancelAll()
-        }
+        appLog("STARTUP: Complete ✅ Control handed to state machine (\(String(format: "%.1f", totalTime))s total)", category: .general, level: .info)
     }
     
     
@@ -206,13 +186,22 @@ extension ServiceCoordinator {
     }
 
     /// Wait for definitive answers from both BLE and APRS services
-    private func waitForServiceAnswers() async {
+    private func waitForServiceAnswers(maxWaitTime: TimeInterval) async {
+        let startTime = Date()
+
         while true {
             let bleAnswered = hasBleProvivedAnswer()
             let aprsAnswered = hasAprsProvidedAnswer()
 
             if bleAnswered && aprsAnswered {
                 appLog("STARTUP: Both services provided definitive answers", category: .general, level: .info)
+                return
+            }
+
+            // Check if we've exceeded max wait time
+            let elapsed = Date().timeIntervalSince(startTime)
+            if elapsed >= maxWaitTime {
+                appLog("STARTUP: Timeout waiting for services (BLE: \(bleAnswered), APRS: \(aprsAnswered)) - transitioning to noTelemetry state", category: .general, level: .error)
                 return
             }
 

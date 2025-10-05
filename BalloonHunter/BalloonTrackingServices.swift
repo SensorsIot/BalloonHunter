@@ -128,6 +128,15 @@ final class BalloonPositionService: ObservableObject {
     // Set reference to LandingPointTrackingService for service chain
     func setLandingPointTrackingService(_ landingPointTrackingService: LandingPointTrackingService) {
         self.landingPointTrackingService = landingPointTrackingService
+
+        // Subscribe to landing point updates from LandingPointTrackingService
+        landingPointTrackingService.$currentLandingPoint
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] point in
+                self?.landingPoint = point
+            }
+            .store(in: &cancellables)
+
         appLog("BalloonPositionService: LandingPointTrackingService configured", category: .service, level: .info)
     }
     
@@ -593,6 +602,16 @@ final class BalloonPositionService: ObservableObject {
         evaluateDataState()
     }
 
+    /// Refresh current state's service configuration (for foreground resume)
+    /// Re-applies the current state's logic to ensure services are properly configured
+    func refreshCurrentState() {
+        appLog("BalloonPositionService: Refreshing current state (\(currentState)) service configuration", category: .service, level: .info)
+        handleStateTransition(to: currentState)
+
+        // Fill track gaps from APRS historical data when refreshing state
+        balloonTrackService?.fillTrackGapsFromAPRS()
+    }
+
     /// Mark startup sequence as complete and trigger final state evaluation
     func completeStartup() {
         isStartupComplete = true
@@ -744,6 +763,7 @@ final class BalloonTrackService: ObservableObject {
     
     private let persistenceService: PersistenceService
     let balloonPositionService: BalloonPositionService
+    private var aprsService: APRSDataService?
     private var cancellables = Set<AnyCancellable>()
     
     // Track management
@@ -827,10 +847,43 @@ final class BalloonTrackService: ObservableObject {
 
     /// Load any persisted balloon data at startup
     private func loadPersistedDataAtStartup() {
-        // Try to load any existing track data from persistence
-        // Note: We don't know the sonde name yet, so we can't load specific tracks
-        // But we can prepare the service for when telemetry arrives
-        appLog("BalloonTrackService: Ready to load persisted data on first telemetry", category: .service, level: .info)
+        // Load the most recent sonde's track from persistence
+        let allTracks = persistenceService.getAllTracks()
+
+        guard !allTracks.isEmpty else {
+            appLog("BalloonTrackService: No persisted tracks found", category: .service, level: .info)
+            return
+        }
+
+        // Find the track with the most recent timestamp
+        var mostRecentSondeName: String?
+        var mostRecentTimestamp: Date?
+
+        for (sondeName, track) in allTracks {
+            guard let lastPoint = track.last else { continue }
+
+            if mostRecentTimestamp == nil || lastPoint.timestamp > mostRecentTimestamp! {
+                mostRecentTimestamp = lastPoint.timestamp
+                mostRecentSondeName = sondeName
+            }
+        }
+
+        // Load the most recent track
+        if let sondeName = mostRecentSondeName,
+           let track = allTracks[sondeName],
+           !track.isEmpty {
+            self.currentBalloonTrack = track
+            self.currentBalloonName = sondeName
+            appLog("BalloonTrackService: Loaded most recent persisted track for '\(sondeName)' with \(track.count) points (last update: \(track.last!.timestamp))", category: .service, level: .info)
+
+            // Manually trigger update for subscribers
+            trackUpdated.send()
+
+            // Fill gaps from APRS historical data after loading persisted track
+            fillTrackGapsFromAPRS()
+        } else {
+            appLog("BalloonTrackService: No valid persisted tracks to load", category: .service, level: .info)
+        }
     }
     
     private func setupSubscriptions() {
@@ -864,23 +917,17 @@ final class BalloonTrackService: ObservableObject {
            incomingName != currentBalloonName {
             appLog("BalloonTrackService: New sonde detected - \(incomingName), switching from \(currentBalloonName ?? "none")", category: .service, level: .info)
 
-            // Load persisted track for this sonde if available
-            let persistedTrack = persistenceService.loadTrackForCurrentSonde(sondeName: incomingName)
-            if let track = persistedTrack {
-                self.currentBalloonTrack = track
-                appLog("BalloonTrackService: Loaded persisted track for \(incomingName) with \(self.currentBalloonTrack.count) points", category: .service, level: .info)
-            } else {
-                self.currentBalloonTrack = []
-                appLog("BalloonTrackService: No persisted track found - starting fresh track for \(incomingName)", category: .service, level: .info)
-            }
-            self.landingPosition = nil
-
-            // Clean up old tracks if switching sondes
+            // Clean up ALL old tracks FIRST when switching sondes
             if let currentName = currentBalloonName,
                currentName != incomingName {
-                appLog("BalloonTrackService: Switching from different sonde (\(currentName)) - purging old tracks", category: .service, level: .info)
+                appLog("BalloonTrackService: Switching from different sonde (\(currentName)) - purging all old tracks", category: .service, level: .info)
                 persistenceService.purgeAllTracks()
             }
+
+            // Start with fresh track for new sonde
+            self.currentBalloonTrack = []
+            self.landingPosition = nil
+            appLog("BalloonTrackService: Starting fresh track for \(incomingName)", category: .service, level: .info)
 
             smoothingCounter = 0
             currentBalloonName = incomingName
@@ -1124,6 +1171,60 @@ final class BalloonTrackService: ObservableObject {
         trackUpdated.send()
     }
 
+    /// Set APRS service for historical track filling
+    func setAPRSService(_ aprsService: APRSDataService) {
+        self.aprsService = aprsService
+    }
+
+    /// Fill track gaps from APRS historical telemetry
+    /// Runs asynchronously and does not block UI
+    func fillTrackGapsFromAPRS() {
+        guard let sondeName = currentBalloonName else {
+            appLog("BalloonTrackService: Cannot fill gaps - no sonde name available", category: .service, level: .debug)
+            return
+        }
+
+        guard let aprsService = aprsService else {
+            appLog("BalloonTrackService: Cannot fill gaps - APRS service not available", category: .service, level: .debug)
+            return
+        }
+
+        // Run in background Task to avoid blocking UI
+        Task {
+            appLog("BalloonTrackService: Starting APRS historical track fill for '\(sondeName)'", category: .service, level: .info)
+
+            // Debug: Show local track endpoints
+            if let firstPoint = currentBalloonTrack.first {
+                appLog("BalloonTrackService: Local track first point - lat: \(String(format: "%.5f", firstPoint.latitude)), lon: \(String(format: "%.5f", firstPoint.longitude)), alt: \(String(format: "%.0f", firstPoint.altitude))m", category: .service, level: .info)
+            }
+            if let lastPoint = currentBalloonTrack.last {
+                appLog("BalloonTrackService: Local track last point - lat: \(String(format: "%.5f", lastPoint.latitude)), lon: \(String(format: "%.5f", lastPoint.longitude)), alt: \(String(format: "%.0f", lastPoint.altitude))m", category: .service, level: .info)
+            }
+            if let landing = landingPosition {
+                appLog("BalloonTrackService: Landing point - lat: \(String(format: "%.5f", landing.latitude)), lon: \(String(format: "%.5f", landing.longitude))", category: .service, level: .info)
+            }
+
+            let newPoints = await aprsService.fetchHistoricalTelemetryToFillGaps(
+                serial: sondeName,
+                localTrack: currentBalloonTrack
+            )
+
+            if !newPoints.isEmpty {
+                // Merge new points into current track
+                await MainActor.run {
+                    let combinedTrack = currentBalloonTrack + newPoints
+                    // Sort by timestamp
+                    currentBalloonTrack = combinedTrack.sorted { $0.timestamp < $1.timestamp }
+                    appLog("BalloonTrackService: Added \(newPoints.count) historical points, total track now has \(currentBalloonTrack.count) points", category: .service, level: .info)
+                    trackUpdated.send()
+                    saveCurrentTrack()
+                }
+            } else {
+                appLog("BalloonTrackService: No new historical points to add", category: .service, level: .info)
+            }
+        }
+    }
+
     // Exposed helper to mark the balloon as landed at a given coordinate
     func setBalloonAsLanded(at coordinate: CLLocationCoordinate2D) {
         landingPosition = coordinate
@@ -1143,6 +1244,7 @@ final class BalloonTrackService: ObservableObject {
 final class LandingPointTrackingService: ObservableObject {
     @Published private(set) var landingHistory: [LandingPredictionPoint] = []
     @Published private(set) var lastLandingPrediction: LandingPredictionPoint? = nil
+    @Published private(set) var currentLandingPoint: CLLocationCoordinate2D? = nil
 
     private let persistenceService: PersistenceService
     private let balloonTrackService: BalloonTrackService
@@ -1180,6 +1282,9 @@ final class LandingPointTrackingService: ObservableObject {
             pendingLandingPoint = point
             return
         }
+
+        // Update current landing point (published for UI and other services)
+        currentLandingPoint = point
 
         // Handle different sources
         switch source {
@@ -1231,6 +1336,7 @@ final class LandingPointTrackingService: ObservableObject {
     func resetHistory() {
         landingHistory = []
         lastLandingPrediction = nil
+        currentLandingPoint = nil
     }
 
     private func handleSondeChange(newName: String?) {

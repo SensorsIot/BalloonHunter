@@ -51,7 +51,7 @@ final class MapPresenter: ObservableObject {
 
     private let coordinator: ServiceCoordinator
     private let balloonTrackService: BalloonTrackService
-    private let balloonPositionService: BalloonPositionService
+    let balloonPositionService: BalloonPositionService  // Internal access for TrackingMapView debugging
     private let landingPointTrackingService: LandingPointTrackingService
     private let currentLocationService: CurrentLocationService
     private let aprsService: APRSDataService
@@ -412,6 +412,7 @@ final class MapPresenter: ObservableObject {
 
         balloonTrackService.$currentBalloonTrack
             .sink { [weak self] points in
+                appLog("MapPresenter: Received track update with \(points.count) points", category: .general, level: .info)
                 self?.trackPoints = points
             }
             .store(in: &cancellables)

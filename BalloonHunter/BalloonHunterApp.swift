@@ -37,6 +37,7 @@ import UIKit // Import UIKit for UIApplication
 import OSLog // Import OSLog for appLog function
 import UserNotifications // Import for notification handling
 import MapKit // Import for Apple Maps integration
+import CoreBluetooth // Import for BLE state checks
 
 @main
 struct BalloonHunterApp: App {
@@ -185,7 +186,56 @@ struct BalloonHunterApp: App {
                 )
                 appLog("BalloonHunterApp: App became inactive, saved data.", category: .lifecycle, level: .info)
             }
+
+            if newScenePhase == .active && (oldScenePhase == .background || oldScenePhase == .inactive) {
+                // App returned to foreground - refresh services and state
+                appLog("BalloonHunterApp: App became active, refreshing services.", category: .lifecycle, level: .info)
+
+                Task {
+                    await handleForegroundResume()
+                }
+            }
         }
+    }
+
+    // MARK: - Foreground Resume
+
+    private func handleForegroundResume() async {
+        appLog("BalloonHunterApp: === Foreground Resume Sequence Started ===", category: .lifecycle, level: .info)
+
+        // 1. Fetch current user location for map/routing
+        appLog("BalloonHunterApp: Step 1 - Requesting current user location", category: .lifecycle, level: .info)
+        appServices.currentLocationService.requestCurrentLocation()
+
+        // 2. Check BLE connection health BEFORE state evaluation
+        // State machine will check BLE status, so reconnect first if needed
+        let bleService = appServices.bleCommunicationService
+        if bleService.connectionState == .notConnected && bleService.centralManager.state == .poweredOn {
+            appLog("BalloonHunterApp: Step 2 - BLE disconnected during background, attempting reconnection", category: .lifecycle, level: .info)
+            bleService.startScanning()
+            // Give BLE a moment to reconnect before state evaluation
+            try? await Task.sleep(nanoseconds: 500_000_000) // 500ms
+        } else {
+            appLog("BalloonHunterApp: Step 2 - BLE status OK: \(bleService.connectionState)", category: .lifecycle, level: .info)
+        }
+
+        // 3. Trigger state machine evaluation
+        // State machine will check current conditions and transition if needed
+        appLog("BalloonHunterApp: Step 3 - Triggering state machine evaluation", category: .lifecycle, level: .info)
+        let previousState = appServices.balloonPositionService.currentState
+        appServices.balloonPositionService.triggerStateEvaluation()
+
+        // 4. If state didn't change, refresh current state to ensure services are active
+        // This handles edge cases where timers/services need to be restarted
+        if appServices.balloonPositionService.currentState == previousState {
+            appLog("BalloonHunterApp: Step 4 - State unchanged (\(previousState)), refreshing service configuration", category: .lifecycle, level: .info)
+            appServices.balloonPositionService.refreshCurrentState()
+        } else {
+            appLog("BalloonHunterApp: Step 4 - State changed: \(previousState) → \(appServices.balloonPositionService.currentState)", category: .lifecycle, level: .info)
+        }
+
+        // State machine now controls all service activation based on current state
+        appLog("BalloonHunterApp: === Foreground Resume Complete - State Machine in Control ===", category: .lifecycle, level: .info)
     }
 
     // MARK: - Notification Handling
