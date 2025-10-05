@@ -97,7 +97,7 @@ final class BalloonPositionService: ObservableObject {
     private let bleVisualStalenessThreshold: TimeInterval = 3.0 // 3 seconds for red icon
     private let aprsStalenessThreshold: TimeInterval = 30.0 // 30 seconds for APRS
 
-    
+
     init(bleService: BLECommunicationService,
          aprsService: APRSDataService,
          currentLocationService: CurrentLocationService,
