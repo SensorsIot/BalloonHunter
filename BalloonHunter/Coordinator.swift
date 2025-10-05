@@ -212,32 +212,9 @@ final class ServiceCoordinator: ObservableObject {
             }
             .store(in: &cancellables)
 
-        // Landing point coordination: Monitor state changes to determine landing point source
-        balloonPositionService.$currentState
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] state in
-                self?.updateLandingPointForState(state)
-            }
-            .store(in: &cancellables)
-
-        // Landing point coordination: Monitor position data changes for landed states
-        balloonPositionService.$currentPositionData
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] position in
-                self?.handlePositionUpdateForLandingPoint(position)
-            }
-            .store(in: &cancellables)
-
-        // Landing point coordination: Monitor prediction changes for flying states
-        predictionService.$latestPrediction
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] prediction in
-                self?.handlePredictionUpdateForLandingPoint(prediction)
-            }
-            .store(in: &cancellables)
-
-        // Sonde change coordination: Monitor balloon name changes
-        balloonTrackService.$currentBalloonName
+        // Sonde change coordination: Monitor balloon name changes from BalloonPositionService
+        // BalloonPositionService is the authority - it receives telemetry first and detects changes
+        balloonPositionService.$currentBalloonName
             .receive(on: DispatchQueue.main)
             .sink { [weak self] newName in
                 self?.handleBalloonNameChange(newName)
@@ -300,84 +277,6 @@ final class ServiceCoordinator: ObservableObject {
         }
     }
 
-    // MARK: - Landing Point Coordination
-
-    /// Determine landing point source based on current state
-    private func updateLandingPointForState(_ state: DataState) {
-        switch state {
-        case .liveBLEFlying, .aprsFallbackFlying, .waitingForAPRS:
-            // Flying states: use prediction landing point
-            if let prediction = predictionService.latestPrediction,
-               let landingPoint = prediction.landingPoint {
-                Task {
-                    await landingPointTrackingService.updateLandingPoint(landingPoint, source: .prediction)
-                }
-                appLog("ServiceCoordinator: Landing point updated from prediction for state \(state)", category: .service, level: .debug)
-            }
-
-        case .liveBLELanded, .aprsFallbackLanded:
-            // Landed states: use current position as landing point
-            if let position = balloonPositionService.currentPositionData,
-               position.latitude != 0.0, position.longitude != 0.0 {
-                let currentPosition = CLLocationCoordinate2D(
-                    latitude: position.latitude,
-                    longitude: position.longitude
-                )
-                Task {
-                    await landingPointTrackingService.updateLandingPoint(currentPosition, source: .currentPosition)
-                }
-                appLog("ServiceCoordinator: Landing point updated from current position for state \(state)", category: .service, level: .debug)
-            }
-
-        case .startup, .noTelemetry:
-            // No landing point available
-            appLog("ServiceCoordinator: No landing point for state \(state)", category: .service, level: .debug)
-        }
-    }
-
-    /// Handle position data updates for landed states
-    private func handlePositionUpdateForLandingPoint(_ position: PositionData?) {
-        guard let position = position else { return }
-
-        // Only update from position if we're in a landed state
-        let state = balloonPositionService.currentState
-        guard state == .liveBLELanded || state == .aprsFallbackLanded else {
-            return
-        }
-
-        // Validate coordinates
-        guard position.latitude != 0.0, position.longitude != 0.0 else {
-            return
-        }
-
-        let currentPosition = CLLocationCoordinate2D(
-            latitude: position.latitude,
-            longitude: position.longitude
-        )
-
-        Task {
-            await landingPointTrackingService.updateLandingPoint(currentPosition, source: .currentPosition)
-        }
-    }
-
-    /// Handle prediction updates for flying states
-    private func handlePredictionUpdateForLandingPoint(_ prediction: PredictionData?) {
-        guard let prediction = prediction,
-              let landingPoint = prediction.landingPoint else {
-            return
-        }
-
-        // Only update from prediction if we're in a flying state
-        let state = balloonPositionService.currentState
-        guard state == .liveBLEFlying || state == .aprsFallbackFlying || state == .waitingForAPRS else {
-            return
-        }
-
-        Task {
-            await landingPointTrackingService.updateLandingPoint(landingPoint, source: .prediction)
-        }
-    }
-
     // MARK: - Persistence Data Loading (Per FSD)
     
     func loadPersistenceData() {
@@ -436,7 +335,12 @@ final class ServiceCoordinator: ObservableObject {
         // 3. Refresh state machine - re-applies current state logic to activate appropriate services
         // Use refreshCurrentState() instead of triggerStateEvaluation() because state may not change
         // (e.g., staying in aprsFallbackFlying), but we still need to trigger predictions/routes
-        balloonPositionService.refreshCurrentState()
+        // Skip historical fill - track is empty after reset, nothing to fill yet
+        balloonPositionService.refreshCurrentState(skipHistoricalFill: true)
+
+        // 4. Process stored sonde-change position as first point for new sonde
+        // Called AFTER state refresh so state allows track recording
+        balloonPositionService.processPendingSondeChangePosition()
 
         appLog("✅ ServiceCoordinator: Reset complete for new sonde \(newName)", category: .service, level: .info)
     }

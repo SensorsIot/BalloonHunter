@@ -79,6 +79,9 @@ final class BalloonPositionService: ObservableObject {
     private var balloonTrackService: BalloonTrackService?
     private var isStartupComplete: Bool = false
 
+    // Sonde change handling - store triggering position and its source
+    private var sondeChangePosition: PositionData?
+    private var sondeChangeSource: String?
 
     private let bleService: BLECommunicationService
     let aprsService: APRSDataService
@@ -201,6 +204,19 @@ final class BalloonPositionService: ObservableObject {
 
         // Log every APRS position for tracking
         appLog("BalloonPositionService: Processing \(source) position for \(position.sondeName) at [\(String(format: "%.5f", position.latitude)), \(String(format: "%.5f", position.longitude))] alt=\(Int(position.altitude))m", category: .service, level: .info)
+
+        // Detect sonde change BEFORE updating anything
+        let incomingName = position.sondeName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !incomingName.isEmpty, let currentName = currentBalloonName, currentName != incomingName {
+            appLog("BalloonPositionService: Sonde name change detected: \(currentName) → \(incomingName)", category: .service, level: .info)
+            // Store this position AND its source - will become first point of new sonde after reset
+            sondeChangePosition = position
+            sondeChangeSource = source
+            // Update name - ServiceCoordinator observer will trigger reset cascade
+            currentBalloonName = incomingName
+            // Return - resetForNewSonde() will process the stored position
+            return
+        }
 
         // Update position data
         currentPositionData = position
@@ -570,14 +586,17 @@ final class BalloonPositionService: ObservableObject {
         evaluateDataState()
     }
 
-    /// Refresh current state's service configuration (for foreground resume)
+    /// Refresh current state's service configuration (for foreground resume or sonde change)
     /// Re-applies the current state's logic to ensure services are properly configured
-    func refreshCurrentState() {
+    func refreshCurrentState(skipHistoricalFill: Bool = false) {
         appLog("BalloonPositionService: Refreshing current state (\(currentState)) service configuration", category: .service, level: .info)
         handleStateTransition(to: currentState)
 
         // Fill track gaps from APRS historical data when refreshing state
-        balloonTrackService?.fillTrackGapsFromAPRS()
+        // Skip on sonde change - track is empty, nothing to fill yet
+        if !skipHistoricalFill {
+            balloonTrackService?.fillTrackGapsFromAPRS()
+        }
     }
 
     /// Mark startup sequence as complete and trigger final state evaluation
@@ -709,8 +728,22 @@ final class BalloonPositionService: ObservableObject {
         currentPositionData = nil
         balloonDisplayPosition = nil
         currentBalloonName = nil
-        // State machine will re-evaluate on next telemetry
+
         appLog("BalloonPositionService: Reset for new sonde", category: .service, level: .info)
+
+        // Note: sondeChangePosition will be processed after state refresh
+        // This ensures state machine is in correct state to record track points
+    }
+
+    func processPendingSondeChangePosition() {
+        // Process the sonde-change-triggering position as first point for new sonde
+        // Called after state refresh to ensure state allows track recording
+        if let position = sondeChangePosition, let source = sondeChangeSource {
+            appLog("BalloonPositionService: Processing sonde-change telemetry as first point for \(position.sondeName) from \(source)", category: .service, level: .info)
+            handlePositionUpdate(position, source: source)
+            sondeChangePosition = nil
+            sondeChangeSource = nil
+        }
     }
 }
 
@@ -743,7 +776,7 @@ final class BalloonTrackService: ObservableObject {
     let balloonPositionService: BalloonPositionService
     private var aprsService: APRSDataService?
     private var cancellables = Set<AnyCancellable>()
-    
+
     // Track management
     private var smoothingCounter = 0
     private let saveInterval = 10 // Save every 10 telemetry points
@@ -876,12 +909,10 @@ final class BalloonTrackService: ObservableObject {
     }
     
     func processPositionData(_ positionData: PositionData) {
-        let incomingName = positionData.sondeName.trimmingCharacters(in: .whitespacesAndNewlines)
-
-        // Always extract sonde name, even during startup (needed for service chain)
-        if !incomingName.isEmpty && currentBalloonName == nil {
-            currentBalloonName = incomingName
-            appLog("BalloonTrackService: Sonde name extracted during startup: \(incomingName)", category: .service, level: .info)
+        // Sonde name now comes from BalloonPositionService (single source of truth)
+        // BalloonPositionService handles sonde change detection and name updates
+        if currentBalloonName == nil {
+            currentBalloonName = balloonPositionService.currentBalloonName
         }
 
         // Only record track points when we have valid telemetry states (not startup, waitingForAPRS, or noTelemetry)
@@ -889,17 +920,6 @@ final class BalloonTrackService: ObservableObject {
         guard state != .startup && state != .waitingForAPRS && state != .noTelemetry else {
             appLog("BalloonTrackService: State \(state) - not recording track point", category: .service, level: .info)
             return
-        }
-
-        // Detect sonde change and update name
-        if !incomingName.isEmpty, incomingName != currentBalloonName {
-            appLog("BalloonTrackService: Sonde name change detected: \(currentBalloonName ?? "none") → \(incomingName)", category: .service, level: .info)
-            // Update name - ServiceCoordinator observer will trigger reset cascade
-            currentBalloonName = incomingName
-            // Skip processing this point - services need clean state first
-            return
-        } else if currentBalloonName == nil {
-            currentBalloonName = incomingName
         }
 
         // Compute track-derived speeds prior to appending, so we can store derived values
@@ -1218,6 +1238,9 @@ final class BalloonTrackService: ObservableObject {
         hasSlowEma = false
 
         appLog("BalloonTrackService: Reset for new sonde", category: .service, level: .info)
+
+        // Note: BalloonPositionService processes sonde-change position and publishes it
+        // This service receives it via normal currentPositionData subscription and adds to track
     }
 }
 
