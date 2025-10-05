@@ -310,32 +310,13 @@ final class MapPresenter: ObservableObject {
             }
             .store(in: &cancellables)
 
-        // Subscribe to BalloonPositionService for landing point updates (from state machine)
-        balloonPositionService.$landingPoint
-            .sink { [weak self] point in
+        // Subscribe to LandingPointTrackingService for landing point updates (single source of truth)
+        landingPointTrackingService.$currentLandingPoint
+            .sink { [weak self] (point: CLLocationCoordinate2D?) in
                 guard let self = self else { return }
 
-                // State machine drives landing point priority
-                switch self.balloonPositionService.currentState {
-                case .liveBLELanded, .aprsFallbackLanded:
-                    // Landed states: prioritize state machine landing point
-                    if let point = point {
-                        self.landingPoint = point
-                        self.refreshAnnotations()
-                    }
-                case .liveBLEFlying, .aprsFallbackFlying, .waitingForAPRS:
-                    // Flying states: prediction landing point takes priority
-                    if self.predictionData?.landingPoint == nil, let point = point {
-                        self.landingPoint = point
-                        self.refreshAnnotations()
-                    }
-                case .startup, .noTelemetry:
-                    // No telemetry: show state machine point if available
-                    if let point = point {
-                        self.landingPoint = point
-                        self.refreshAnnotations()
-                    }
-                }
+                self.landingPoint = point
+                self.refreshAnnotations()
             }
             .store(in: &cancellables)
 

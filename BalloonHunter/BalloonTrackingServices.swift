@@ -69,9 +69,6 @@ final class BalloonPositionService: ObservableObject {
     // Balloon flight state (moved from BalloonTrackService)
     @Published var balloonPhase: BalloonPhase = .unknown
 
-    // Landing point determination (centralized in state machine)
-    @Published var landingPoint: CLLocationCoordinate2D? = nil
-
     // Display position: shows landing point when landed, live position when flying
     @Published var balloonDisplayPosition: CLLocationCoordinate2D? = nil
 
@@ -128,15 +125,6 @@ final class BalloonPositionService: ObservableObject {
     // Set reference to LandingPointTrackingService for service chain
     func setLandingPointTrackingService(_ landingPointTrackingService: LandingPointTrackingService) {
         self.landingPointTrackingService = landingPointTrackingService
-
-        // Subscribe to landing point updates from LandingPointTrackingService
-        landingPointTrackingService.$currentLandingPoint
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] point in
-                self?.landingPoint = point
-            }
-            .store(in: &cancellables)
-
         appLog("BalloonPositionService: LandingPointTrackingService configured", category: .service, level: .info)
     }
     
@@ -331,7 +319,7 @@ final class BalloonPositionService: ObservableObject {
         case .liveBLEFlying:
             // BLE telemetry active, balloon flying
             aprsService.disablePolling()
-            // NEW: Trigger PredictionService with BLE balloon position
+            // Trigger PredictionService with BLE balloon position
             if let position = currentPositionData {
                 Task {
                     await predictionService.triggerPredictionWithPosition(position, trigger: "state-machine")
@@ -341,17 +329,7 @@ final class BalloonPositionService: ObservableObject {
         case .liveBLELanded:
             // BLE telemetry active, balloon landed
             aprsService.disablePolling()
-            // NEW: Trigger LandingPointTrackingService with current BLE position
-            if let position = currentPositionData,
-               position.latitude != 0.0, position.longitude != 0.0 {
-                let currentPosition = CLLocationCoordinate2D(
-                    latitude: position.latitude,
-                    longitude: position.longitude
-                )
-                Task {
-                    await landingPointTrackingService?.updateLandingPoint(currentPosition, source: .currentPosition)
-                }
-            }
+            // Landing point now coordinated by ServiceCoordinator
 
         case .waitingForAPRS:
             // BLE lost - start APRS polling and wait for response
@@ -362,7 +340,7 @@ final class BalloonPositionService: ObservableObject {
         case .aprsFallbackFlying:
             // APRS fallback while flying - enable polling and frequency monitoring
             aprsService.enablePolling()
-            // NEW: Trigger PredictionService with APRS balloon position
+            // Trigger PredictionService with APRS balloon position
             if let position = currentPositionData {
                 Task {
                     await predictionService.triggerPredictionWithPosition(position, trigger: "state-machine")
@@ -372,18 +350,7 @@ final class BalloonPositionService: ObservableObject {
         case .aprsFallbackLanded:
             // APRS fallback with old/stale data indicating landing
             aprsService.enablePolling()
-            // NEW: Trigger LandingPointTrackingService with current APRS position
-            if let position = currentPositionData,
-               position.telemetrySource == .aprs,
-               position.latitude != 0.0, position.longitude != 0.0 {
-                let currentPosition = CLLocationCoordinate2D(
-                    latitude: position.latitude,
-                    longitude: position.longitude
-                )
-                Task {
-                    await landingPointTrackingService?.updateLandingPoint(currentPosition, source: .currentPosition)
-                }
-            }
+            // Landing point now coordinated by ServiceCoordinator
         }
 
         // Update staleness thresholds based on expected telemetry source
@@ -1249,6 +1216,7 @@ final class LandingPointTrackingService: ObservableObject {
     private let persistenceService: PersistenceService
     private let balloonTrackService: BalloonTrackService
     private var routeCalculationService: RouteCalculationService?
+    private var navigationService: NavigationService?
     private var cancellables = Set<AnyCancellable>()
     private let deduplicationThreshold: CLLocationDistance = 25.0
     private var currentSondeName: String?
@@ -1274,6 +1242,12 @@ final class LandingPointTrackingService: ObservableObject {
         appLog("LandingPointTrackingService: RouteCalculationService configured", category: .service, level: .info)
     }
 
+    // Set reference to NavigationService for landing point change notifications
+    func setNavigationService(_ navigationService: NavigationService) {
+        self.navigationService = navigationService
+        appLog("LandingPointTrackingService: NavigationService configured", category: .service, level: .info)
+    }
+
     // NEW: Unified landing point update method for service chain
     func updateLandingPoint(_ point: CLLocationCoordinate2D, source: LandingPointSource) async {
         guard balloonTrackService.currentBalloonName != nil else {
@@ -1285,6 +1259,9 @@ final class LandingPointTrackingService: ObservableObject {
 
         // Update current landing point (published for UI and other services)
         currentLandingPoint = point
+
+        // AUTO-CHAIN: Check for significant landing point changes and notify user
+        navigationService?.checkForNavigationUpdate(newLandingPoint: point)
 
         // Handle different sources
         switch source {
@@ -1354,6 +1331,9 @@ final class LandingPointTrackingService: ObservableObject {
         } else {
             resetHistory()
         }
+
+        // Reset navigation service to clear landing point change tracking
+        navigationService?.reset()
 
         // Process pending landing point if we have one
         if let pending = pendingLandingPoint, newName != nil {

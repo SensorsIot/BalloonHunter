@@ -59,17 +59,17 @@ The balloon carries a sonde that transmits its position signal. This signal is r
 │                           BALLOON POSITION SERVICE                                   │
 │                              (State Machine Coordinator)                            │
 │  📊 PUBLISHED STATE:                                                                  │
-│  • currentTelemetry: TelemetryData                                                   │
-│  • currentTelemetryState: TelemetryState (7-state machine)                          │
+│  • currentPositionData: PositionData                                                 │
+│  • currentState: DataState (7-state machine)                                        │
 │  • balloonPhase: BalloonPhase                                                        │
-│  • landingPoint: CLLocationCoordinate2D                                             │
-│  • shouldEnablePredictions: Bool                                                     │
-│  • isTelemetryStale: Bool                                                            │
-│  • aprsTelemetryIsAvailable: Bool                                                    │
+│  • balloonDisplayPosition: CLLocationCoordinate2D                                   │
+│  • dataSource: TelemetrySource (.ble or .aprs)                                      │
+│  • aprsDataAvailable: Bool                                                           │
 │                                                                                      │
-│  🔄 STATE MACHINE TRIGGERS SERVICE CHAINS:                                          │
-│  • Flying states → PredictionService → LandingPointService → RouteService          │
-│  • Landed states → LandingPointService → RouteService                              │
+│  🔄 STATE MACHINE TRIGGERS SERVICE COORDINATION:                                    │
+│  • State changes → ServiceCoordinator → Landing Point Coordination                 │
+│  • Flying states → ServiceCoordinator triggers PredictionService                   │
+│  • ServiceCoordinator coordinates landing point from prediction or position        │
 │                                                                                      │
 │  🔄 STATES: startup → liveBLEFlying → waitingForAPRS → aprsFallbackFlying          │
 │                    → liveBLELanded              → aprsFallbackLanded               │
@@ -96,12 +96,22 @@ The balloon carries a sonde that transmits its position signal. This signal is r
 │        │            │ │        │            │ │                     │
 │        ▼            │ │        ▼            │ │                     │
 │   Chains to ────────┼─┼───▶ Chains to ─────┼─┼────▶                │
-│   LandingPt         │ │   RouteCalc         │ │                     │
+│   LandingPt         │ │   RouteCalc+Nav     │ │                     │
 └─────────────────────┘ └─────────────────────┘ └─────────────────────┘
-                                           │
-                         ┌─────────────────┼─────────────────┐
-                         │                 │                 │
-                         ▼                 ▼                 ▼
+                                    │                    │
+                                    ▼                    │
+                         ┌─────────────────────┐         │
+                         │ NAVIGATION SERVICE  │         │
+                         │                     │         │
+                         │ 🎯 FEATURES:        │         │
+                         │ • Apple Maps launch │         │
+                         │ • Change alerts     │         │
+                         │ • CarPlay support   │         │
+                         └─────────────────────┘         │
+                                           │             │
+                         ┌─────────────────┼─────────────┼─────────────┐
+                         │                 │             │             │
+                         ▼                 ▼             ▼             ▼
 ┌─────────────────────┐ ┌─────────────────────┐ ┌─────────────────────┐
 │ MAP PRESENTER       │ │ DATA PANEL VIEW     │ │ TRACKING MAP VIEW   │
 │ (UI Coordinator)    │ │                     │ │                     │
@@ -1150,9 +1160,71 @@ The service includes a retry mechanism for when route calculation is triggered b
 - Straight-line fallback ensures the UI always has a path to display, even without Apple Maps coverage.
 - `RoutingCache` entries expire automatically; metrics are logged for cache hits/misses.
 
+### Navigation Service
+
+**Purpose**
+Manage external navigation integration with Apple Maps and provide landing point change notifications for users navigating with CarPlay or external navigation apps.
+
+#### Inputs
+
+- Landing point coordinates for Apple Maps launch
+- New landing point coordinates for change detection
+
+#### Publishes
+
+- None (triggers external actions: Apple Maps launch, iOS notifications)
+
+#### Behavior
+
+**Apple Maps Integration**:
+1. Receives landing point coordinate from ServiceCoordinator
+2. Creates `MKMapItem` with "Balloon Landing Site" label
+3. Launches Apple Maps with transport mode matching RouteCalculationService setting:
+   - Car mode → Driving directions
+   - Bike mode → Cycling directions (iOS 14+, falls back to walking)
+
+**Landing Point Change Notifications**:
+1. Stores last landing point for comparison on each update
+2. When landing point changes:
+   - Calculates distance between old and new landing points
+   - If movement >300m → Sends iOS notification
+   - Updates stored landing point for next comparison
+3. Notification includes:
+   - Title: "Landing Prediction Updated"
+   - Body: Distance moved in meters
+   - User info: New destination coordinates for tap handling
+
+**Reset Handling**:
+- `resetForNewSonde()` clears stored landing point when new sonde detected
+- Prevents false notifications when switching between different balloon sondes
+
+#### Integration
+
+**Service Chain**:
+```
+LandingPointTrackingService.updateLandingPoint()
+    ↓ auto-chains
+NavigationService.checkForNavigationUpdate()
+    ↓ if moved >300m
+iOS Notification System
+```
+
+**CarPlay Use Case**:
+- BalloonHunter runs in foreground on iPhone screen
+- Apple Maps displays on CarPlay screen (separate process)
+- Notifications alert user to significant landing point changes while driving
+- User can glance at iPhone to see updated landing prediction
+
+#### Notes
+
+- Notifications only fire when app is in foreground (background predictions suspended per BACKGROUND_TRACKING.md)
+- 300m threshold prevents spurious alerts from minor prediction adjustments
+- First landing point stored without notification (baseline for comparison)
+- Sonde change resets tracking to prevent false alerts when switching balloons
+
 ### Service Coordinator
 
-**Purpose**  
+**Purpose**
 Act as the single orchestration layer: subscribe to all service publishers, manage prediction cadence and routing refresh triggers, mirror landing/phase updates from `BalloonTrackService`, and expose consolidated state to the UI.
 
 #### Inputs
@@ -1174,24 +1246,40 @@ Act as the single orchestration layer: subscribe to all service publishers, mana
 
 1.  **Startup orchestration** — Drives the multi-step startup sequence: show logo, initialise services, attempt BLE connection/settings, load persisted track/landing data, and finally reveal the tracking map.
 
-**Landing Point Prioritization**
+**Landing Point Coordination**
 
-The `ServiceCoordinator` is responsible for determining the single, authoritative landing point that is displayed on the map and used for route calculations. It selects the most appropriate coordinate based on the balloon's current flight phase, following these rules:
+The `ServiceCoordinator` is responsible for cross-service coordination to determine the single, authoritative landing point. It subscribes to state machine changes and data updates, then updates `LandingPointTrackingService` which serves as the single source of truth for all consumers. This follows the coordinator pattern for cross-service decision-making:
 
-    1.  **When `balloonPhase` is `.landed`**:
-        *   The `landingPoint` is set to the value of `balloonTrackService.landingPosition`. This is considered the most accurate position, as it is calculated by averaging the most recent telemetry coordinates after the balloon has stopped moving.
-    
-    2.  **When `balloonPhase` is `.ascending`, `.descendingAbove10k`, or `.descendingBelow10k`**:
-        *   The `landingPoint` is set to the value of `predictionData.landingPoint` from the latest successful prediction made by the `PredictionService`.
-    
-    3.  **When `balloonPhase` is `.unknown` (e.g., at startup before telemetry is received)**:
-    *   The `landingPoint` is `nil`. It will be populated once the first prediction is made or the balloon's landing is confirmed.
-2. **Telemetry pipeline** — `BalloonTrackService` ingests BLE/APRS telemetry, performs smoothing, while `BalloonPositionService` maintains the authoritative `balloonPhase` (including forcing `.landed` when APRS packets are older than 120 s), and publishes both raw and smoothed motion metrics plus landing positions. The coordinator mirrors these updates to drive map overlays, Apple Maps tracking, proximity flags, and prediction cadence.
-3. **Landing point workflow** — Mirrors landing positions published by `BalloonTrackService`/`LandingPointTrackingService` and keeps map overlays in sync.
+    1.  **Single Source of Truth**:
+        *   `LandingPointTrackingService.currentLandingPoint` is the only published landing point property
+        *   All services and views consume from this single source (no duplicate landing point properties)
+
+    2.  **ServiceCoordinator Subscriptions** (cross-service coordination):
+        *   Subscribes to `balloonPositionService.$currentState` (state machine changes)
+        *   Subscribes to `balloonPositionService.$currentPositionData` (telemetry updates)
+        *   Subscribes to `predictionService.$latestPrediction` (prediction updates)
+
+    3.  **Landing Point Source Selection** (based on state machine):
+        *   **Flying States** (`.liveBLEFlying`, `.aprsFallbackFlying`, `.waitingForAPRS`):
+            - Uses `predictionService.latestPrediction.landingPoint`
+            - ServiceCoordinator updates `LandingPointTrackingService` with `.prediction` source
+        *   **Landed States** (`.liveBLELanded`, `.aprsFallbackLanded`):
+            - Uses `balloonPositionService.currentPositionData` (lat/lon)
+            - ServiceCoordinator updates `LandingPointTrackingService` with `.currentPosition` source
+        *   **No Telemetry States** (`.startup`, `.noTelemetry`):
+            - Landing point is `nil`
+
+    4.  **Automatic Updates**:
+        *   When state changes, ServiceCoordinator immediately evaluates and updates landing point
+        *   When position data updates (in landed states), ServiceCoordinator updates landing point
+        *   When prediction updates (in flying states), ServiceCoordinator updates landing point
+        *   LandingPointTrackingService automatically chains to RouteCalculationService
+2. **Telemetry pipeline** — `BalloonTrackService` ingests BLE/APRS telemetry, performs smoothing, while `BalloonPositionService` maintains the authoritative `balloonPhase` (including forcing `.landed` when APRS packets are older than 120 s), and publishes both raw and smoothed motion metrics. ServiceCoordinator monitors state changes to coordinate landing point updates.
+3. **Landing point workflow** — ServiceCoordinator subscribes to state machine, position data, and predictions, then coordinates landing point updates to `LandingPointTrackingService` which automatically chains to route calculation and map updates.
 4. **Prediction scheduling** — Hands telemetry and settings to `PredictionService`, reacts to completions/failures, and exposes landing/flight time strings for the data panel.
 5. **Route management** — Requests routes when the landing point or user location changes, updates the green overlay, surfaces ETA/distance in the data panel, and honours cache hits to avoid redundant Apple Maps calls.
 6. **UI state management** — Owns camera mode (`isHeadingMode`), overlay toggles, buzzer mute, centre-on-all logic, and guards against updates while sheets (settings) are open.
-7. **Apple Maps hand-off** — `openInAppleMaps()` launches navigation using the selected transport mode (car → driving, bike → cycling on iOS 14+ with walking fallback). Tracks the last destination so the coordinator can detect navigation updates.
+7. **Apple Maps hand-off & navigation notifications** — `openInAppleMaps()` launches navigation using the selected transport mode (car → driving, bike → cycling on iOS 14+ with walking fallback). Landing point updates automatically trigger NavigationService to check for significant changes (>300m) and send iOS notifications to alert users during CarPlay navigation.
 8. **Optional APRS bridge** — When an APRS provider is enabled, the coordinator brokers SondeHub serial prompts, pauses APRS polling whenever fresh BLE telemetry is available, and synchronises RadioSondyGo frequency/probe type to match APRS telemetry when the streams differ.
 9. **Frequency Mismatch** - If a RadioSondyGo is connected, it compares its freuqncy with the APRS frequency and, if a mismatch is detected, a confirmation alert appears on screen. This screen asks if the user wants to accept the frequency change of the RadioSondyGo to the APRS frequency. If accepted, APRS frequency is transmittes via the BLE command, while cancelling defers the change for a period of 5 minutes.
 

@@ -82,6 +82,7 @@ final class AppServices: ObservableObject {
         predictionService.setLandingPointTrackingService(landingPointTrackingService)
         balloonPositionService.setLandingPointTrackingService(landingPointTrackingService)
         landingPointTrackingService.setRouteCalculationService(routeCalculationService)
+        landingPointTrackingService.setNavigationService(navigationService)
 
     }
     

@@ -288,6 +288,30 @@ final class ServiceCoordinator: ObservableObject {
             }
             .store(in: &cancellables)
 
+        // Landing point coordination: Monitor state changes to determine landing point source
+        balloonPositionService.$currentState
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] state in
+                self?.updateLandingPointForState(state)
+            }
+            .store(in: &cancellables)
+
+        // Landing point coordination: Monitor position data changes for landed states
+        balloonPositionService.$currentPositionData
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] position in
+                self?.handlePositionUpdateForLandingPoint(position)
+            }
+            .store(in: &cancellables)
+
+        // Landing point coordination: Monitor prediction changes for flying states
+        predictionService.$latestPrediction
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] prediction in
+                self?.handlePredictionUpdateForLandingPoint(prediction)
+            }
+            .store(in: &cancellables)
+
         // Direct subscriptions setup complete
     }
 
@@ -344,6 +368,84 @@ final class ServiceCoordinator: ObservableObject {
         }
     }
 
+    // MARK: - Landing Point Coordination
+
+    /// Determine landing point source based on current state
+    private func updateLandingPointForState(_ state: DataState) {
+        switch state {
+        case .liveBLEFlying, .aprsFallbackFlying, .waitingForAPRS:
+            // Flying states: use prediction landing point
+            if let prediction = predictionService.latestPrediction,
+               let landingPoint = prediction.landingPoint {
+                Task {
+                    await landingPointTrackingService.updateLandingPoint(landingPoint, source: .prediction)
+                }
+                appLog("ServiceCoordinator: Landing point updated from prediction for state \(state)", category: .service, level: .debug)
+            }
+
+        case .liveBLELanded, .aprsFallbackLanded:
+            // Landed states: use current position as landing point
+            if let position = balloonPositionService.currentPositionData,
+               position.latitude != 0.0, position.longitude != 0.0 {
+                let currentPosition = CLLocationCoordinate2D(
+                    latitude: position.latitude,
+                    longitude: position.longitude
+                )
+                Task {
+                    await landingPointTrackingService.updateLandingPoint(currentPosition, source: .currentPosition)
+                }
+                appLog("ServiceCoordinator: Landing point updated from current position for state \(state)", category: .service, level: .debug)
+            }
+
+        case .startup, .noTelemetry:
+            // No landing point available
+            appLog("ServiceCoordinator: No landing point for state \(state)", category: .service, level: .debug)
+        }
+    }
+
+    /// Handle position data updates for landed states
+    private func handlePositionUpdateForLandingPoint(_ position: PositionData?) {
+        guard let position = position else { return }
+
+        // Only update from position if we're in a landed state
+        let state = balloonPositionService.currentState
+        guard state == .liveBLELanded || state == .aprsFallbackLanded else {
+            return
+        }
+
+        // Validate coordinates
+        guard position.latitude != 0.0, position.longitude != 0.0 else {
+            return
+        }
+
+        let currentPosition = CLLocationCoordinate2D(
+            latitude: position.latitude,
+            longitude: position.longitude
+        )
+
+        Task {
+            await landingPointTrackingService.updateLandingPoint(currentPosition, source: .currentPosition)
+        }
+    }
+
+    /// Handle prediction updates for flying states
+    private func handlePredictionUpdateForLandingPoint(_ prediction: PredictionData?) {
+        guard let prediction = prediction,
+              let landingPoint = prediction.landingPoint else {
+            return
+        }
+
+        // Only update from prediction if we're in a flying state
+        let state = balloonPositionService.currentState
+        guard state == .liveBLEFlying || state == .aprsFallbackFlying || state == .waitingForAPRS else {
+            return
+        }
+
+        Task {
+            await landingPointTrackingService.updateLandingPoint(landingPoint, source: .prediction)
+        }
+    }
+
     // MARK: - Persistence Data Loading (Per FSD)
     
     func loadPersistenceData() {
@@ -370,27 +472,13 @@ final class ServiceCoordinator: ObservableObject {
 
 
     func openInAppleMaps() {
-        // State machine drives landing point source selection
-        var landingPoint: CLLocationCoordinate2D?
-
-        switch balloonPositionService.currentState {
-        case .liveBLEFlying, .aprsFallbackFlying, .waitingForAPRS:
-            // Flying states: use prediction landing point
-            landingPoint = predictionService.latestPrediction?.landingPoint
-        case .liveBLELanded, .aprsFallbackLanded:
-            // Landed states: use balloon position service landing point
-            landingPoint = balloonPositionService.landingPoint
-        case .startup, .noTelemetry:
-            // No telemetry: no landing point available
-            landingPoint = nil
-        }
-
-        guard let finalLandingPoint = landingPoint else {
+        // Use single source of truth from LandingPointTrackingService
+        guard let landingPoint = landingPointTrackingService.currentLandingPoint else {
             appLog("ServiceCoordinator: Cannot open Apple Maps - no landing point available for state \(balloonPositionService.currentState)", category: .general, level: .error)
             return
         }
 
-        appLog("ServiceCoordinator: Opening Apple Maps with landing point [\(String(format: "%.4f", finalLandingPoint.latitude)), \(String(format: "%.4f", finalLandingPoint.longitude))] from state \(balloonPositionService.currentState)", category: .general, level: .info)
-        navigationService.openInAppleMaps(landingPoint: finalLandingPoint)
+        appLog("ServiceCoordinator: Opening Apple Maps with landing point [\(String(format: "%.4f", landingPoint.latitude)), \(String(format: "%.4f", landingPoint.longitude))] from state \(balloonPositionService.currentState)", category: .general, level: .info)
+        navigationService.openInAppleMaps(landingPoint: landingPoint)
     }
 }

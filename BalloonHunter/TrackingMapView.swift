@@ -155,14 +155,9 @@ struct TrackingMapView: View {
                     
                     // 1. Balloon Track: Historic track as thin red line
                     let trackPoints = mapPresenter.trackPoints
-                    let _ = appLog("🗺️ MAP: Track rendering - \(trackPoints.count) points available", category: .ui, level: .info)
                     if trackPoints.count >= 2 {
                         let coordinates = trackPoints.map { CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude) }
                         let trackPolyline = MKPolyline(coordinates: coordinates, count: coordinates.count)
-                        if let first = coordinates.first, let last = coordinates.last {
-                            let _ = appLog("🗺️ MAP: Track from [\(String(format: "%.5f", first.latitude)), \(String(format: "%.5f", first.longitude))] to [\(String(format: "%.5f", last.latitude)), \(String(format: "%.5f", last.longitude))]", category: .ui, level: .info)
-                        }
-                        let _ = appLog("🗺️ MAP: Drawing track polyline with \(coordinates.count) coordinates, RED color, 2pt width", category: .ui, level: .info)
                         MapPolyline(trackPolyline)
                             .stroke(.red, lineWidth: 2)
                     }
@@ -177,7 +172,6 @@ struct TrackingMapView: View {
                     // 3. Planned Route: Green path from user to landing point (when needed for navigation)
                     if routeVisible,
                        let userRoute = mapPresenter.userRoute {
-                        let _ = appLog("🗺️ MAP: Drawing route polyline, GREEN color, 3pt width", category: .ui, level: .info)
                         MapPolyline(userRoute)
                             .stroke(.green, lineWidth: 3)
                     } else {

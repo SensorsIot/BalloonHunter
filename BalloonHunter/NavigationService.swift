@@ -61,8 +61,8 @@ final class NavigationService: ObservableObject {
         let newLocation = CLLocation(latitude: newLandingPoint.latitude, longitude: newLandingPoint.longitude)
         let distanceChange = oldLocation.distance(from: newLocation)
 
-        // Trigger update notification if change is significant (>100m)
-        if distanceChange > 100 {
+        // Trigger update notification if change is significant (>300m)
+        if distanceChange > 300 {
             appLog("NavigationService: Landing point changed by \(Int(distanceChange))m - sending navigation update notification", category: .general, level: .info)
             sendNavigationUpdateNotification(newDestination: newLandingPoint, distanceChange: distanceChange)
         }
@@ -97,5 +97,12 @@ final class NavigationService: ObservableObject {
                 appLog("NavigationService: Sent navigation update notification", category: .general, level: .info)
             }
         }
+    }
+
+    // MARK: - Reset for New Sonde
+
+    func reset() {
+        lastLandingPoint = nil
+        appLog("NavigationService: Reset for new sonde - cleared landing point tracking", category: .general, level: .info)
     }
 }

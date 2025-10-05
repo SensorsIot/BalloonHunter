@@ -23,6 +23,7 @@ A sophisticated iOS application for tracking and recovering weather balloons in 
 - **Map-Centric Design**: 70% map view optimized for field tracking operations
 - **Live Overlays**: Balloon track, prediction path, landing zones, and hunter position
 - **Apple Maps Navigation**: One-tap routing with car/bike transport modes
+- **Landing Change Alerts**: Notifications when prediction shifts >300m during CarPlay navigation
 - **Heading Mode**: Compass-locked view for directional navigation to landing site
 
 ## 🏗️ Architecture
