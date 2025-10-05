@@ -1,5 +1,6 @@
 import Foundation
 import CoreLocation
+import OSLog
 
 @MainActor
 final class DebugCSVLogger {
@@ -16,6 +17,12 @@ final class DebugCSVLogger {
 
     func setLatestPredictedLanding(_ point: CLLocationCoordinate2D?) {
         latestPredictedLanding = point
+    }
+
+    func purgeCSVLog() {
+        let (url, _) = fileURL()
+        try? FileManager.default.removeItem(at: url)
+        appLog("DebugCSVLogger: Purged telemetry CSV log", category: .service, level: .debug)
     }
 
     func logPosition(_ p: PositionData) {
