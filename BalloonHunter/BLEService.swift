@@ -405,12 +405,16 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
     private func handleScanTimeout() {
         guard connectionState == .notConnected else { return }
 
-        appLog("BLE: Scan timeout - no MySondyGo device found after \(scanTimeout)s, restarting scan", category: .ble, level: .info)
+        appLog("BLE: Scan timeout - no MySondyGo device found after \(scanTimeout)s, waiting 10s before retry", category: .ble, level: .info)
         centralManager.stopScan()
-        publishHealthEvent(.healthy, message: "BLE scan timeout - restarting")
+        publishHealthEvent(.healthy, message: "BLE scan timeout - will retry")
 
-        // Immediately restart scan to continuously look for devices
-        startScanning()
+        // Wait 10 seconds before restarting scan (battery efficient, iOS friendly)
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 10_000_000_000) // 10 seconds
+            guard let self = self, self.connectionState == .notConnected else { return }
+            self.startScanning()
+        }
     }
 
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
