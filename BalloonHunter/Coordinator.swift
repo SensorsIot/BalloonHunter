@@ -306,10 +306,16 @@ final class ServiceCoordinator: ObservableObject {
     private func handleBalloonNameChange(_ newName: String?) {
         guard let newName = newName, !newName.isEmpty else { return }
 
-        // Check if this is a different sonde
-        if let lastSeen = lastSeenSondeName, lastSeen != newName {
-            // New sonde detected!
-            handleNewSondeDetected(oldName: lastSeen, newName: newName)
+        // Check if this is a different sonde OR first initialization
+        if let lastSeen = lastSeenSondeName {
+            if lastSeen != newName {
+                // New sonde detected!
+                handleNewSondeDetected(oldName: lastSeen, newName: newName)
+            }
+        } else {
+            // First initialization - load persisted data for current sonde
+            appLog("🎈 ServiceCoordinator: First sonde initialization - \(newName)", category: .service, level: .info)
+            landingPointTrackingService.resetForNewSonde()  // Loads persisted landing history
         }
 
         // Update tracking
