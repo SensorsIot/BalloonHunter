@@ -149,6 +149,15 @@ actor PredictionCache {
         let time = String(format: "%.0f", timeBucket.timeIntervalSince1970 / 300) // 5-minute buckets
         return "\(balloonID)-\(lat)-\(lon)-\(alt)-\(time)"
     }
+
+    // MARK: - Sonde Change Handling
+
+    func purgeAll() {
+        cache.removeAll()
+        lru.removeAll()
+        metrics = PredictionCacheMetrics(hits: 0, misses: 0, evictions: 0, expirations: 0)
+        appLog("PredictionCache: Purged all entries for new sonde", category: .cache, level: .info)
+    }
 }
 
 // MARK: - Prediction Service
@@ -677,5 +686,15 @@ final class PredictionService: ObservableObject {
     // MARK: - Health
     private func publishHealthEvent(_ health: ServiceHealth, message: String) {
         serviceHealth = health
+    }
+
+    // MARK: - Sonde Change Handling
+
+    func resetForNewSonde() {
+        latestPrediction = nil
+        predictedLandingTimeString = "--:--"
+        remainingFlightTimeString = "--:--"
+        // Timer continues running if already active
+        appLog("PredictionService: Reset for new sonde", category: .service, level: .info)
     }
 }

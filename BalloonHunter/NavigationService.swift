@@ -99,10 +99,10 @@ final class NavigationService: ObservableObject {
         }
     }
 
-    // MARK: - Reset for New Sonde
+    // MARK: - Sonde Change Handling
 
-    func reset() {
+    func resetForNewSonde() {
         lastLandingPoint = nil
-        appLog("NavigationService: Reset for new sonde - cleared landing point tracking", category: .general, level: .info)
+        appLog("NavigationService: Reset for new sonde", category: .general, level: .info)
     }
 }

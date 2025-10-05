@@ -701,6 +701,16 @@ final class BalloonPositionService: ObservableObject {
             appLog("BalloonPositionService: Cannot update display position - no position data available (phase=\(balloonPhase))", category: .service, level: .debug)
         }
     }
+
+    // MARK: - Sonde Change Handling
+
+    func resetForNewSonde() {
+        currentPositionData = nil
+        balloonDisplayPosition = nil
+        currentBalloonName = nil
+        // State machine will re-evaluate on next telemetry
+        appLog("BalloonPositionService: Reset for new sonde", category: .service, level: .info)
+    }
 }
 
 // MARK: - Balloon Track Service
@@ -880,30 +890,13 @@ final class BalloonTrackService: ObservableObject {
             return
         }
 
-        if !incomingName.isEmpty,
-           incomingName != currentBalloonName {
-            appLog("BalloonTrackService: New sonde detected - \(incomingName), switching from \(currentBalloonName ?? "none")", category: .service, level: .info)
-
-            // Clean up ALL old tracks FIRST when switching sondes
-            if let currentName = currentBalloonName,
-               currentName != incomingName {
-                appLog("BalloonTrackService: Switching from different sonde (\(currentName)) - purging all old tracks", category: .service, level: .info)
-                persistenceService.purgeAllTracks()
-            }
-
-            // Start with fresh track for new sonde
-            self.currentBalloonTrack = []
-            self.landingPosition = nil
-            appLog("BalloonTrackService: Starting fresh track for \(incomingName)", category: .service, level: .info)
-
-            smoothingCounter = 0
+        // Detect sonde change and update name
+        if !incomingName.isEmpty, incomingName != currentBalloonName {
+            appLog("BalloonTrackService: Sonde name change detected: \(currentBalloonName ?? "none") → \(incomingName)", category: .service, level: .info)
+            // Update name - ServiceCoordinator observer will trigger reset cascade
             currentBalloonName = incomingName
-            emaHorizontalMS = 0
-            emaVerticalMS = 0
-            slowEmaHorizontalMS = 0
-            slowEmaVerticalMS = 0
-            hasEma = false
-            hasSlowEma = false
+            // Skip processing this point - services need clean state first
+            return
         } else if currentBalloonName == nil {
             currentBalloonName = incomingName
         }
@@ -1203,6 +1196,28 @@ final class BalloonTrackService: ObservableObject {
     private func updateSmoothedSpeeds() {
         // Implementation moved to motion metrics calculation
     }
+
+    // MARK: - Sonde Change Handling
+
+    func resetForNewSonde() {
+        //Clean up old tracks
+        persistenceService.purgeAllTracks()
+
+        // Reset state
+        currentBalloonTrack = []
+        landingPosition = nil
+        smoothingCounter = 0
+
+        // Reset EMA/smoothing
+        emaHorizontalMS = 0
+        emaVerticalMS = 0
+        slowEmaHorizontalMS = 0
+        slowEmaVerticalMS = 0
+        hasEma = false
+        hasSlowEma = false
+
+        appLog("BalloonTrackService: Reset for new sonde", category: .service, level: .info)
+    }
 }
 
 // MARK: - Landing Point Tracking Service
@@ -1333,7 +1348,7 @@ final class LandingPointTrackingService: ObservableObject {
         }
 
         // Reset navigation service to clear landing point change tracking
-        navigationService?.reset()
+        navigationService?.resetForNewSonde()
 
         // Process pending landing point if we have one
         if let pending = pendingLandingPoint, newName != nil {
@@ -1341,6 +1356,21 @@ final class LandingPointTrackingService: ObservableObject {
             pendingLandingPoint = nil
             triggerRouteCalculation(to: pending)
         }
+    }
+
+    // MARK: - Sonde Change Handling
+
+    func resetForNewSonde() {
+        // Clear current state (observer will reload sonde-specific data)
+        landingHistory = []
+        lastLandingPrediction = nil
+        currentLandingPoint = nil
+        pendingLandingPoint = nil
+
+        // Reset navigation tracking
+        navigationService?.resetForNewSonde()
+
+        appLog("LandingPointTrackingService: Reset for new sonde", category: .service, level: .info)
     }
 }
 

@@ -312,6 +312,14 @@ final class ServiceCoordinator: ObservableObject {
             }
             .store(in: &cancellables)
 
+        // Sonde change coordination: Monitor balloon name changes
+        balloonTrackService.$currentBalloonName
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] newName in
+                self?.handleBalloonNameChange(newName)
+            }
+            .store(in: &cancellables)
+
         // Direct subscriptions setup complete
     }
 
@@ -468,6 +476,43 @@ final class ServiceCoordinator: ObservableObject {
         appLog("ServiceCoordinator: Persistence data loading complete - UserSettings, tracks, and histories restored", category: .general, level: .info)
 
     }
+    // MARK: - Sonde Change Orchestration
+
+    private var lastSeenSondeName: String? = nil
+
+    private func handleBalloonNameChange(_ newName: String?) {
+        guard let newName = newName, !newName.isEmpty else { return }
+
+        // Check if this is a different sonde
+        if let lastSeen = lastSeenSondeName, lastSeen != newName {
+            // New sonde detected!
+            handleNewSondeDetected(oldName: lastSeen, newName: newName)
+        }
+
+        // Update tracking
+        lastSeenSondeName = newName
+    }
+
+    private func handleNewSondeDetected(oldName: String?, newName: String) {
+        appLog("🎈 ServiceCoordinator: New sonde detected - \(oldName ?? "none") → \(newName)", category: .service, level: .info)
+
+        // 1. Reset all services (order: leaf services first)
+        navigationService.resetForNewSonde()
+        routeCalculationService.resetForNewSonde()
+        landingPointTrackingService.resetForNewSonde()
+        balloonTrackService.resetForNewSonde()
+        predictionService.resetForNewSonde()
+        balloonPositionService.resetForNewSonde()
+
+        // 2. Clear caches
+        Task {
+            await predictionCache.purgeAll()
+            await routingCache.purgeAll()
+        }
+
+        appLog("✅ ServiceCoordinator: Reset complete for new sonde \(newName)", category: .service, level: .info)
+    }
+
     // MARK: - UI Support Methods
 
 

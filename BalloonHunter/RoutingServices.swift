@@ -136,6 +136,15 @@ actor RoutingCache {
             "ttl": ttl
         ]
     }
+
+    // MARK: - Sonde Change Handling
+
+    func purgeAll() {
+        cache.removeAll()
+        lru.removeAll()
+        metrics = RoutingCacheMetrics()
+        appLog("RoutingCache: Purged all entries for new sonde", category: .cache, level: .info)
+    }
 }
 
 final class RouteCalculationService: ObservableObject {
@@ -373,9 +382,18 @@ final class RouteCalculationService: ObservableObject {
         let coordinateCount = polyline.pointCount
         let coordinates = UnsafeMutablePointer<CLLocationCoordinate2D>.allocate(capacity: coordinateCount)
         defer { coordinates.deallocate() }
-        
+
         polyline.getCoordinates(coordinates, range: NSRange(location: 0, length: coordinateCount))
-        
+
         return Array(UnsafeBufferPointer(start: coordinates, count: coordinateCount))
+    }
+
+    // MARK: - Sonde Change Handling
+
+    func resetForNewSonde() {
+        currentRoute = nil
+        isCalculatingRoute = false
+        lastDestination = nil
+        appLog("RouteCalculationService: Reset for new sonde", category: .service, level: .info)
     }
 }
