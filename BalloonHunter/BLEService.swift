@@ -259,6 +259,7 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
     // Scan timeout tracking
     var scanStartTime: Date? = nil
     private var scanTimeoutTask: Task<Void, Never>? = nil
+    private var scanRetryTask: Task<Void, Never>? = nil
     let scanTimeout: TimeInterval = 5.0 // 5 seconds to find a device
 
 
@@ -355,6 +356,10 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
         // Track scan start time
         scanStartTime = Date()
 
+        // Cancel any pending retry (new scan started from elsewhere)
+        scanRetryTask?.cancel()
+        scanRetryTask = nil
+
         centralManager.scanForPeripherals(withServices: [UART_SERVICE_UUID], options: [CBCentralManagerScanOptionAllowDuplicatesKey: false])
         publishHealthEvent(.healthy, message: "BLE scanning started")
 
@@ -380,9 +385,11 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
         if isMySondyDevice {
             appLog("🎯 BLE: Found MySondyGo device: \(peripheralName)", category: .ble, level: .info)
 
-            // Cancel scan timeout since we found a device
+            // Cancel scan timeout and retry since we found a device
             scanTimeoutTask?.cancel()
             scanTimeoutTask = nil
+            scanRetryTask?.cancel()
+            scanRetryTask = nil
 
             // Stop scanning and connect
             central.stopScan()
@@ -410,9 +417,10 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
         publishHealthEvent(.healthy, message: "BLE scan timeout - will retry")
 
         // Wait 10 seconds before restarting scan (battery efficient, iOS friendly)
-        Task { @MainActor [weak self] in
+        scanRetryTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 10_000_000_000) // 10 seconds
             guard let self = self, self.connectionState == .notConnected else { return }
+            self.scanRetryTask = nil
             self.startScanning()
         }
     }
@@ -452,19 +460,14 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
             appLog("🟡 BLE: Clean disconnection from \(deviceName)", category: .ble, level: .info)
         }
         
-        // Disconnected
-        
+        // Disconnected - continuous scanning will handle reconnection
+
         connectionState = .notConnected
         lastMessageTimestamp = Date()
         publishHealthEvent(.degraded("BLE disconnected"), message: "BLE disconnected")
-        
-        // Auto-reconnect if disconnected unexpectedly
-        if error != nil {
-            // Auto-reconnect scheduled
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                self.startScanning()
-            }
-        }
+
+        // Note: Continuous scanning (timeout retry) will automatically attempt reconnection
+        // No need for explicit reconnect logic here
     }
 
     func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {

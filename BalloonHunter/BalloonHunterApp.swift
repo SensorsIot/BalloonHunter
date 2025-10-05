@@ -208,21 +208,10 @@ struct BalloonHunterApp: App {
         appLog("BalloonHunterApp: Step 1 - Requesting current user location", category: .lifecycle, level: .info)
         appServices.currentLocationService.requestCurrentLocation()
 
-        // 2. Check BLE connection health BEFORE state evaluation
-        // State machine will check BLE status, so reconnect first if needed
-        let bleService = appServices.bleCommunicationService
-        if bleService.connectionState == .notConnected && bleService.centralManager.state == .poweredOn {
-            appLog("BalloonHunterApp: Step 2 - BLE disconnected during background, attempting reconnection", category: .lifecycle, level: .info)
-            bleService.startScanning()
-            // Give BLE a moment to reconnect before state evaluation
-            try? await Task.sleep(nanoseconds: 500_000_000) // 500ms
-        } else {
-            appLog("BalloonHunterApp: Step 2 - BLE status OK: \(bleService.connectionState)", category: .lifecycle, level: .info)
-        }
-
-        // 3. Trigger state machine evaluation
+        // 2. Trigger state machine evaluation
+        // Note: Continuous BLE scanning handles reconnection automatically
         // State machine will check current conditions and transition if needed
-        appLog("BalloonHunterApp: Step 3 - Triggering state machine evaluation", category: .lifecycle, level: .info)
+        appLog("BalloonHunterApp: Step 2 - Triggering state machine evaluation", category: .lifecycle, level: .info)
         let previousState = appServices.balloonPositionService.currentState
         appServices.balloonPositionService.triggerStateEvaluation()
 
