@@ -35,6 +35,7 @@ final class ServiceCoordinator: ObservableObject {
     let balloonPositionService: BalloonPositionService
     let balloonTrackService: BalloonTrackService
     let landingPointTrackingService: LandingPointTrackingService
+    let routeCalculationService: RouteCalculationService
     let navigationService: NavigationService
 
     private var cancellables = Set<AnyCancellable>()
@@ -61,11 +62,12 @@ final class ServiceCoordinator: ObservableObject {
         balloonPositionService: BalloonPositionService,
         balloonTrackService: BalloonTrackService,
         landingPointTrackingService: LandingPointTrackingService,
+        routeCalculationService: RouteCalculationService,
         navigationService: NavigationService,
         userSettings: UserSettings
     ) {
         // ServiceCoordinator initialized (logged at AppServices level)
-        
+
         // Use injected services instead of creating new ones
         self.bleCommunicationService = bleCommunicationService
         self.currentLocationService = currentLocationService
@@ -76,6 +78,7 @@ final class ServiceCoordinator: ObservableObject {
         self.balloonPositionService = balloonPositionService
         self.balloonTrackService = balloonTrackService
         self.landingPointTrackingService = landingPointTrackingService
+        self.routeCalculationService = routeCalculationService
         self.navigationService = navigationService
         self.userSettings = userSettings
 

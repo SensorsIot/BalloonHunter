@@ -61,6 +61,7 @@ struct BalloonHunterApp: App {
             balloonPositionService: services.balloonPositionService,
             balloonTrackService: services.balloonTrackService,
             landingPointTrackingService: services.landingPointTrackingService,
+            routeCalculationService: services.routeCalculationService,
             navigationService: services.navigationService,
             userSettings: services.userSettings
         )

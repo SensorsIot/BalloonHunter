@@ -396,6 +396,7 @@ struct DataPanelView: View {
         balloonPositionService: mockAppServices.balloonPositionService,
         balloonTrackService: mockAppServices.balloonTrackService,
         landingPointTrackingService: mockAppServices.landingPointTrackingService,
+        routeCalculationService: mockAppServices.routeCalculationService,
         navigationService: mockAppServices.navigationService,
         userSettings: mockAppServices.userSettings
     )
