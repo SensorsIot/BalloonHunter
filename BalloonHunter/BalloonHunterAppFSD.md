@@ -854,7 +854,7 @@ The APRS service filters out ground-based test sondes to prevent them from being
 
 #### Historical Telemetry Gap Filling
 
-The APRS service provides a historical telemetry endpoint to fill gaps in the local BLE track with complete flight data from SondeHub:
+**Purpose**: The APRS service fetches complete historical track data from SondeHub to fill gaps in the local BLE track. This ensures the user always receives all available telemetry data for the current sonde, even if BLE connection was interrupted or established mid-flight.
 
 **API Endpoint**: `GET /sondes/telemetry?serial=<serial>&duration=<duration>`
 - Default duration: `3d` (SondeHub retains data for ~3 days)
@@ -862,27 +862,24 @@ The APRS service provides a historical telemetry endpoint to fill gaps in the lo
 - Response size: ~9.6 MB uncompressed (685 KB gzipped) for 10,000 points
 - Response time: ~9 seconds (server processing ~9s, download <0.2s)
 
-**SondeHub Historical Point Fields**:
-- Position: `lat`, `lon`, `alt`, `heading`
-- Motion: `vel_v`, `vel_h`
-- Environmental: `temp`, `humidity`
-- Sonde info: `serial`, `type`, `subtype`, `manufacturer`, `frame`, `batt`, `burst_timer`
-- GPS quality: `sats`, `ref_position`, `ref_datetime`
-- Radio: `frequency`, `tx_frequency`, `snr`
-- Hardware: `rs41_mainboard`, `rs41_mainboard_fw`
-- Uploader: `uploader_callsign`, `uploader_position`, `uploader_alt`, `uploader_antenna`
-- Metadata: `datetime`, `software_name`, `software_version`, `time_received`
+**Historical Point Fields** (parsed from SondeHub response):
+- Essential tracking: `serial`, `datetime`, `lat`, `lon`, `alt`
+- Motion data: `vel_v` (vertical speed), `vel_h` (horizontal speed)
+- *Note*: Only essential fields are extracted for efficiency; environmental/hardware metadata is discarded
 
 **Timeout Configuration**:
 - Regular polling: 5 seconds (for quick site endpoint responses)
 - Historical telemetry: 30 seconds (allows for 9s typical response + network buffer)
 
 **Gap Filling Process**:
-1. Compare local track timestamps with historical telemetry timestamps
-2. Filter to only new points (not already in local track)
-3. Convert to `BalloonTrackPoint` format (lat/lon/alt/timestamp/speeds)
-4. Merge into local track and sort by timestamp
-5. Persist combined track for future sessions
+1. Fetch complete historical track for current sonde serial number
+2. Compare local track timestamps with historical telemetry timestamps
+3. Filter to only new points (not already in local track)
+4. Convert to `BalloonTrackPoint` format (lat/lon/alt/timestamp/speeds)
+5. Merge into local track and sort by timestamp
+6. Persist combined track for future sessions
+
+This mechanism ensures users see the complete balloon flight path even if they connect to MySondyGo after launch.
 
 ### Current Location Service
 

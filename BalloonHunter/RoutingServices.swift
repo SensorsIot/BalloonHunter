@@ -151,33 +151,26 @@ final class RouteCalculationService: ObservableObject {
     init(currentLocationService: CurrentLocationService) {
         self.currentLocationService = currentLocationService
 
-        // CRITICAL: Subscribe to user location updates
-        // This ensures route calculation happens automatically when location becomes available,
-        // even if calculateRoute() was called before GPS fix was ready
         currentLocationService.$locationData
             .sink { [weak self] locationData in
                 guard let self = self else { return }
 
-                // If location becomes unavailable, clear the route
                 guard let locationData = locationData else {
                     if self.currentRoute != nil {
-                        appLog("RouteCalculationService: User location lost, clearing route", category: .service, level: .error)
                         self.currentRoute = nil
                     }
                     return
                 }
 
-                // Only calculate if we have a pending destination
                 guard let destination = self.lastDestination else {
-                    return  // No destination stored, nothing to calculate
+                    return
                 }
 
-                // Only calculate if we don't have a route yet (avoid redundant calculations)
                 guard self.currentRoute == nil else {
-                    return  // Route already exists for this destination
+                    return
                 }
 
-                appLog("RouteCalculationService: ✅ User location now available at [\(String(format: "%.4f", locationData.latitude)), \(String(format: "%.4f", locationData.longitude))], calculating pending route to destination", category: .service, level: .info)
+                appLog("RouteCalculationService: User location available, calculating route", category: .service, level: .info)
                 self.calculateAndPublishRoute(from: locationData, to: destination)
             }
             .store(in: &cancellables)

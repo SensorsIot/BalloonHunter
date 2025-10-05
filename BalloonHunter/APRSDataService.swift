@@ -34,90 +34,21 @@ typealias SondeHubSiteResponse = [String: SondeHubSondeData]
 
 /// SondeHub historical telemetry point (from telemetry endpoint)
 struct SondeHubHistoricalPoint: Codable {
-    // Position & Time
     let serial: String?
     let datetime: String?
     let lat: Double?
     let lon: Double?
     let alt: Double?
-
-    // Velocity & Motion
-    let vel_v: Double?  // Vertical velocity (m/s)
-    let vel_h: Double?  // Horizontal velocity (m/s)
-    let heading: Double?
-
-    // Environmental Sensors
-    let temp: Double?
-    let humidity: Double?
-    // Note: pressure doesn't exist in real SondeHub data
-
-    // Sonde Info
-    let type: String?
-    let subtype: String?
-    let manufacturer: String?
-    let frame: Int?
-    let batt: Double?  // Battery voltage
-    let burst_timer: Int?
-
-    // GPS Quality
-    let sats: Int?  // Satellite count
-    let ref_position: String?  // "GPS"
-    let ref_datetime: String?  // "GPS"
-
-    // Radio Info
-    let frequency: Double?
-    let tx_frequency: Double?
-    let snr: Double?
-
-    // RS41-specific
-    let rs41_mainboard: String?
-    let rs41_mainboard_fw: String?
-
-    // Uploader Info
-    let uploader_callsign: String?
-    let uploader_position: String?  // "lat,lon,alt" format
-    let uploader_alt: Double?
-    let uploader_antenna: String?
-    // Note: uploaders array contains detailed uploader info per receiver - we ignore it for now
-    // let uploaders: [[String: Any]]?
-
-    // Software Info
-    let software_name: String?
-    let software_version: String?
-    let time_received: String?
-    let upload_time_delta: Double?
-
-    // Metadata
-    let position: String?  // "lat,lon" format (duplicate of lat/lon)
-    let user_agent: String?  // CDN/proxy info (e.g., "Amazon CloudFront")
-
-    // Coding keys to handle "user-agent" with hyphen
-    enum CodingKeys: String, CodingKey {
-        case serial, datetime, lat, lon, alt
-        case vel_v, vel_h, heading
-        case temp, humidity
-        case type, subtype, manufacturer, frame, batt, burst_timer
-        case sats, ref_position, ref_datetime
-        case frequency, tx_frequency, snr
-        case rs41_mainboard, rs41_mainboard_fw
-        case uploader_callsign, uploader_position, uploader_alt, uploader_antenna
-        case software_name, software_version, time_received, upload_time_delta
-        case position
-        case user_agent = "user-agent"  // Map "user-agent" to user_agent
-    }
+    let vel_v: Double?
+    let vel_h: Double?
 
     var timestamp: Date? {
         guard let datetime = datetime else { return nil }
-
-        // Try with fractional seconds first (microseconds format: .999000Z)
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-
         if let date = formatter.date(from: datetime) {
             return date
         }
-
-        // Fallback without fractional seconds
         formatter.formatOptions = [.withInternetDateTime]
         return formatter.date(from: datetime)
     }
@@ -590,15 +521,9 @@ final class APRSDataService: ObservableObject {
                 return []
             }
 
-            appLog("APRSDataService: Received \(data.count) bytes from SondeHub", category: .service, level: .info)
-
-            // Decode nested dictionary structure: { "serial": { "timestamp": {...} } }
             let decoder = JSONDecoder()
-
-            // First decode as nested dictionaries
             let nestedDict = try decoder.decode([String: [String: SondeHubHistoricalPoint]].self, from: data)
 
-            // Flatten to array of points
             var historicalPoints: [SondeHubHistoricalPoint] = []
             for (_, timestampDict) in nestedDict {
                 for (_, point) in timestampDict {
@@ -606,54 +531,17 @@ final class APRSDataService: ObservableObject {
                 }
             }
 
-            appLog("APRSDataService: Received \(historicalPoints.count) historical telemetry points", category: .service, level: .info)
-
-            // Debug: Show field population for first point
-            if let firstPoint = historicalPoints.first {
-                appLog("APRSDataService: First point fields - serial:\(firstPoint.serial ?? "nil") datetime:\(firstPoint.datetime ?? "nil")", category: .service, level: .info)
-                appLog("APRSDataService: Position - lat:\(firstPoint.lat?.description ?? "nil") lon:\(firstPoint.lon?.description ?? "nil") alt:\(firstPoint.alt?.description ?? "nil")", category: .service, level: .info)
-                appLog("APRSDataService: Motion - vel_v:\(firstPoint.vel_v?.description ?? "nil") vel_h:\(firstPoint.vel_h?.description ?? "nil") heading:\(firstPoint.heading?.description ?? "nil")", category: .service, level: .info)
-                appLog("APRSDataService: Sensors - temp:\(firstPoint.temp?.description ?? "nil") humidity:\(firstPoint.humidity?.description ?? "nil")", category: .service, level: .info)
-                appLog("APRSDataService: Sonde - type:\(firstPoint.type ?? "nil") subtype:\(firstPoint.subtype ?? "nil") batt:\(firstPoint.batt?.description ?? "nil") sats:\(firstPoint.sats?.description ?? "nil")", category: .service, level: .info)
-                appLog("APRSDataService: Radio - freq:\(firstPoint.frequency?.description ?? "nil") snr:\(firstPoint.snr?.description ?? "nil")", category: .service, level: .info)
-            }
-
-            // Find gaps in local track
             let localTimestamps = Set(localTrack.map { $0.timestamp })
-
-            // Debug: Show first few timestamps
-            if let firstHistorical = historicalPoints.first?.timestamp {
-                appLog("APRSDataService: First historical timestamp: \(firstHistorical)", category: .service, level: .info)
-            }
-            if let firstLocal = localTrack.first?.timestamp {
-                appLog("APRSDataService: First local timestamp: \(firstLocal)", category: .service, level: .info)
-            }
-            appLog("APRSDataService: Local track has \(localTimestamps.count) unique timestamps", category: .service, level: .info)
-
-            // Filter to only points we don't already have
             let newPoints = historicalPoints.filter { point in
                 guard let timestamp = point.timestamp else { return false }
                 return !localTimestamps.contains(timestamp)
             }
 
-            appLog("APRSDataService: Found \(newPoints.count) new points to fill gaps", category: .service, level: .info)
-
-            // Debug: Show first and last coordinates from APRS historical
-            if let firstPoint = historicalPoints.first, let firstLat = firstPoint.lat, let firstLon = firstPoint.lon, let firstAlt = firstPoint.alt {
-                appLog("APRSDataService: First APRS point - lat: \(String(format: "%.5f", firstLat)), lon: \(String(format: "%.5f", firstLon)), alt: \(String(format: "%.0f", firstAlt))m", category: .service, level: .info)
-            }
-            if let lastPoint = historicalPoints.last, let lastLat = lastPoint.lat, let lastLon = lastPoint.lon, let lastAlt = lastPoint.alt {
-                appLog("APRSDataService: Last APRS point - lat: \(String(format: "%.5f", lastLat)), lon: \(String(format: "%.5f", lastLon)), alt: \(String(format: "%.0f", lastAlt))m", category: .service, level: .info)
-            }
-
-            // Convert to BalloonTrackPoint
-            var failedConversions = 0
             let trackPoints = newPoints.compactMap { point -> BalloonTrackPoint? in
                 guard let timestamp = point.timestamp,
                       let lat = point.lat,
                       let lon = point.lon,
                       let alt = point.alt else {
-                    failedConversions += 1
                     return nil
                 }
 
@@ -667,28 +555,9 @@ final class APRSDataService: ObservableObject {
                 )
             }
 
-            if failedConversions > 0 {
-                appLog("APRSDataService: Failed to convert \(failedConversions) points (missing required fields)", category: .service, level: .error)
-            }
-            appLog("APRSDataService: Successfully converted \(trackPoints.count) points to BalloonTrackPoint", category: .service, level: .info)
-
+            appLog("APRSDataService: Added \(trackPoints.count) historical points (total received: \(historicalPoints.count))", category: .service, level: .info)
             return trackPoints
 
-        } catch let decodingError as DecodingError {
-            appLog("APRSDataService: Historical fetch decoding error: \(decodingError)", category: .service, level: .error)
-            switch decodingError {
-            case .keyNotFound(let key, let context):
-                appLog("APRSDataService: Missing key '\(key.stringValue)' at path: \(context.codingPath.map { $0.stringValue }.joined(separator: "."))", category: .service, level: .error)
-            case .typeMismatch(let type, let context):
-                appLog("APRSDataService: Type mismatch for type \(type) at path: \(context.codingPath.map { $0.stringValue }.joined(separator: "."))", category: .service, level: .error)
-            case .valueNotFound(let type, let context):
-                appLog("APRSDataService: Value not found for type \(type) at path: \(context.codingPath.map { $0.stringValue }.joined(separator: "."))", category: .service, level: .error)
-            case .dataCorrupted(let context):
-                appLog("APRSDataService: Data corrupted at path: \(context.codingPath.map { $0.stringValue }.joined(separator: "."))", category: .service, level: .error)
-            @unknown default:
-                appLog("APRSDataService: Unknown decoding error", category: .service, level: .error)
-            }
-            return []
         } catch {
             appLog("APRSDataService: Historical fetch error: \(error)", category: .service, level: .error)
             return []
