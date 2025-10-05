@@ -123,6 +123,7 @@ final class PersistenceService: ObservableObject {
     func purgeAllTracks() {
         internalTracks.removeAll()
         userDefaults.removeObject(forKey: "BalloonTracks")
+        removeFromDocumentsDirectory(filename: "BalloonTracks.json")
         appLog("PersistenceService: All balloon tracks purged.", category: .service, level: .debug)
     }
     
