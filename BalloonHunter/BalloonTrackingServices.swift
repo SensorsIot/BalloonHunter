@@ -1244,12 +1244,8 @@ final class LandingPointTrackingService: ObservableObject {
         self.persistenceService = persistenceService
         self.balloonTrackService = balloonTrackService
 
-        balloonTrackService.$currentBalloonName
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] newName in
-                self?.handleSondeChange(newName: newName)
-            }
-            .store(in: &cancellables)
+        // Note: Sonde change handling now managed by ServiceCoordinator
+        // which calls resetForNewSonde() when sonde name changes
     }
 
     // Set reference to RouteCalculationService for service chain
@@ -1332,39 +1328,31 @@ final class LandingPointTrackingService: ObservableObject {
         currentLandingPoint = nil
     }
 
-    private func handleSondeChange(newName: String?) {
-        guard currentSondeName != newName else { return }
-
-        if let previous = currentSondeName, let newName, previous != newName {
-            persistenceService.removeLandingHistory(for: previous)
-        }
-
-        currentSondeName = newName
-
-        if let name = newName, let storedHistory = persistenceService.loadLandingHistory(sondeName: name) {
-            landingHistory = storedHistory
-            lastLandingPrediction = storedHistory.last
-        } else {
-            resetHistory()
-        }
-
-        // Reset navigation service to clear landing point change tracking
-        navigationService?.resetForNewSonde()
-
-        // Process pending landing point if we have one
-        if let pending = pendingLandingPoint, newName != nil {
-            appLog("LandingPointTrackingService: Sonde name available - processing pending landing point for route calculation", category: .service, level: .info)
-            pendingLandingPoint = nil
-            triggerRouteCalculation(to: pending)
-        }
-    }
-
     // MARK: - Sonde Change Handling
 
     func resetForNewSonde() {
-        // Clear current state (observer will reload sonde-specific data)
-        landingHistory = []
-        lastLandingPrediction = nil
+        // Get the new sonde name from BalloonTrackService
+        let newSondeName = balloonTrackService.currentBalloonName
+
+        // Clean up old sonde data if we had a previous sonde
+        if let previous = currentSondeName, let newName = newSondeName, previous != newName {
+            persistenceService.removeLandingHistory(for: previous)
+        }
+
+        // Update to new sonde
+        currentSondeName = newSondeName
+
+        // Load history for new sonde if it exists, otherwise clear
+        if let name = newSondeName, let storedHistory = persistenceService.loadLandingHistory(sondeName: name) {
+            landingHistory = storedHistory
+            lastLandingPrediction = storedHistory.last
+            appLog("LandingPointTrackingService: Loaded \(storedHistory.count) landing points for new sonde \(name)", category: .service, level: .info)
+        } else {
+            landingHistory = []
+            lastLandingPrediction = nil
+        }
+
+        // Clear current state (will be repopulated by new predictions)
         currentLandingPoint = nil
         pendingLandingPoint = nil
 

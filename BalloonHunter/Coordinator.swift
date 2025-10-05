@@ -433,8 +433,10 @@ final class ServiceCoordinator: ObservableObject {
             await routingCache.purgeAll()
         }
 
-        // 3. Trigger state machine evaluation - state machine decides which services to activate
-        balloonPositionService.triggerStateEvaluation()
+        // 3. Refresh state machine - re-applies current state logic to activate appropriate services
+        // Use refreshCurrentState() instead of triggerStateEvaluation() because state may not change
+        // (e.g., staying in aprsFallbackFlying), but we still need to trigger predictions/routes
+        balloonPositionService.refreshCurrentState()
 
         appLog("✅ ServiceCoordinator: Reset complete for new sonde \(newName)", category: .service, level: .info)
     }
