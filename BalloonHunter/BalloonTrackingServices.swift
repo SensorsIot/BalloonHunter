@@ -153,9 +153,10 @@ final class BalloonPositionService: ObservableObject {
         aprsService.$latestPosition
             .receive(on: DispatchQueue.main)
             .sink { [weak self] positionData in
-                // Only update if we're in APRS mode or no BLE data available
+                // Process APRS data when: already in APRS mode, waiting for APRS, or no BLE data available
                 guard let self = self else { return }
-                if self.currentState == .aprsFallbackFlying ||
+                if self.currentState == .waitingForAPRS ||
+                   self.currentState == .aprsFallbackFlying ||
                    self.currentState == .aprsFallbackLanded ||
                    self.currentPositionData == nil {
                     self.handlePositionUpdate(positionData, source: "APRS")
