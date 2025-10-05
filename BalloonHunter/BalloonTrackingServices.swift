@@ -1368,7 +1368,8 @@ final class LandingPointTrackingService: ObservableObject {
         currentLandingPoint = nil
         pendingLandingPoint = nil
 
-        // Reset navigation tracking
+        // Reset downstream services (service chain pattern)
+        routeCalculationService?.resetForNewSonde()
         navigationService?.resetForNewSonde()
 
         appLog("LandingPointTrackingService: Reset for new sonde", category: .service, level: .info)

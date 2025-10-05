@@ -420,10 +420,9 @@ final class ServiceCoordinator: ObservableObject {
     private func handleNewSondeDetected(oldName: String?, newName: String) {
         appLog("🎈 ServiceCoordinator: New sonde detected - \(oldName ?? "none") → \(newName)", category: .service, level: .info)
 
-        // 1. Reset all services (order: leaf services first)
-        navigationService.resetForNewSonde()
-        routeCalculationService.resetForNewSonde()
-        landingPointTrackingService.resetForNewSonde()
+        // 1. Reset top-level services (each cascades to its dependencies)
+        // Order: reverse dependency order (leaf services reset by their parents)
+        landingPointTrackingService.resetForNewSonde()  // Resets route+navigation
         balloonTrackService.resetForNewSonde()
         predictionService.resetForNewSonde()
         balloonPositionService.resetForNewSonde()
@@ -433,6 +432,9 @@ final class ServiceCoordinator: ObservableObject {
             await predictionCache.purgeAll()
             await routingCache.purgeAll()
         }
+
+        // 3. Trigger state machine evaluation - state machine decides which services to activate
+        balloonPositionService.triggerStateEvaluation()
 
         appLog("✅ ServiceCoordinator: Reset complete for new sonde \(newName)", category: .service, level: .info)
     }
