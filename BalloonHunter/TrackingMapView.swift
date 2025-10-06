@@ -160,6 +160,7 @@ struct TrackingMapView: View {
                         let trackPolyline = MKPolyline(coordinates: coordinates, count: coordinates.count)
                         MapPolyline(trackPolyline)
                             .stroke(.red, lineWidth: 2)
+                            .id("track-\(trackPoints.count)")
                     }
                     
                     // 2. Balloon Predicted Path: Thick blue line (flying mode only)
@@ -167,13 +168,15 @@ struct TrackingMapView: View {
                        let predictionPath = mapPresenter.predictionPath {
                         MapPolyline(predictionPath)
                             .stroke(.blue, lineWidth: 4)
+                            .id("prediction-\(predictionPath.pointCount)")
                     }
-                    
+
                     // 3. Planned Route: Green path from user to landing point (when needed for navigation)
                     if routeVisible,
                        let userRoute = mapPresenter.userRoute {
                         MapPolyline(userRoute)
                             .stroke(.green, lineWidth: 3)
+                            .id("route-\(userRoute.pointCount)")
                     } else {
                         if !routeVisible {
                             let _ = appLog("🗺️ MAP: Route NOT visible (routeVisible=false, state=\(mapPresenter.balloonPositionService.currentState.description), within200m=\(isWithin200mOfLandedBalloon))", category: .ui, level: .info)
@@ -189,6 +192,7 @@ struct TrackingMapView: View {
                         let landingPolyline = MKPolyline(coordinates: landingCoordinates, count: landingCoordinates.count)
                         MapPolyline(landingPolyline)
                             .stroke(.purple, lineWidth: 2)
+                            .id("landing-history-\(landingHistory.count)")
                     }
 
                     if !landingHistory.isEmpty {
