@@ -697,4 +697,10 @@ final class PredictionService: ObservableObject {
         // Timer continues running if already active
         appLog("PredictionService: Reset for new sonde", category: .service, level: .info)
     }
+
+    /// Clear state for new sonde (per FSD terminology)
+    /// Alias for resetForNewSonde()
+    func clearState() {
+        resetForNewSonde()
+    }
 }

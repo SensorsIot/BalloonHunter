@@ -299,52 +299,35 @@ final class ServiceCoordinator: ObservableObject {
         appLog("ServiceCoordinator: Persistence data loading complete - UserSettings, tracks, and histories restored", category: .general, level: .info)
 
     }
-    // MARK: - Sonde Change Orchestration
+    // MARK: - Sonde Change Orchestration (Per FSD)
 
-    private var lastSeenSondeName: String? = nil
+    /// Clear all old sonde data when new sonde is detected
+    /// Called by BalloonPositionService when sonde name change detected
+    /// Per FSD Section: Sonde Change Flow
+    func clearAllSondeData() {
+        appLog("🎈 ServiceCoordinator: Clearing all old sonde data", category: .service, level: .info)
 
-    private func handleBalloonNameChange(_ newName: String?) {
-        guard let newName = newName, !newName.isEmpty else { return }
+        // 1. Stop services
+        stopPredictionTimer()
+        aprsService.disablePolling()
 
-        // Check if this is a different sonde OR first initialization
-        if let lastSeen = lastSeenSondeName {
-            if lastSeen != newName {
-                // New sonde detected!
-                handleNewSondeDetected(oldName: lastSeen, newName: newName)
-            }
-        } else {
-            // First initialization - load persisted data for current sonde
-            appLog("🎈 ServiceCoordinator: First sonde initialization - \(newName)", category: .service, level: .info)
-            landingPointTrackingService.resetForNewSonde()  // Loads persisted landing history
-        }
+        // 2. Purge ALL persisted data
+        persistenceService.purgeAllTracks()
+        persistenceService.purgeAllLandingHistories()
 
-        // Update tracking
-        lastSeenSondeName = newName
-    }
-
-    private func handleNewSondeDetected(oldName: String?, newName: String) {
-        appLog("🎈 ServiceCoordinator: New sonde detected - \(oldName ?? "none") → \(newName)", category: .service, level: .info)
-
-        // 1. Reset top-level services (each cascades to its dependencies)
-        // Order: reverse dependency order (leaf services reset by their parents)
-        landingPointTrackingService.resetForNewSonde()  // Resets route+navigation
-        balloonTrackService.resetForNewSonde()
-        predictionService.resetForNewSonde()
-        balloonPositionService.clearState()
-
-        // 2. Clear caches
+        // 3. Clear ALL caches (async)
         Task {
             await predictionCache.purgeAll()
             await routingCache.purgeAll()
         }
 
-        // 3. Refresh state machine - re-applies current state logic to activate appropriate services
-        // Use refreshCurrentState() instead of triggerStateEvaluation() because state may not change
-        // (e.g., staying in aprsFallbackFlying), but we still need to trigger predictions/routes
-        // Skip historical fill - track is empty after reset, nothing to fill yet
-        balloonPositionService.refreshCurrentState(skipHistoricalFill: true)
+        // 4. Clear in-memory state (all services) - direct clearing, no cascades
+        balloonPositionService.clearState()
+        balloonTrackService.clearState()
+        landingPointTrackingService.clearState()
+        predictionService.clearState()
 
-        appLog("✅ ServiceCoordinator: Reset complete for new sonde \(newName)", category: .service, level: .info)
+        appLog("✅ ServiceCoordinator: All old sonde data cleared", category: .service, level: .info)
     }
 
     // MARK: - UI Support Methods
