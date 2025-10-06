@@ -872,46 +872,8 @@ final class BalloonTrackService: ObservableObject {
         self.balloonPositionService = balloonPositionService
 
         // BalloonTrackService initialized
-        cleanupPersistedTracks()
         setupSubscriptions()
         loadPersistedDataAtStartup()
-    }
-
-    /// Clean up persisted tracks by removing invalid coordinate points (0,0)
-    private func cleanupPersistedTracks() {
-        let allTracks = persistenceService.getAllTracks()
-        var cleanedCount = 0
-        var totalOriginalPoints = 0
-        var totalValidPoints = 0
-
-        for (sondeName, trackData) in allTracks {
-            let originalCount = trackData.count
-            totalOriginalPoints += originalCount
-
-            // Filter out invalid coordinates (0,0) and empty/nil values
-            let validTrackData = trackData.filter { point in
-                return point.latitude != 0.0 &&
-                       point.longitude != 0.0 &&
-                       abs(point.latitude) <= 90.0 &&
-                       abs(point.longitude) <= 180.0
-            }
-
-            let validCount = validTrackData.count
-            totalValidPoints += validCount
-
-            if validCount != originalCount {
-                // Save cleaned track data back to persistence
-                persistenceService.saveBalloonTrack(sondeName: sondeName, track: validTrackData)
-                cleanedCount += 1
-                appLog("BalloonTrackService: Cleaned track '\(sondeName)' - removed \(originalCount - validCount) invalid points (\(validCount)/\(originalCount) valid)", category: .service, level: .info)
-            }
-        }
-
-        if cleanedCount > 0 {
-            appLog("BalloonTrackService: Startup cleanup completed - cleaned \(cleanedCount) tracks, removed \(totalOriginalPoints - totalValidPoints) invalid points", category: .service, level: .info)
-        } else {
-            appLog("BalloonTrackService: Startup cleanup completed - all persisted tracks valid", category: .service, level: .debug)
-        }
     }
 
     /// Load any persisted balloon data at startup
@@ -1218,6 +1180,69 @@ final class BalloonTrackService: ObservableObject {
         self.aprsService = aprsService
     }
 
+    /// Fill gaps in track with APRS historical points
+    /// Only inserts APRS points where gaps > 1 second exist
+    /// BLE data always takes priority (we never overwrite existing points)
+    private func fillGapsInTrack(with aprsPoints: [BalloonTrackPoint]) -> Int {
+        guard !aprsPoints.isEmpty else { return 0 }
+        guard !currentBalloonTrack.isEmpty else {
+            // Empty track - just use APRS points as is
+            currentBalloonTrack = aprsPoints.sorted { $0.timestamp < $1.timestamp }
+            return aprsPoints.count
+        }
+
+        let calendar = Calendar.current
+
+        // Helper to round timestamp to nearest second
+        func roundToSecond(_ date: Date) -> Date {
+            let components = calendar.dateComponents([.year, .month, .day, .hour, .minute, .second], from: date)
+            return calendar.date(from: components) ?? date
+        }
+
+        // Build dictionary of APRS points indexed by second for O(1) lookup
+        var aprsBySecond: [Date: BalloonTrackPoint] = [:]
+        for point in aprsPoints {
+            let rounded = roundToSecond(point.timestamp)
+            aprsBySecond[rounded] = point
+        }
+
+        // Walk through existing track and fill gaps
+        var filledTrack: [BalloonTrackPoint] = []
+        var pointsAdded = 0
+
+        for i in 0..<currentBalloonTrack.count {
+            // Add existing point
+            filledTrack.append(currentBalloonTrack[i])
+
+            // Check for gap before next point
+            if i < currentBalloonTrack.count - 1 {
+                let currentRounded = roundToSecond(currentBalloonTrack[i].timestamp)
+                let nextRounded = roundToSecond(currentBalloonTrack[i+1].timestamp)
+
+                let gap = nextRounded.timeIntervalSince(currentRounded)
+
+                // Gap detected (> 1 second)
+                if gap > 1.5 {
+                    // Fill the gap second by second from APRS data
+                    var currentSecond = currentRounded.addingTimeInterval(1)
+
+                    while currentSecond < nextRounded {
+                        if let aprsPoint = aprsBySecond[currentSecond] {
+                            filledTrack.append(aprsPoint)
+                            pointsAdded += 1
+                        }
+                        currentSecond = currentSecond.addingTimeInterval(1)
+                    }
+                }
+            }
+        }
+
+        // Update track with filled version (already in chronological order)
+        currentBalloonTrack = filledTrack
+
+        return pointsAdded
+    }
+
     /// Fill track gaps from APRS historical telemetry
     /// Runs asynchronously and does not block UI
     func fillTrackGapsFromAPRS() {
@@ -1261,10 +1286,10 @@ final class BalloonTrackService: ObservableObject {
                         return
                     }
 
-                    let combinedTrack = currentBalloonTrack + newPoints
-                    // Sort by timestamp
-                    currentBalloonTrack = combinedTrack.sorted { $0.timestamp < $1.timestamp }
-                    appLog("BalloonTrackService: Added \(newPoints.count) historical points, total track now has \(currentBalloonTrack.count) points", category: .service, level: .info)
+                    // GAP FILLING: Only insert APRS points where gaps exist
+                    // BLE data always takes priority - APRS fills gaps only
+                    let pointsAdded = fillGapsInTrack(with: newPoints)
+                    appLog("BalloonTrackService: Added \(pointsAdded) APRS points to fill gaps, total track now has \(currentBalloonTrack.count) points", category: .service, level: .info)
                     trackUpdated.send()
                     saveCurrentTrack()
 
