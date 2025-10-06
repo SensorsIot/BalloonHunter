@@ -90,6 +90,7 @@ final class BalloonPositionService: ObservableObject {
     private let predictionService: PredictionService
     private let routeCalculationService: RouteCalculationService
     private var landingPointTrackingService: LandingPointTrackingService?
+    private weak var serviceCoordinator: ServiceCoordinator?
     private var currentUserLocation: LocationData?
     private var lastTelemetryTime: Date?
     private var lastLoggedBurstKillerTime: Int?
@@ -129,6 +130,12 @@ final class BalloonPositionService: ObservableObject {
     func setLandingPointTrackingService(_ landingPointTrackingService: LandingPointTrackingService) {
         self.landingPointTrackingService = landingPointTrackingService
         appLog("BalloonPositionService: LandingPointTrackingService configured", category: .service, level: .info)
+    }
+
+    // Set reference to ServiceCoordinator for sonde change coordination
+    func setServiceCoordinator(_ coordinator: ServiceCoordinator) {
+        self.serviceCoordinator = coordinator
+        appLog("BalloonPositionService: ServiceCoordinator configured", category: .service, level: .info)
     }
     
     private func setupSubscriptions() {
@@ -208,13 +215,38 @@ final class BalloonPositionService: ObservableObject {
         // Detect sonde change BEFORE updating anything
         let incomingName = position.sondeName.trimmingCharacters(in: .whitespacesAndNewlines)
         if !incomingName.isEmpty, let currentName = currentBalloonName, currentName != incomingName {
-            appLog("BalloonPositionService: Sonde name change detected: \(currentName) → \(incomingName)", category: .service, level: .info)
-            // Store this position AND its source - will become first point of new sonde after reset
+            appLog("🎈 BalloonPositionService: Sonde name change detected: \(currentName) → \(incomingName)", category: .service, level: .info)
+
+            // NEW FLOW: Stash, Clear, Load APRS, Process
+
+            // 1. Stash the new telemetry packet
             sondeChangePosition = position
             sondeChangeSource = source
-            // Update name - ServiceCoordinator observer will trigger reset cascade
-            currentBalloonName = incomingName
-            // Return - resetForNewSonde() will process the stored position
+            appLog("BalloonPositionService: Stashed new sonde telemetry from \(source)", category: .service, level: .info)
+
+            // 2. Call coordinator to clear all old sonde data
+            if let coordinator = serviceCoordinator {
+                coordinator.clearAllSondeData()
+            } else {
+                appLog("BalloonPositionService: WARNING - No ServiceCoordinator available for sonde change", category: .service, level: .error)
+            }
+
+            // 3. Trigger async APRS track fetch (don't wait)
+            balloonTrackService?.fillTrackGapsFromAPRS()
+
+            // 4. Process stashed packet normally (updates currentBalloonName, publishes to subscribers)
+            if let stashedPosition = sondeChangePosition, let stashedSource = sondeChangeSource {
+                appLog("BalloonPositionService: Processing stashed telemetry for new sonde \(stashedPosition.sondeName)", category: .service, level: .info)
+
+                // Clear stash
+                sondeChangePosition = nil
+                sondeChangeSource = nil
+
+                // Process as if it just arrived (recursive call with fresh state)
+                handlePositionUpdate(stashedPosition, source: stashedSource)
+            }
+
+            // 5. Return - processing complete
             return
         }
 
@@ -346,7 +378,13 @@ final class BalloonPositionService: ObservableObject {
         case .liveBLELanded:
             // BLE telemetry active, balloon landed
             aprsService.disablePolling()
-            // Landing point now coordinated by ServiceCoordinator
+            // Set landing point to current balloon position and trigger route calculation
+            if let position = currentPositionData {
+                let landingCoord = CLLocationCoordinate2D(latitude: position.latitude, longitude: position.longitude)
+                Task {
+                    await landingPointTrackingService?.updateLandingPoint(landingCoord, source: .currentPosition)
+                }
+            }
 
         case .waitingForAPRS:
             // BLE lost - start APRS polling and wait for response
@@ -363,11 +401,21 @@ final class BalloonPositionService: ObservableObject {
                     await predictionService.triggerPredictionWithPosition(position, trigger: "state-machine")
                 }
             }
+            // Fill track from APRS historical data when entering APRS fallback mode
+            balloonTrackService?.fillTrackGapsFromAPRS()
 
         case .aprsFallbackLanded:
             // APRS fallback with old/stale data indicating landing
             aprsService.enablePolling()
-            // Landing point now coordinated by ServiceCoordinator
+            // Set landing point to current balloon position and trigger route calculation
+            if let position = currentPositionData {
+                let landingCoord = CLLocationCoordinate2D(latitude: position.latitude, longitude: position.longitude)
+                Task {
+                    await landingPointTrackingService?.updateLandingPoint(landingCoord, source: .currentPosition)
+                }
+            }
+            // Fill track from APRS historical data when entering APRS fallback mode
+            balloonTrackService?.fillTrackGapsFromAPRS()
         }
 
         // Update staleness thresholds based on expected telemetry source
@@ -592,8 +640,8 @@ final class BalloonPositionService: ObservableObject {
         appLog("BalloonPositionService: Refreshing current state (\(currentState)) service configuration", category: .service, level: .info)
         handleStateTransition(to: currentState)
 
-        // Fill track gaps from APRS historical data when refreshing state
-        // Skip on sonde change - track is empty, nothing to fill yet
+        // Fill track from APRS historical data (works even with empty track)
+        // Skip during sonde change - will be triggered after new sonde name is established
         if !skipHistoricalFill {
             balloonTrackService?.fillTrackGapsFromAPRS()
         }
@@ -673,6 +721,14 @@ final class BalloonPositionService: ObservableObject {
             return
         }
 
+        // HIGHEST PRIORITY: Check for historical landing (20+ minutes stationary in track history)
+        // This is definitive - once detected, balloon stays landed regardless of subsequent movement
+        if let balloonTrack = balloonTrackService, balloonTrack.historicalLandingDetected {
+            balloonPhase = .landed
+            appLog("BalloonPositionService: Historical landing detected - balloon marked as LANDED (stationary period at \(balloonTrack.historicalLandingTime?.description ?? "unknown"))", category: .service, level: .info)
+            return
+        }
+
         // Check for old APRS data (age-based landing)
         // Use telemetry timestamp (when balloon last transmitted) to detect landing
         let positionAge = Date().timeIntervalSince(currentPosition.timestamp)
@@ -724,27 +780,27 @@ final class BalloonPositionService: ObservableObject {
 
     // MARK: - Sonde Change Handling
 
-    func resetForNewSonde() {
+    func clearState() {
+        // Clear all state variables (preserve stashed packet and state machine tracking)
         currentPositionData = nil
+        currentRadioChannel = nil
+        // currentBalloonName preserved - will be updated from new packet
+        dataSource = .ble
+        hasReceivedTelemetry = false
+        aprsDataAvailable = false
+        balloonPhase = .unknown
         balloonDisplayPosition = nil
-        currentBalloonName = nil
+        lastTelemetryTime = nil
+        lastLoggedBurstKillerTime = nil
+        processingCount = 0
+        landingLogCount = 0
+        speedCheckLogCount = 0
+        // Do NOT clear: sondeChangePosition, sondeChangeSource (used for stashing)
+        // Do NOT clear: currentState, stateEntryTime, startupTime, isStartupComplete (state machine)
 
-        appLog("BalloonPositionService: Reset for new sonde", category: .service, level: .info)
-
-        // Note: sondeChangePosition will be processed after state refresh
-        // This ensures state machine is in correct state to record track points
+        appLog("BalloonPositionService: State cleared for new sonde", category: .service, level: .info)
     }
 
-    func processPendingSondeChangePosition() {
-        // Process the sonde-change-triggering position as first point for new sonde
-        // Called after state refresh to ensure state allows track recording
-        if let position = sondeChangePosition, let source = sondeChangeSource {
-            appLog("BalloonPositionService: Processing sonde-change telemetry as first point for \(position.sondeName) from \(source)", category: .service, level: .info)
-            handlePositionUpdate(position, source: source)
-            sondeChangePosition = nil
-            sondeChangeSource = nil
-        }
-    }
 }
 
 // MARK: - Balloon Track Service
@@ -765,7 +821,9 @@ final class BalloonTrackService: ObservableObject {
     
     // Landing detection
     @Published var landingPosition: CLLocationCoordinate2D?
-    
+    @Published var historicalLandingDetected: Bool = false
+    @Published var historicalLandingTime: Date?
+
     // Smoothed telemetry data (moved from DataPanelView for proper separation of concerns)
     var smoothedHorizontalSpeed: Double = 0
     var smoothedVerticalSpeed: Double = 0
@@ -889,6 +947,9 @@ final class BalloonTrackService: ObservableObject {
 
             // Manually trigger update for subscribers
             trackUpdated.send()
+
+            // Run historical landing detection on persisted track
+            detectHistoricalLanding()
 
             // Fill gaps from APRS historical data after loading persisted track
             fillTrackGapsFromAPRS()
@@ -1193,6 +1254,8 @@ final class BalloonTrackService: ObservableObject {
             if !newPoints.isEmpty {
                 // Verify sonde hasn't changed while we were fetching historical data
                 await MainActor.run {
+                    appLog("BalloonTrackService: Processing \(newPoints.count) historical points for sonde '\(sondeName)'", category: .service, level: .info)
+
                     guard currentBalloonName == sondeName else {
                         appLog("BalloonTrackService: Sonde changed from '\(sondeName)' to '\(currentBalloonName ?? "nil")' during historical fill - discarding \(newPoints.count) points", category: .service, level: .info)
                         return
@@ -1204,11 +1267,154 @@ final class BalloonTrackService: ObservableObject {
                     appLog("BalloonTrackService: Added \(newPoints.count) historical points, total track now has \(currentBalloonTrack.count) points", category: .service, level: .info)
                     trackUpdated.send()
                     saveCurrentTrack()
+
+                    appLog("BalloonTrackService: Starting historical landing detection on \(currentBalloonTrack.count) points", category: .service, level: .info)
+                    // Analyze track history for stationary landing detection
+                    detectHistoricalLanding()
                 }
             } else {
                 appLog("BalloonTrackService: No new historical points to add", category: .service, level: .info)
+
+                appLog("BalloonTrackService: Starting historical landing detection on existing \(currentBalloonTrack.count) points", category: .service, level: .info)
+                // Still run historical landing detection on existing track
+                detectHistoricalLanding()
             }
         }
+    }
+
+    /// Historical landing detection and automatic track removal after landing position
+    /// Analyzes APRS track history to find landing point and remove post-landing data
+    ///
+    /// STANDARD CASE: Balloon lands and stays at landing location
+    ///   - Track naturally ends at landing, no truncation needed
+    ///   - Handled by real-time landing detection (BalloonPositionService)
+    ///
+    /// SPECIAL CASES requiring track truncation (checked in order):
+    ///   1. Telemetry blackout: Signal lost >20min after burst, then recovered/moved
+    ///      → Truncates at gap (everything after is post-recovery transmission)
+    ///   2. Stationary period: Transmits stationary 20+ min, then moved during recovery
+    ///      → Truncates at stationary point (uses lat/lon/alt moving averages)
+    ///      → Altitude detection prevents false positives during descent
+    func detectHistoricalLanding() {
+        guard currentBalloonTrack.count >= 10 else {
+            appLog("BalloonTrackService: Historical landing detection skipped - insufficient track points (\(currentBalloonTrack.count))", category: .service, level: .debug)
+            return
+        }
+
+        // Calculate actual point density to determine window size for 20 minutes
+        let trackDuration = currentBalloonTrack.last!.timestamp.timeIntervalSince(currentBalloonTrack.first!.timestamp)
+        let avgPointInterval = trackDuration / Double(currentBalloonTrack.count - 1)
+        let targetDuration: TimeInterval = 20 * 60 // 20 minutes
+        let windowSize = max(10, Int(targetDuration / avgPointInterval))
+
+        appLog("BalloonTrackService: Track has \(currentBalloonTrack.count) points over \(Int(trackDuration/60))min, using window size \(windowSize) for 20-minute detection", category: .service, level: .info)
+
+        guard currentBalloonTrack.count >= windowSize else {
+            appLog("BalloonTrackService: Historical landing detection skipped - insufficient track points (\(currentBalloonTrack.count) < \(windowSize))", category: .service, level: .debug)
+            return
+        }
+
+        // Step 1: Find burst point (maximum altitude)
+        var burstIndex = 0
+        var maxAltitude = currentBalloonTrack[0].altitude
+
+        for (index, point) in currentBalloonTrack.enumerated() {
+            if point.altitude > maxAltitude {
+                maxAltitude = point.altitude
+                burstIndex = index
+            }
+        }
+
+        appLog("BalloonTrackService: Burst point found at index \(burstIndex) with altitude \(Int(maxAltitude))m", category: .service, level: .info)
+
+        // Step 2: Only search for landing AFTER burst
+        let searchStartIndex = burstIndex + windowSize
+
+        guard searchStartIndex < currentBalloonTrack.count else {
+            appLog("BalloonTrackService: Historical landing detection skipped - insufficient points after burst (\(currentBalloonTrack.count - burstIndex) points, need \(windowSize + 1))", category: .service, level: .debug)
+            return
+        }
+
+        let stationaryThreshold = 0.0001 // ~11 meters at equator for lat/lon degrees
+        let altitudeThreshold = 0.3 // meters per point
+        let gapThreshold: TimeInterval = 20 * 60 // 20 minutes
+
+        appLog("BalloonTrackService: Searching for landing from index \(searchStartIndex) to \(currentBalloonTrack.count)", category: .service, level: .info)
+
+        // SCENARIO 2: Check for telemetry blackout (balloon stops transmitting, then recovered later)
+        for i in burstIndex..<currentBalloonTrack.count - 1 {
+            let timeDelta = currentBalloonTrack[i + 1].timestamp.timeIntervalSince(currentBalloonTrack[i].timestamp)
+
+            // Blackout (gap > 20min) after burst = landing at last point before blackout
+            if timeDelta > gapThreshold {
+                let landingPoint = currentBalloonTrack[i]
+
+                historicalLandingDetected = true
+                historicalLandingTime = landingPoint.timestamp
+                landingPosition = CLLocationCoordinate2D(
+                    latitude: landingPoint.latitude,
+                    longitude: landingPoint.longitude
+                )
+
+                appLog("BalloonTrackService: 🎯 HISTORICAL LANDING DETECTED via telemetry blackout - \(Int(timeDelta/60))min gap at [\(String(format: "%.5f", landingPoint.latitude)), \(String(format: "%.5f", landingPoint.longitude))], alt \(Int(landingPoint.altitude))m, index \(i), timestamp \(landingPoint.timestamp)", category: .service, level: .info)
+
+                // Truncate track at landing - everything after gap is post-recovery transmission
+                let originalCount = currentBalloonTrack.count
+                currentBalloonTrack = Array(currentBalloonTrack[0...i])
+                appLog("BalloonTrackService: Track truncated at blackout landing index \(i) - removed \(originalCount - currentBalloonTrack.count) post-recovery points", category: .service, level: .info)
+
+                trackUpdated.send()
+                saveCurrentTrack()
+                balloonPositionService.triggerStateEvaluation()
+                return
+            }
+        }
+
+        // SCENARIO 1: Check for stationary period (balloon still transmitting while on ground)
+        for i in searchStartIndex..<currentBalloonTrack.count {
+            let window = Array(currentBalloonTrack[(i - windowSize)..<i])
+
+            // Calculate moving averages of lat/lon/altitude changes
+            var latSum = 0.0
+            var lonSum = 0.0
+            var altSum = 0.0
+
+            for j in 1..<window.count {
+                latSum += abs(window[j].latitude - window[j-1].latitude)
+                lonSum += abs(window[j].longitude - window[j-1].longitude)
+                altSum += abs(window[j].altitude - window[j-1].altitude)
+            }
+
+            let latAvg = latSum / Double(window.count - 1)
+            let lonAvg = lonSum / Double(window.count - 1)
+            let altAvg = altSum / Double(window.count - 1)
+
+            // All averages small = stationary (horizontal AND vertical) = landed
+            if latAvg < stationaryThreshold && lonAvg < stationaryThreshold && altAvg < altitudeThreshold {
+                let landingPoint = currentBalloonTrack[i]
+
+                historicalLandingDetected = true
+                historicalLandingTime = landingPoint.timestamp
+                landingPosition = CLLocationCoordinate2D(
+                    latitude: landingPoint.latitude,
+                    longitude: landingPoint.longitude
+                )
+
+                appLog("BalloonTrackService: 🎯 HISTORICAL LANDING DETECTED via stationary period - at [\(String(format: "%.5f", landingPoint.latitude)), \(String(format: "%.5f", landingPoint.longitude))], alt \(Int(landingPoint.altitude))m, index \(i), timestamp \(landingPoint.timestamp)", category: .service, level: .info)
+
+                // Truncate track at landing point to remove post-recovery movement
+                let originalCount = currentBalloonTrack.count
+                currentBalloonTrack = Array(currentBalloonTrack[0...i])
+                appLog("BalloonTrackService: Track truncated at stationary landing index \(i) - removed \(originalCount - currentBalloonTrack.count) post-landing points", category: .service, level: .info)
+
+                trackUpdated.send()
+                saveCurrentTrack()
+                balloonPositionService.triggerStateEvaluation()
+                return
+            }
+        }
+
+        appLog("BalloonTrackService: Historical landing detection complete - no stationary period found", category: .service, level: .debug)
     }
 
     // Exposed helper to mark the balloon as landed at a given coordinate
@@ -1225,6 +1431,53 @@ final class BalloonTrackService: ObservableObject {
 
     // MARK: - Sonde Change Handling
 
+    func clearState() {
+        appLog("BalloonTrackService: clearState() called - clearing \(currentBalloonTrack.count) points", category: .service, level: .info)
+
+        // Reset all state variables
+        currentBalloonTrack = []
+        currentEffectiveDescentRate = nil
+        landingPosition = nil
+        historicalLandingDetected = false
+        historicalLandingTime = nil
+        smoothingCounter = 0
+        speedCheckLogCount = 0
+        landingLogCount = 0
+
+        // Reset motion metrics
+        motionMetrics = BalloonMotionMetrics(
+            rawHorizontalSpeedMS: 0,
+            rawVerticalSpeedMS: 0,
+            smoothedHorizontalSpeedMS: 0,
+            smoothedVerticalSpeedMS: 0,
+            adjustedDescentRateMS: nil
+        )
+
+        // Reset smoothed speeds
+        smoothedHorizontalSpeed = 0
+        smoothedVerticalSpeed = 0
+        adjustedDescentRate = nil
+        adjustedDescentHistory = []
+
+        // Reset EMA/smoothing state
+        lastEmaTimestamp = nil
+        emaHorizontalMS = 0
+        emaVerticalMS = 0
+        slowEmaHorizontalMS = 0
+        slowEmaVerticalMS = 0
+        hasEma = false
+        hasSlowEma = false
+
+        // Reset Hampel windows
+        hWindow = []
+        vWindow = []
+
+        // Publish empty track immediately
+        trackUpdated.send()
+
+        appLog("BalloonTrackService: State cleared - track now has \(currentBalloonTrack.count) points", category: .service, level: .info)
+    }
+
     func resetForNewSonde() {
         appLog("BalloonTrackService: resetForNewSonde() called - clearing \(currentBalloonTrack.count) points", category: .service, level: .info)
 
@@ -1234,6 +1487,8 @@ final class BalloonTrackService: ObservableObject {
         // Reset state
         currentBalloonTrack = []
         landingPosition = nil
+        historicalLandingDetected = false
+        historicalLandingTime = nil
         smoothingCounter = 0
 
         // Reset EMA/smoothing
@@ -1362,6 +1617,17 @@ final class LandingPointTrackingService: ObservableObject {
     }
 
     // MARK: - Sonde Change Handling
+
+    func clearState() {
+        // Clear all state variables
+        landingHistory = []
+        lastLandingPrediction = nil
+        currentLandingPoint = nil
+        currentSondeName = nil
+        pendingLandingPoint = nil
+
+        appLog("LandingPointTrackingService: State cleared for new sonde", category: .service, level: .info)
+    }
 
     func resetForNewSonde() {
         // Get the new sonde name from BalloonTrackService

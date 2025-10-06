@@ -452,22 +452,21 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
         let deviceName = peripheral.name ?? "Unknown"
         let errorMessage = error?.localizedDescription ?? "Disconnected normally"
-        
+
         if error != nil {
             appLog("🔴 BLE: UNEXPECTED DISCONNECTION from \(deviceName)", category: .ble, level: .error)
             appLog("🔴 BLE: Disconnection error: \(errorMessage)", category: .ble, level: .error)
         } else {
             appLog("🟡 BLE: Clean disconnection from \(deviceName)", category: .ble, level: .info)
         }
-        
-        // Disconnected - continuous scanning will handle reconnection
 
         connectionState = .notConnected
         lastMessageTimestamp = Date()
         publishHealthEvent(.degraded("BLE disconnected"), message: "BLE disconnected")
 
-        // Note: Continuous scanning (timeout retry) will automatically attempt reconnection
-        // No need for explicit reconnect logic here
+        // Restart scanning after disconnect to enable automatic reconnection
+        appLog("BLE: Restarting scan after disconnect", category: .ble, level: .info)
+        startScanning()
     }
 
     func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {

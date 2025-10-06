@@ -293,6 +293,11 @@ final class MapPresenter: ObservableObject {
         balloonPositionService.$currentRadioChannel
             .sink { [weak self] radio in
                 self?.balloonRadioChannel = radio
+
+                // Sync mute button state from device
+                if let buzmute = radio?.buzmute {
+                    self?.isBuzzerMuted = buzmute
+                }
             }
             .store(in: &cancellables)
 
