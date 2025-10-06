@@ -157,18 +157,15 @@ struct TrackingMapView: View {
                     let trackPoints = mapPresenter.trackPoints
                     if trackPoints.count >= 2 {
                         let coordinates = trackPoints.map { CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude) }
-                        let trackPolyline = MKPolyline(coordinates: coordinates, count: coordinates.count)
-                        MapPolyline(trackPolyline)
+                        MapPolyline(coordinates: coordinates, count: coordinates.count)
                             .stroke(.red, lineWidth: 2)
-                            .id("track-\(trackPoints.count)")
                     }
-                    
+
                     // 2. Balloon Predicted Path: Thick blue line (flying mode only)
                     if isFlying,
                        let predictionPath = mapPresenter.predictionPath {
                         MapPolyline(predictionPath)
                             .stroke(.blue, lineWidth: 4)
-                            .id("prediction-\(predictionPath.pointCount)")
                     }
 
                     // 3. Planned Route: Green path from user to landing point (when needed for navigation)
@@ -176,7 +173,6 @@ struct TrackingMapView: View {
                        let userRoute = mapPresenter.userRoute {
                         MapPolyline(userRoute)
                             .stroke(.green, lineWidth: 3)
-                            .id("route-\(userRoute.pointCount)")
                     } else {
                         if !routeVisible {
                             let _ = appLog("🗺️ MAP: Route NOT visible (routeVisible=false, state=\(mapPresenter.balloonPositionService.currentState.description), within200m=\(isWithin200mOfLandedBalloon))", category: .ui, level: .info)
@@ -189,10 +185,8 @@ struct TrackingMapView: View {
                     let landingHistory = mapPresenter.landingHistory
                     if landingHistory.count >= 2 {
                         let landingCoordinates = landingHistory.map { $0.coordinate }
-                        let landingPolyline = MKPolyline(coordinates: landingCoordinates, count: landingCoordinates.count)
-                        MapPolyline(landingPolyline)
+                        MapPolyline(coordinates: landingCoordinates, count: landingCoordinates.count)
                             .stroke(.purple, lineWidth: 2)
-                            .id("landing-history-\(landingHistory.count)")
                     }
 
                     if !landingHistory.isEmpty {
