@@ -79,10 +79,6 @@ final class BalloonPositionService: ObservableObject {
     private var balloonTrackService: BalloonTrackService?
     private var isStartupComplete: Bool = false
 
-    // Sonde change handling - store triggering position and its source
-    private var sondeChangePosition: PositionData?
-    private var sondeChangeSource: String?
-
     private let bleService: BLECommunicationService
     let aprsService: APRSDataService
     private let currentLocationService: CurrentLocationService
@@ -211,44 +207,6 @@ final class BalloonPositionService: ObservableObject {
 
         // Log every APRS position for tracking
         appLog("BalloonPositionService: Processing \(source) position for \(position.sondeName) at [\(String(format: "%.5f", position.latitude)), \(String(format: "%.5f", position.longitude))] alt=\(Int(position.altitude))m", category: .service, level: .info)
-
-        // Detect sonde change BEFORE updating anything
-        let incomingName = position.sondeName.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !incomingName.isEmpty, let currentName = currentBalloonName, currentName != incomingName {
-            appLog("🎈 BalloonPositionService: Sonde name change detected: \(currentName) → \(incomingName)", category: .service, level: .info)
-
-            // NEW FLOW: Stash, Clear, Load APRS, Process
-
-            // 1. Stash the new telemetry packet
-            sondeChangePosition = position
-            sondeChangeSource = source
-            appLog("BalloonPositionService: Stashed new sonde telemetry from \(source)", category: .service, level: .info)
-
-            // 2. Call coordinator to clear all old sonde data
-            if let coordinator = serviceCoordinator {
-                coordinator.clearAllSondeData()
-            } else {
-                appLog("BalloonPositionService: WARNING - No ServiceCoordinator available for sonde change", category: .service, level: .error)
-            }
-
-            // 3. Trigger async APRS track fetch (don't wait)
-            balloonTrackService?.fillTrackGapsFromAPRS()
-
-            // 4. Process stashed packet normally (updates currentBalloonName, publishes to subscribers)
-            if let stashedPosition = sondeChangePosition, let stashedSource = sondeChangeSource {
-                appLog("BalloonPositionService: Processing stashed telemetry for new sonde \(stashedPosition.sondeName)", category: .service, level: .info)
-
-                // Clear stash
-                sondeChangePosition = nil
-                sondeChangeSource = nil
-
-                // Process as if it just arrived (recursive call with fresh state)
-                handlePositionUpdate(stashedPosition, source: stashedSource)
-            }
-
-            // 5. Return - processing complete
-            return
-        }
 
         // Update position data
         currentPositionData = position
@@ -795,7 +753,6 @@ final class BalloonPositionService: ObservableObject {
         processingCount = 0
         landingLogCount = 0
         speedCheckLogCount = 0
-        // Do NOT clear: sondeChangePosition, sondeChangeSource (used for stashing)
         // Do NOT clear: currentState, stateEntryTime, startupTime, isStartupComplete (state machine)
 
         appLog("BalloonPositionService: State cleared for new sonde", category: .service, level: .info)
