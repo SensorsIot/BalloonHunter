@@ -1191,8 +1191,13 @@ final class BalloonTrackService: ObservableObject {
             )
 
             if !newPoints.isEmpty {
-                // Merge new points into current track
+                // Verify sonde hasn't changed while we were fetching historical data
                 await MainActor.run {
+                    guard currentBalloonName == sondeName else {
+                        appLog("BalloonTrackService: Sonde changed from '\(sondeName)' to '\(currentBalloonName ?? "nil")' during historical fill - discarding \(newPoints.count) points", category: .service, level: .info)
+                        return
+                    }
+
                     let combinedTrack = currentBalloonTrack + newPoints
                     // Sort by timestamp
                     currentBalloonTrack = combinedTrack.sorted { $0.timestamp < $1.timestamp }
@@ -1221,6 +1226,8 @@ final class BalloonTrackService: ObservableObject {
     // MARK: - Sonde Change Handling
 
     func resetForNewSonde() {
+        appLog("BalloonTrackService: resetForNewSonde() called - clearing \(currentBalloonTrack.count) points", category: .service, level: .info)
+
         //Clean up old tracks
         persistenceService.purgeAllTracks()
 
@@ -1237,7 +1244,10 @@ final class BalloonTrackService: ObservableObject {
         hasEma = false
         hasSlowEma = false
 
-        appLog("BalloonTrackService: Reset for new sonde", category: .service, level: .info)
+        // Publish empty track immediately
+        trackUpdated.send()
+
+        appLog("BalloonTrackService: Reset complete - track now has \(currentBalloonTrack.count) points", category: .service, level: .info)
 
         // Note: BalloonPositionService processes sonde-change position and publishes it
         // This service receives it via normal currentPositionData subscription and adds to track

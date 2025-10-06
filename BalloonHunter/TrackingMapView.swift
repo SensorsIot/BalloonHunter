@@ -157,7 +157,6 @@ struct TrackingMapView: View {
                     let trackPoints = mapPresenter.trackPoints
                     if trackPoints.count >= 2 {
                         let coordinates = trackPoints.map { CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude) }
-                        let _ = appLog("🗺️ MAP: Drawing track polyline with \(coordinates.count) points (first: \(coordinates.first!), last: \(coordinates.last!))", category: .ui, level: .info)
                         MapPolyline(coordinates: coordinates)
                             .stroke(.red, lineWidth: 2)
                     }
@@ -270,7 +269,6 @@ struct TrackingMapView: View {
                     }
                 }
                     }
-                .id("map-\(mapPresenter.trackPoints.count)")
                 .mapControls {
                     MapCompass()
                     MapScaleView()

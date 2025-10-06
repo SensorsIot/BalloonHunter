@@ -393,7 +393,11 @@ final class MapPresenter: ObservableObject {
 
         balloonTrackService.$currentBalloonTrack
             .sink { [weak self] points in
-                appLog("MapPresenter: Received track update with \(points.count) points", category: .general, level: .info)
+                if points.isEmpty {
+                    appLog("MapPresenter: Received EMPTY track update - clearing all track points", category: .general, level: .info)
+                } else {
+                    appLog("MapPresenter: Received track update with \(points.count) points", category: .general, level: .info)
+                }
                 self?.trackPoints = points
             }
             .store(in: &cancellables)
