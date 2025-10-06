@@ -330,7 +330,7 @@ final class ServiceCoordinator: ObservableObject {
         landingPointTrackingService.resetForNewSonde()  // Resets route+navigation
         balloonTrackService.resetForNewSonde()
         predictionService.resetForNewSonde()
-        balloonPositionService.resetForNewSonde()
+        balloonPositionService.clearState()
 
         // 2. Clear caches
         Task {
