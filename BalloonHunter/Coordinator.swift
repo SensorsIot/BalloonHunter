@@ -344,10 +344,6 @@ final class ServiceCoordinator: ObservableObject {
         // Skip historical fill - track is empty after reset, nothing to fill yet
         balloonPositionService.refreshCurrentState(skipHistoricalFill: true)
 
-        // 4. Process stored sonde-change position as first point for new sonde
-        // Called AFTER state refresh so state allows track recording
-        balloonPositionService.processPendingSondeChangePosition()
-
         appLog("✅ ServiceCoordinator: Reset complete for new sonde \(newName)", category: .service, level: .info)
     }
 
