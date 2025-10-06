@@ -157,7 +157,7 @@ struct TrackingMapView: View {
                     let trackPoints = mapPresenter.trackPoints
                     if trackPoints.count >= 2 {
                         let coordinates = trackPoints.map { CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude) }
-                        MapPolyline(coordinates: coordinates, count: coordinates.count)
+                        MapPolyline(coordinates: coordinates)
                             .stroke(.red, lineWidth: 2)
                     }
 
@@ -185,7 +185,7 @@ struct TrackingMapView: View {
                     let landingHistory = mapPresenter.landingHistory
                     if landingHistory.count >= 2 {
                         let landingCoordinates = landingHistory.map { $0.coordinate }
-                        MapPolyline(coordinates: landingCoordinates, count: landingCoordinates.count)
+                        MapPolyline(coordinates: landingCoordinates)
                             .stroke(.purple, lineWidth: 2)
                     }
 
