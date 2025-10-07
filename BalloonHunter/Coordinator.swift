@@ -98,6 +98,7 @@ final class ServiceCoordinator: ObservableObject {
     private func configurePredictionService() {
         predictionService.setServiceCoordinator(self)
         predictionService.setBalloonPositionService(balloonPositionService)
+        balloonPositionService.setServiceCoordinator(self)
         // Shared dependencies (predictionCache, userSettings) now passed via constructor
     }
 
@@ -212,14 +213,8 @@ final class ServiceCoordinator: ObservableObject {
             }
             .store(in: &cancellables)
 
-        // Sonde change coordination: Monitor balloon name changes from BalloonPositionService
-        // BalloonPositionService is the authority - it receives telemetry first and detects changes
-        balloonPositionService.$currentBalloonName
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] newName in
-                self?.handleBalloonNameChange(newName)
-            }
-            .store(in: &cancellables)
+        // Sonde change coordination: Per FSD, detection happens in BalloonPositionService.handlePositionUpdate()
+        // which calls coordinator.clearAllSondeData() directly - no subscription needed here
 
         // Direct subscriptions setup complete
     }
@@ -231,10 +226,10 @@ final class ServiceCoordinator: ObservableObject {
     /// Handle state changes to control prediction timer
     private func handleStateChangeForPredictionTimer(_ state: DataState) {
         switch state {
-        case .liveBLEFlying, .aprsFallbackFlying:
+        case .liveBLEFlying, .aprsFlying:
             // Flying states: start 60-second prediction timer
             startPredictionTimer()
-        case .startup, .liveBLELanded, .waitingForAPRS, .aprsFallbackLanded, .noTelemetry:
+        case .startup, .liveBLELanded, .waitingForAPRS, .aprsLanded, .noTelemetry:
             // Non-flying states: stop timer to save API quota
             stopPredictionTimer()
         }
@@ -277,28 +272,6 @@ final class ServiceCoordinator: ObservableObject {
         }
     }
 
-    // MARK: - Persistence Data Loading (Per FSD)
-    
-    func loadPersistenceData() {
-        appLog("ServiceCoordinator: Loading persistence data per FSD requirements", category: .general, level: .info)
-
-        // 1. Prediction parameters - already loaded in UserSettings ✅
-
-        // 2. Historic track data - already loaded in PersistenceService and will be automatically
-        //    restored by BalloonTrackService when matching sonde telemetry arrives ✅
-        let allTracks = persistenceService.getAllTracks()
-        appLog("ServiceCoordinator: Found \(allTracks.count) stored balloon tracks ready for automatic restoration", category: .general, level: .info)
-        for (sondeName, trackPoints) in allTracks {
-            appLog("ServiceCoordinator: Track available for '\(sondeName)' with \(trackPoints.count) points", category: .general, level: .debug)
-        }
-
-        // 3. Landing point histories - already loaded in PersistenceService and accessible via methods ✅
-
-        // 4. Device settings - already loaded in PersistenceService ✅
-
-        appLog("ServiceCoordinator: Persistence data loading complete - UserSettings, tracks, and histories restored", category: .general, level: .info)
-
-    }
     // MARK: - Sonde Change Orchestration (Per FSD)
 
     /// Clear all old sonde data when new sonde is detected
@@ -307,25 +280,19 @@ final class ServiceCoordinator: ObservableObject {
     func clearAllSondeData() {
         appLog("🎈 ServiceCoordinator: Clearing all old sonde data", category: .service, level: .info)
 
-        // 1. Stop services
-        stopPredictionTimer()
-        aprsService.disablePolling()
+        // Clear all services to initial empty state
+        balloonPositionService.clearAllData()
+        balloonTrackService.clearAllData()
+        landingPointTrackingService.clearAllData()
+        predictionService.clearAllData()
+        routeCalculationService.clearAllData()
+        navigationService.clearAllData()
 
-        // 2. Purge ALL persisted data
-        persistenceService.purgeAllTracks()
-        persistenceService.purgeAllLandingHistories()
-
-        // 3. Clear ALL caches (async)
+        // Clear caches (async)
         Task {
             await predictionCache.purgeAll()
             await routingCache.purgeAll()
         }
-
-        // 4. Clear in-memory state (all services) - direct clearing, no cascades
-        balloonPositionService.clearState()
-        balloonTrackService.clearState()
-        landingPointTrackingService.clearState()
-        predictionService.clearState()
 
         appLog("✅ ServiceCoordinator: All old sonde data cleared", category: .service, level: .info)
     }

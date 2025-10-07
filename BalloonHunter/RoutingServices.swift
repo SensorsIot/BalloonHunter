@@ -153,9 +153,10 @@ final class RouteCalculationService: ObservableObject {
     @Published var transportMode: TransportationMode = .car
 
     private let currentLocationService: CurrentLocationService
-    private var lastDestination: CLLocationCoordinate2D?
+    var lastDestination: CLLocationCoordinate2D?  // Internal access for coordinator to clear on sonde change
     private var appSettings: AppSettings?
     private var cancellables = Set<AnyCancellable>()
+    private var currentRouteTask: Task<Void, Never>?  // Track in-flight route calculation for cancellation
 
     init(currentLocationService: CurrentLocationService) {
         self.currentLocationService = currentLocationService
@@ -230,13 +231,26 @@ final class RouteCalculationService: ObservableObject {
         // Use provided transport mode or service's current mode
         let effectiveTransportMode = transportMode ?? self.transportMode
 
-        Task { @MainActor in
+        // Cancel any existing route calculation (don't wait for it to finish)
+        currentRouteTask?.cancel()
+
+        // Create new route calculation task and let it run independently
+        currentRouteTask = Task { @MainActor in
             isCalculatingRoute = true
             appLog("RouteCalculationService: Starting route calculation with transport mode: \(effectiveTransportMode)", category: .service, level: .info)
             do {
+                // Check cancellation before expensive route calculation
+                try Task.checkCancellation()
+
                 let route = try await calculateRoute(from: userLocation, to: destination, transportMode: effectiveTransportMode)
+
+                // Check cancellation before publishing result
+                try Task.checkCancellation()
+
                 currentRoute = route
                 appLog("RouteCalculationService: Route calculated successfully - distance: \(String(format: "%.1f", route.distance))m, time: \(String(format: "%.0f", route.expectedTravelTime))s, \(route.coordinates.count) points", category: .service, level: .info)
+            } catch is CancellationError {
+                appLog("RouteCalculationService: Route calculation cancelled - likely due to sonde change", category: .service, level: .info)
             } catch {
                 appLog("RouteCalculationService: Failed to calculate route: \(error.localizedDescription)", category: .service, level: .error)
                 currentRoute = nil
@@ -388,12 +402,17 @@ final class RouteCalculationService: ObservableObject {
         return Array(UnsafeBufferPointer(start: coordinates, count: coordinateCount))
     }
 
-    // MARK: - Sonde Change Handling
+    // MARK: - Sonde Change
 
-    func resetForNewSonde() {
+    func clearAllData() {
+        // Cancel any in-flight route calculation
+        currentRouteTask?.cancel()
+        currentRouteTask = nil
+
+        // Clear all route data
         currentRoute = nil
         isCalculatingRoute = false
         lastDestination = nil
-        appLog("RouteCalculationService: Reset for new sonde", category: .service, level: .info)
+        appLog("RouteCalculationService: All data cleared for new sonde (cancelled in-flight route calculation)", category: .service, level: .info)
     }
 }

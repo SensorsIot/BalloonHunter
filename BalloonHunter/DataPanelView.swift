@@ -139,7 +139,7 @@ struct DataPanelView: View {
 
     private var motionMetricsZeroed: Bool {
         switch balloonPositionService.currentState {
-        case .liveBLELanded, .aprsFallbackLanded, .noTelemetry:
+        case .liveBLELanded, .aprsLanded, .noTelemetry:
             return true
         default:
             return false
@@ -159,9 +159,9 @@ struct DataPanelView: View {
         switch balloonPositionService.currentState {
         case .startup, .noTelemetry:
             return false
-        case .liveBLEFlying, .aprsFallbackFlying, .waitingForAPRS:
+        case .liveBLEFlying, .aprsFlying, .waitingForAPRS:
             return balloonPositionService.balloonPhase != .ascending
-        case .liveBLELanded, .aprsFallbackLanded:
+        case .liveBLELanded, .aprsLanded:
             return false
         }
     }
@@ -169,7 +169,7 @@ struct DataPanelView: View {
     private var frameStyle: (color: Color, lineWidth: CGFloat) {
         // Simple color logic: grey = working, red = no data
         switch balloonPositionService.currentState {
-        case .startup, .liveBLEFlying, .liveBLELanded, .waitingForAPRS, .aprsFallbackFlying, .aprsFallbackLanded:
+        case .startup, .liveBLEFlying, .liveBLELanded, .waitingForAPRS, .aprsFlying, .aprsLanded:
             return (.gray, 6)  // Working correctly (BLE or APRS data available)
         case .noTelemetry:
             return (.red, 6)   // No data available
@@ -242,21 +242,20 @@ struct DataPanelView: View {
 
     private func burstKillerExpiryString() -> String {
         guard balloonPositionService.currentPositionData != nil else { return "--:--" }
-        guard let sondeName = balloonPositionService.currentPositionData?.sondeName else { return "--:--" }
+        guard balloonPositionService.currentPositionData?.sondeName != nil else { return "--:--" }
 
         var countdown: Int? = nil
         var referenceDate: Date? = nil
 
+        // Burst killer is only available from live BLE data (not persisted)
         if let radioData = balloonPositionService.currentRadioChannel,
            radioData.burstKillerTime > 0,
            balloonPositionService.dataSource == .ble {
             countdown = radioData.burstKillerTime
             referenceDate = Date() // Use current time since BLE data is live
-        } else if let record = serviceCoordinator.persistenceService.loadBurstKillerRecord(for: sondeName),
-                  record.seconds > 0 {
-            countdown = record.seconds
-            referenceDate = record.referenceDate
         }
+        // Note: During APRS fallback, last known BLE burst killer value is retained in memory
+        // but not persisted across app sessions
 
         guard let seconds = countdown,
               let reference = referenceDate else { return "--:--" }
@@ -293,7 +292,7 @@ struct DataPanelView: View {
             case .notConnected:
                 return ("antenna.radiowaves.left.and.right.slash", .red) // Not connected
             }
-        case .aprsFallbackFlying, .aprsFallbackLanded:
+        case .aprsFlying, .aprsLanded:
             // APRS icon color based on API call success/failure
             let aprsColor: Color = {
                 switch balloonPositionService.aprsService.connectionStatus {
@@ -346,7 +345,7 @@ struct DataPanelView: View {
             // BLE states: show programmed frequency
             let frequency = bleService.radioSettings.frequency
             return String(format: "%.2f MHz", frequency)
-        case .aprsFallbackFlying, .aprsFallbackLanded:
+        case .aprsFlying, .aprsLanded:
             // APRS states: show APRS frequency if available, fallback to BLE
             if let aprsFreq = balloonPositionService.currentRadioChannel?.frequency {
                 return String(format: "%.2f MHz", aprsFreq)

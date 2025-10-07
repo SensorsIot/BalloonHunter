@@ -32,8 +32,8 @@ struct SondeHubSondeData: Codable {
 // Site response is a dictionary with serial numbers as keys and sonde data as values
 typealias SondeHubSiteResponse = [String: SondeHubSondeData]
 
-/// SondeHub historical telemetry point (from telemetry endpoint)
-struct SondeHubHistoricalPoint: Codable {
+/// SondeHub APRS telemetry point (from telemetry endpoint)
+struct SondeHubAPRSPoint: Codable {
     let serial: String?
     let datetime: String?
     let lat: Double?
@@ -102,7 +102,7 @@ final class APRSDataService: ObservableObject {
     private static let landedConfirmationInterval: TimeInterval = 300.0
     private static let verySlowPollInterval: TimeInterval = 3600.0  // 1 hour
     private static let apiTimeout: TimeInterval = 5.0  // For regular polling endpoint
-    private static let historicalApiTimeout: TimeInterval = 30.0  // For historical telemetry (typically ~9s, allow buffer)
+    private static let aprsApiTimeout: TimeInterval = 30.0  // For APRS telemetry fetch (typically ~9s, allow buffer)
 
     // Polling thresholds
     private static let freshDataThreshold: TimeInterval = 120.0  // 2 minutes - fresh data
@@ -487,16 +487,23 @@ final class APRSDataService: ObservableObject {
         return formatter.date(from: dateString)
     }
 
-    // MARK: - Historical Track Filling
+    // MARK: - APRS Track Filling
 
-    /// Fetch historical telemetry from SondeHub and fill gaps in local track
+    /// Round timestamp to nearest second for slot-based deduplication
+    private func roundToSecond(_ date: Date) -> Date {
+        let calendar = Calendar.current
+        let components = calendar.dateComponents([.year, .month, .day, .hour, .minute, .second], from: date)
+        return calendar.date(from: components) ?? date
+    }
+
+    /// Fetch APRS telemetry from SondeHub and fill gaps in local track
     /// This runs asynchronously and does not block the UI
     /// - Parameters:
     ///   - serial: Sonde serial number
     ///   - duration: How far back to fetch - default "3d" for maximum coverage
     ///   - localTrack: Current local track points with timestamps
     /// - Returns: New track points to add (returns empty array on error)
-    func fetchHistoricalTelemetryToFillGaps(
+    func fetchAPRSTelemetryToFillGaps(
         serial: String,
         duration: String = "3d",
         localTrack: [BalloonTrackPoint]
@@ -506,35 +513,36 @@ final class APRSDataService: ObservableObject {
         let url = URL(string: "\(Self.sondeHubBaseURL)/sondes/telemetry?serial=\(serial)&duration=\(duration)")!
 
         var request = URLRequest(url: url)
-        request.timeoutInterval = Self.historicalApiTimeout  // Use longer timeout for historical data (typically ~9s response time)
+        request.timeoutInterval = Self.aprsApiTimeout  // Use longer timeout for APRS data fetch (typically ~9s response time)
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue("gzip, deflate", forHTTPHeaderField: "Accept-Encoding")
         request.setValue("BalloonHunter iOS App", forHTTPHeaderField: "User-Agent")
 
-        appLog("APRSDataService: Fetching historical telemetry for \(serial) (duration: \(duration))", category: .service, level: .info)
+        appLog("APRSDataService: Fetching telemetry for \(serial) (duration: \(duration))", category: .service, level: .info)
 
         do {
             let (data, response) = try await session.data(for: request)
 
             guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
-                appLog("APRSDataService: Historical fetch failed - invalid response", category: .service, level: .error)
+                appLog("APRSDataService: Fetch failed - invalid response", category: .service, level: .error)
                 return []
             }
 
             let decoder = JSONDecoder()
-            let nestedDict = try decoder.decode([String: [String: SondeHubHistoricalPoint]].self, from: data)
+            let nestedDict = try decoder.decode([String: [String: SondeHubAPRSPoint]].self, from: data)
 
-            var historicalPoints: [SondeHubHistoricalPoint] = []
+            var aprsPoints: [SondeHubAPRSPoint] = []
             for (_, timestampDict) in nestedDict {
                 for (_, point) in timestampDict {
-                    historicalPoints.append(point)
+                    aprsPoints.append(point)
                 }
             }
 
-            let localTimestamps = Set(localTrack.map { $0.timestamp })
-            let newPoints = historicalPoints.filter { point in
+            // Use rounded timestamps (to second) for slot-based filtering
+            let localTimestamps = Set(localTrack.map { roundToSecond($0.timestamp) })
+            let newPoints = aprsPoints.filter { point in
                 guard let timestamp = point.timestamp else { return false }
-                return !localTimestamps.contains(timestamp)
+                return !localTimestamps.contains(roundToSecond(timestamp))
             }
 
             let trackPoints = newPoints.compactMap { point -> BalloonTrackPoint? in
@@ -555,11 +563,11 @@ final class APRSDataService: ObservableObject {
                 )
             }
 
-            appLog("APRSDataService: Added \(trackPoints.count) historical points (total received: \(historicalPoints.count))", category: .service, level: .info)
+            appLog("APRSDataService: Added \(trackPoints.count) points (total received: \(aprsPoints.count))", category: .service, level: .info)
             return trackPoints
 
         } catch {
-            appLog("APRSDataService: Historical fetch error: \(error)", category: .service, level: .error)
+            appLog("APRSDataService: Fetch error: \(error)", category: .service, level: .error)
             return []
         }
     }

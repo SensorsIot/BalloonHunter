@@ -19,7 +19,7 @@ BalloonPositionService,@Published,currentRadioChannel,RadioChannelData?,"MapPres
 BalloonPositionService,@Published,currentBalloonName,String?,"BalloonTrackService, MapPresenter","Current sonde name"
 BalloonPositionService,@Published,dataSource,TelemetrySource,"MapPresenter, DataPanelView","Current telemetry source (.ble or .aprs)"
 BalloonPositionService,@Published,aprsDataAvailable,Bool,"MapPresenter","APRS data availability flag"
-BalloonPositionService,@Published,currentState,DataState,"ServiceCoordinator, MapPresenter, FrequencyManagementService","7-state machine state (startup, liveBLE, waitingForAPRS, aprsFallback, noTelemetry)"
+BalloonPositionService,@Published,currentState,DataState,"ServiceCoordinator, MapPresenter, FrequencyManagementService","7-state machine state (startup, liveBLE, waitingForAPRS, aprs, noTelemetry)"
 BalloonPositionService,@Published,balloonPhase,BalloonPhase,"MapPresenter, DataPanelView","Balloon flight phase (ascending, descending, landed)"
 BalloonPositionService,@Published,landingPoint,CLLocationCoordinate2D?,"MapPresenter, ServiceCoordinator","Current landing point coordinate"
 BalloonPositionService,@Published,balloonDisplayPosition,CLLocationCoordinate2D?,"MapPresenter","Display position for map annotations"

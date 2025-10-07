@@ -191,6 +191,7 @@ final class PredictionService: ObservableObject {
     // MARK: - Private State
     private var lastProcessedPosition: PositionData?
     private var apiCallCount: Int = 0
+    private var currentPredictionTask: Task<Void, Never>?  // Track in-flight prediction for cancellation
     private let isoWithFrac: ISO8601DateFormatter = {
         let f = ISO8601DateFormatter()
         f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -292,7 +293,14 @@ final class PredictionService: ObservableObject {
         // Use three-channel architecture
         if let position = balloonPositionService.currentPositionData {
             appLog("PredictionService: Manual trigger - performing prediction with position data", category: .service, level: .info)
-            await performPrediction(position: position, trigger: "manual")
+
+            // Cancel any existing prediction task (don't wait for it to finish)
+            currentPredictionTask?.cancel()
+
+            // Create new prediction task and let it run independently
+            currentPredictionTask = Task {
+                await performPrediction(position: position, trigger: "manual")
+            }
         } else {
             appLog("PredictionService: Manual trigger ignored - no position data available", category: .service, level: .debug)
         }
@@ -306,14 +314,29 @@ final class PredictionService: ObservableObject {
         // Use three-channel architecture
         if let position = balloonPositionService.currentPositionData {
             appLog("PredictionService: Startup trigger - first position data received", category: .service, level: .info)
-            await performPrediction(position: position, trigger: "startup")
+
+            // Cancel any existing prediction task (don't wait for it to finish)
+            currentPredictionTask?.cancel()
+
+            // Create new prediction task and let it run independently
+            currentPredictionTask = Task {
+                await performPrediction(position: position, trigger: "startup")
+            }
         }
     }
 
-    /// Trigger prediction with specific telemetry data (called by ServiceCoordinator) - Legacy
     /// Trigger prediction with position data (three-channel architecture)
     func triggerPredictionWithPosition(_ position: PositionData, trigger: String = "coordinator") async {
-        await performPrediction(position: position, trigger: trigger)
+        // Cancel any existing prediction task (don't wait for it to finish)
+        currentPredictionTask?.cancel()
+
+        // Create new prediction task and let it run independently
+        currentPredictionTask = Task {
+            await performPrediction(position: position, trigger: trigger)
+        }
+
+        // Note: We don't await the task here - it runs independently
+        // If sonde changes, clearAllData() will cancel it immediately
     }
     
     
@@ -330,6 +353,10 @@ final class PredictionService: ObservableObject {
         do {
             let sinceLast = lastPredictionTime.map { String(format: "%.1f", Date().timeIntervalSince($0)) } ?? "N/A"
             appLog("PredictionService: performPrediction start (trigger=\(trigger), sinceLast=\(sinceLast)s)", category: .service, level: .debug)
+
+            // Check cancellation before expensive operations
+            try Task.checkCancellation()
+
             // Determine if balloon is descending
             let balloonDescends = position.verticalSpeed < 0
             appLog("PredictionService: Balloon descending: \(balloonDescends) (verticalSpeed: \(position.verticalSpeed) m/s)", category: .service, level: .info)
@@ -340,14 +367,18 @@ final class PredictionService: ObservableObject {
             // Create cache key
             let cacheKey = createCacheKey(position)
             appLog("PredictionService: Trigger=\(trigger) cacheKey=\(cacheKey)", category: .service, level: .debug)
-            
+
             // Check cache first
             if let cachedPrediction = await predictionCache.get(key: cacheKey) {
                 appLog("PredictionService: Using cached prediction", category: .service, level: .info)
+
+                // Check cancellation before publishing cached result
+                try Task.checkCancellation()
+
                 await handlePredictionResult(cachedPrediction, trigger: trigger)
                 return
             }
-            
+
             // Cache miss -> Call API
             apiCallCount += 1
             appLog("PredictionService: API call #\(apiCallCount) (trigger=\(trigger), key=\(cacheKey))", category: .service, level: .debug)
@@ -358,13 +389,19 @@ final class PredictionService: ObservableObject {
                 cacheKey: cacheKey,
                 balloonDescends: balloonDescends
             )
-            
+
+            // Check cancellation before publishing API result
+            try Task.checkCancellation()
+
             // Cache the result
             await predictionCache.set(key: cacheKey, value: predictionData)
-            
+
             // Handle successful prediction
             await handlePredictionResult(predictionData, trigger: trigger)
             
+        } catch is CancellationError {
+            // Task was cancelled (sonde change) - this is expected, don't log as error
+            appLog("PredictionService: Prediction cancelled (trigger=\(trigger)) - likely due to sonde change", category: .service, level: .info)
         } catch {
             hasValidPrediction = false
             let msg: String
@@ -682,25 +719,27 @@ final class PredictionService: ObservableObject {
         case decodingError(String)
         case invalidParameters(String)
     }
-    
+
     // MARK: - Health
     private func publishHealthEvent(_ health: ServiceHealth, message: String) {
         serviceHealth = health
     }
 
-    // MARK: - Sonde Change Handling
+    // MARK: - Sonde Change
 
-    func resetForNewSonde() {
+    func clearAllData() {
+        // Cancel any in-flight prediction task
+        currentPredictionTask?.cancel()
+        currentPredictionTask = nil
+
+        // Clear all prediction data
         latestPrediction = nil
         predictedLandingTimeString = "--:--"
         remainingFlightTimeString = "--:--"
-        // Timer continues running if already active
-        appLog("PredictionService: Reset for new sonde", category: .service, level: .info)
-    }
-
-    /// Clear state for new sonde (per FSD terminology)
-    /// Alias for resetForNewSonde()
-    func clearState() {
-        resetForNewSonde()
+        hasValidPrediction = false
+        lastPredictionTime = nil
+        lastProcessedPosition = nil
+        usingSmoothedDescentRate = false
+        appLog("PredictionService: All data cleared for new sonde (cancelled in-flight prediction)", category: .service, level: .info)
     }
 }

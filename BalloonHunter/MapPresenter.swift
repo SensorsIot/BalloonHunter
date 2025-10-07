@@ -101,9 +101,9 @@ final class MapPresenter: ObservableObject {
         switch balloonPositionService.currentState {
         case .startup, .noTelemetry:
             return false
-        case .liveBLEFlying, .aprsFallbackFlying, .waitingForAPRS:
+        case .liveBLEFlying, .aprsFlying, .waitingForAPRS:
             return true
-        case .liveBLELanded, .aprsFallbackLanded:
+        case .liveBLELanded, .aprsLanded:
             return !isWithin200mOfBalloon
         }
     }
@@ -112,9 +112,9 @@ final class MapPresenter: ObservableObject {
         switch balloonPositionService.currentState {
         case .startup, .noTelemetry:
             return false
-        case .liveBLEFlying, .aprsFallbackFlying:
+        case .liveBLEFlying, .aprsFlying:
             return true
-        case .liveBLELanded, .aprsFallbackLanded:
+        case .liveBLELanded, .aprsLanded:
             return false
         case .waitingForAPRS:
             return balloonPositionService.balloonPhase != .landed
@@ -125,9 +125,9 @@ final class MapPresenter: ObservableObject {
         switch balloonPositionService.currentState {
         case .startup, .noTelemetry:
             return false
-        case .liveBLEFlying, .aprsFallbackFlying:
+        case .liveBLEFlying, .aprsFlying:
             return balloonPhase == .ascending
-        case .liveBLELanded, .aprsFallbackLanded:
+        case .liveBLELanded, .aprsLanded:
             return false
         case .waitingForAPRS:
             return balloonPhase == .ascending
@@ -401,7 +401,7 @@ final class MapPresenter: ObservableObject {
                 if points.isEmpty {
                     appLog("MapPresenter: Received EMPTY track update - clearing all track points", category: .general, level: .info)
                 } else {
-                    appLog("MapPresenter: Received track update with \(points.count) points", category: .general, level: .info)
+                    appLog("MapPresenter: Received track update with \(points.count) points", category: .general, level: .debug)
                 }
                 self?.trackPoints = points
             }

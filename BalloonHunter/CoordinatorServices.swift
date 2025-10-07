@@ -67,28 +67,62 @@ in‑code markup for quick reference while working on the startup sequence.
 */
 extension ServiceCoordinator {
     
-    /// Performs the complete startup sequence
+    /// Performs the complete startup sequence (5 steps per FSD)
     func performCompleteStartupSequence() async {
         let startTime = Date()
-        let maxStartupTime: TimeInterval = 15.0 // BLE timeout (5s) + APRS timeout (5s) + buffer (5s)
+        let maxStartupTime: TimeInterval = 15.0
 
-        // Step 1: Service Initialization (already done) + Request user location early
+        // Step 1: Load Persisted Data
         await MainActor.run {
             currentStartupStep = 1
-            startupProgress = "Step 1: Services"
+            startupProgress = "Step 1: Loading Data"
+        }
+        appLog("STARTUP: Step 1 - Loading persisted data from disk", category: .general, level: .info)
+
+        let sondeName = persistenceService.loadSondeName()
+        let track = persistenceService.loadBalloonTrack() ?? []
+        let landingPoints = persistenceService.loadLandingPoints() ?? []
+
+        // Validate consistency (sondeName must match track)
+        if let sondeName = sondeName, !track.isEmpty {
+            appLog("STARTUP: Step 1 - Loaded sonde '\(sondeName)' with \(track.count) track points", category: .general, level: .info)
+        } else if !track.isEmpty {
+            appLog("STARTUP: Step 1 - WARNING: Track data exists but no sonde name", category: .general, level: .error)
         }
 
-        // Request user location EARLY so it has time to resolve before route calculation
-        appLog("STARTUP: Step 1 - Requesting user location (early for route calculation)", category: .general, level: .info)
-        currentLocationService.requestCurrentLocation()
-
-        appLog("STARTUP: Step 1 - Service initialization complete", category: .general, level: .info)
-
-        // Step 2: Start both services and wait for definitive answers
+        // Step 2: Service Initialization (already done in init) + Request location
         await MainActor.run {
             currentStartupStep = 2
-            startupProgress = "Step 2: BLE & APRS"
+            startupProgress = "Step 2: Services"
         }
+        appLog("STARTUP: Step 2 - Services initialized, requesting location", category: .general, level: .info)
+        currentLocationService.requestCurrentLocation()
+
+        // Step 3: Inject Persisted Data into Services
+        await MainActor.run {
+            currentStartupStep = 3
+            startupProgress = "Step 3: Restoring State"
+        }
+        appLog("STARTUP: Step 3 - Injecting persisted data into services", category: .general, level: .info)
+
+        // Inject track and sonde name into BalloonTrackService
+        balloonTrackService.injectPersistedData(sondeName: sondeName, track: track)
+
+        // Inject sonde name into BalloonPositionService for change detection
+        if let sondeName = sondeName {
+            balloonPositionService.currentBalloonName = sondeName
+        }
+
+        // Inject landing points into LandingPointTrackingService
+        landingPointTrackingService.injectPersistedData(landingPoints: landingPoints)
+
+        // Step 4: Start BLE & APRS (gap filling now works on loaded track)
+        await MainActor.run {
+            currentStartupStep = 4
+            startupProgress = "Step 4: BLE & APRS"
+        }
+        appLog("STARTUP: Step 4 - Starting BLE and APRS services", category: .general, level: .info)
+
         async let bleResult = startBLEConnectionWithTimeout()
         async let aprsTask: Void = primeAPRSStartupData()
 
@@ -98,15 +132,15 @@ extension ServiceCoordinator {
         // Wait for definitive answers from both services (with timeout)
         await waitForServiceAnswers(maxWaitTime: maxStartupTime - Date().timeIntervalSince(startTime))
 
-        // Step 3: Load persistence data and complete startup
+        // Step 5: State Machine Handoff & UI Transition
         await MainActor.run {
-            currentStartupStep = 3
-            startupProgress = "Step 3: Data & Startup"
+            currentStartupStep = 5
+            startupProgress = "Step 5: Startup Complete"
         }
-        await loadAllPersistenceData()
+        appLog("STARTUP: Step 5 - Completing startup and handing control to state machine", category: .general, level: .info)
+
         balloonPositionService.completeStartup()
 
-        // Step 4: End startup - hand control to state machine
         let totalTime = Date().timeIntervalSince(startTime)
         await MainActor.run {
             isStartupComplete = true
@@ -141,20 +175,6 @@ extension ServiceCoordinator {
     }
 
     // Step 4 removed: BLE service issues o{?}o after first packet; SettingsView also requests on demand.
-
-    // MARK: - Step 5: Persistence Data
-    
-    func loadAllPersistenceData() async {
-        // Step 5: Reading persistence data (log removed)
-
-        // Load prediction parameters (already loaded during initialize)
-        // Historic track data will be loaded by BalloonTrackService when first telemetry arrives
-        // Landing point loaded from persistence
-        loadPersistenceData()
-
-        try? await Task.sleep(nanoseconds: 200_000_000) // 0.2 seconds for loading
-        // Persistence data loading complete
-    }
 
     // MARK: - Step 6: Landing Point & Step 7: Final Display
     

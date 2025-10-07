@@ -215,6 +215,17 @@ struct BalloonHunterApp: App {
         let previousState = appServices.balloonPositionService.currentState
         appServices.balloonPositionService.triggerStateEvaluation()
 
+        // 3. Check if we were in flying state - trigger APRS fetch with forced detection
+        // Scenario 3: Background return during flight
+        if previousState == .liveBLEFlying || previousState == .aprsFlying {
+            appLog("BalloonHunterApp: Step 3 - Was flying during background (\(previousState)) - triggering APRS fetch with forced track-based landing detection", category: .lifecycle, level: .info)
+            await MainActor.run {
+                appServices.balloonTrackService.fillTrackGapsFromAPRS(forceDetection: true)
+            }
+        } else {
+            appLog("BalloonHunterApp: Step 3 - Was not flying during background (\(previousState)) - skipping forced detection", category: .lifecycle, level: .info)
+        }
+
         // 4. If state didn't change, refresh current state to ensure services are active
         // This handles edge cases where timers/services need to be restarted
         if appServices.balloonPositionService.currentState == previousState {

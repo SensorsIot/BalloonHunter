@@ -11,7 +11,7 @@ final class NavigationService: ObservableObject {
 
     private let userSettings: UserSettings
     private let routeCalculationService: RouteCalculationService
-    private var lastLandingPoint: CLLocationCoordinate2D?
+    var lastLandingPoint: CLLocationCoordinate2D?  // Internal access for coordinator to clear on sonde change
 
     init(userSettings: UserSettings, routeCalculationService: RouteCalculationService) {
         self.userSettings = userSettings
@@ -99,10 +99,10 @@ final class NavigationService: ObservableObject {
         }
     }
 
-    // MARK: - Sonde Change Handling
+    // MARK: - Sonde Change
 
-    func resetForNewSonde() {
+    func clearAllData() {
         lastLandingPoint = nil
-        appLog("NavigationService: Reset for new sonde", category: .general, level: .info)
+        appLog("NavigationService: All data cleared for new sonde", category: .general, level: .info)
     }
 }
