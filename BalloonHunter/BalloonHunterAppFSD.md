@@ -633,6 +633,9 @@ VStack(spacing: 0) {
         // 8. Landing Point: target icon, purple background (when available)
     }
 
+    // Map type toggle overlay (top-right corner)
+    Button("Map Type") // map/map.fill icon - toggles between standard and satellite view
+
     // Distance overlay (landing mode only)
     if isLanded {
         DistanceOverlayView(distanceMeters: mapPresenter.distanceToBalloon)
@@ -651,7 +654,8 @@ VStack(spacing: 0) {
 **Interactive Features:**
 - Heading mode: User location tracking with compass orientation
 - Free mode: Full pan/zoom interaction
-- Map controls: Compass, scale, user location button
+- Map controls: Scale, user location button (compass removed - functionality covered by heading mode button)
+- Map type toggle: Standard/satellite view switcher overlaid on top-right corner of map
 - Zoom preservation between mode switches
 
 #### DataPanelView.swift:

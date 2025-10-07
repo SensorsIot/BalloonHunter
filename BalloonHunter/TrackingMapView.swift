@@ -45,6 +45,7 @@ struct TrackingMapView: View {
     @State private var isInHeadingMode: Bool = false
     @State private var hasPreservedStartupZoom = false  // Track if we've preserved startup zoom on first appearance
     @State private var needsStartupZoom = true  // Track if we need to apply startup zoom
+    @State private var isSatelliteView = false  // Toggle between standard and satellite view
 
     // MARK: - Flight State Computed Properties
     private var isFlying: Bool { mapPresenter.isFlying }
@@ -270,11 +271,10 @@ struct TrackingMapView: View {
                 }
                     }
                 .mapControls {
-                    MapCompass()
                     MapScaleView()
                     MapUserLocationButton()
                 }
-                .mapStyle(.standard(pointsOfInterest: .excludingAll, showsTraffic: false))
+                .mapStyle(isSatelliteView ? .hybrid(pointsOfInterest: .excludingAll, showsTraffic: false) : .standard(pointsOfInterest: .excludingAll, showsTraffic: false))
                 .mapControlVisibility(mapPresenter.isHeadingMode ? .hidden : .automatic)
                 .frame(height: geometry.size.height * 0.7)
                 .onMapCameraChange { context in
@@ -321,6 +321,25 @@ struct TrackingMapView: View {
                         DistanceOverlayView(
                             distanceMeters: mapPresenter.distanceToBalloon
                         )
+                    }
+
+                    // Map type toggle button (top-right corner)
+                    VStack {
+                        HStack {
+                            Spacer()
+                            Button {
+                                isSatelliteView.toggle()
+                            } label: {
+                                Image(systemName: isSatelliteView ? "map.fill" : "map")
+                                    .imageScale(.large)
+                                    .padding(8)
+                            }
+                            .background(.ultraThinMaterial)
+                            .cornerRadius(8)
+                            .padding(.trailing, 16)
+                            .padding(.top, 16)
+                        }
+                        Spacer()
                     }
                 }
 
