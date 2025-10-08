@@ -292,8 +292,8 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
 
         if let lastUpdate = lastTelemetryUpdateTime {
             let interval = Date().timeIntervalSince(lastUpdate)
-            isAvailable = interval <= 60.0
-            reason = isAvailable ? "Valid telemetry received within last 60 seconds" : "No valid telemetry for more than 60 seconds"
+            isAvailable = interval <= 30.0
+            reason = isAvailable ? "Valid telemetry received within last 30 seconds" : "No valid telemetry for more than 30 seconds"
         } else {
             isAvailable = false
             reason = "No telemetry ever received"

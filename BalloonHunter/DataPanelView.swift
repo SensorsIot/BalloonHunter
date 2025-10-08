@@ -272,6 +272,7 @@ struct DataPanelView: View {
 
     private func connectionIcon() -> (name: String, color: Color) {
         // State machine drives connection icon display
+        // With no debouncing, state transitions occur immediately when data sources change
         switch balloonPositionService.currentState {
         case .startup:
             return ("antenna.radiowaves.left.and.right", .gray)

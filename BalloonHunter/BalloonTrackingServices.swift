@@ -565,14 +565,8 @@ final class BalloonPositionService: ObservableObject {
     }
 
     private func evaluateAPRSFlyingTransitions(inputs: TelemetryInputs, timeInState: TimeInterval) -> DataState {
-        // Check if this is a new balloon (immediate transition without debounce)
-        let isNewBalloon = isNewBalloonDetected()
-
-        if isNewBalloon {
-            appLog("BalloonPositionService: New balloon detected - bypassing 30s debounce for immediate BLE transition", category: .service, level: .info)
-        }
-
-        if inputs.bleConnectionState.hasTelemetry && (timeInState >= 30.0 || isNewBalloon) {
+        // No debounce - immediate transition when BLE recovers
+        if inputs.bleConnectionState.hasTelemetry {
             return .liveBLEFlying
         }
         if inputs.balloonPhase == .landed {
@@ -585,14 +579,8 @@ final class BalloonPositionService: ObservableObject {
     }
 
     private func evaluateAPRSLandedTransitions(inputs: TelemetryInputs, timeInState: TimeInterval) -> DataState {
-        // Check if this is a new balloon (immediate transition without debounce)
-        let isNewBalloon = isNewBalloonDetected()
-
-        if isNewBalloon {
-            appLog("BalloonPositionService: New balloon detected - bypassing 30s debounce for immediate BLE transition", category: .service, level: .info)
-        }
-
-        if inputs.bleConnectionState.hasTelemetry && (timeInState >= 30.0 || isNewBalloon) {
+        // No debounce - immediate transition when BLE recovers
+        if inputs.bleConnectionState.hasTelemetry {
             return inputs.balloonPhase == .landed ? .liveBLELanded : .liveBLEFlying
         }
         if inputs.balloonPhase != .landed {

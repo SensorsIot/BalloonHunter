@@ -225,7 +225,7 @@ This architecture ensures that:
   - `notConnected` → `readyForCommands`: When first BLE packet (any type) is received
   - `readyForCommands` → `dataReady`: When Type 1 packet (telemetry with position) is received
   - `dataReady` → `readyForCommands`: When no Type 1 packets received for 10 seconds (only Type 0/2/3 status packets)
-  - Background staleness check runs every 3 seconds with 60-second threshold for final downgrade
+  - Background staleness check runs every 3 seconds with 30-second threshold for final downgrade
 - **Type 1 Packet Requirement:** `hasTelemetry` returns `true` only when in `dataReady` state (actively receiving Type 1 packets with position data). Type 0 (device status), Type 2 (partial telemetry), and Type 3 (settings) packets do NOT qualify as telemetry.
 - **UI Integration**: BLE icon color reflects connection state - red for readyForCommands (connected but no position data), green flash animation for active telemetry reception
 
@@ -298,7 +298,7 @@ Each state defines explicit entry functionality and exit criteria:
   - Enables APRS polling
   - Disables predictions, routing, and landing detection while waiting for a response
 - **Transitions**:
-  1. `bleTelemetryState.hasTelemetry` AND `timeInState` ≥ 30s → `liveBLEFlying` or `liveBLELanded` (based on `balloonPhase`)
+  1. `bleTelemetryState.hasTelemetry` → `liveBLEFlying` or `liveBLELanded` (based on `balloonPhase`)
   2. `aprsTelemetryIsAvailable` → `aprsFlying` or `aprsLanded` (based on `balloonPhase`)
   3. `APRS timeout` → `noTelemetry`
 
@@ -310,7 +310,7 @@ Each state defines explicit entry functionality and exit criteria:
   - Map shows balloon track, landing point, landing point track, predicted path, route
   - If RadioSondyGo is ready for commands, the app regularly checks its frequency/sonde type and issues a command to change its frequency/sondetype to the one reported from APRS
 - **Transitions**:
-  1. `bleTelemetryState.hasTelemetry` AND `timeInState` ≥ 30s → `liveBLEFlying`
+  1. `bleTelemetryState.hasTelemetry` → `liveBLEFlying`
   2. `balloonPhase == .landed` → `aprsLanded`
   3. `APRS timeout` → `noTelemetry`
 
@@ -324,7 +324,7 @@ Each state defines explicit entry functionality and exit criteria:
   - Data panel shows motion metrics as zero
   - If RadioSondyGo is ready for commands, the app regularly checks its frequency/sonde type and issues a command to change its frequency/sondetype to the one reported from APRS
 - **Transitions**:
-  1. `bleTelemetryState.hasTelemetry` AND `timeInState` ≥ 30s → `liveBLEFlying` or `liveBLELanded` (based on `balloonPhase`)
+  1. `bleTelemetryState.hasTelemetry` → `liveBLEFlying` or `liveBLELanded` (based on `balloonPhase`)
   2. `balloonPhase != .landed` → `aprsFlying`
   3. `APRS timeout` → `noTelemetry`
 
@@ -345,7 +345,7 @@ Each state defines explicit entry functionality and exit criteria:
 ### Key Design Principles
 
 - **Input-Driven Transitions**: State changes occur only when input signals change.
-- **30-Second Debouncing**: Transitions from APRS back to BLE require the system to be in an APRS state for at least 30 seconds to prevent rapid oscillation between telemetry sources.
+- **No Debouncing**: State transitions between BLE and APRS sources occur immediately when telemetry availability changes. The 30-second BLE staleness threshold provides sufficient delay to prevent false positives, eliminating the need for additional debouncing.
 - **APRS Polling Control**: The `APRSTelemetryService` handles polling frequency internally; the state machine enables/disables it. Exception: APRS polling starts immediately during startup (Step 2) 
 
 
@@ -817,8 +817,8 @@ Discover and connect to MySondyGo devices over Bluetooth Low Energy, subscribe t
 
 **Telemetry Staleness Detection**
 
-- `updateBLEStaleState()` runs every 3 seconds; if the latest Type‑1 packet is older than 3 seconds, logs "Telemetry LOST"; when telemetry resumes it logs "Telemetry GAINED".
-- Note: This function only logs changes; actual telemetry availability state management is handled by `BalloonPositionService` which monitors BLE connection status and telemetry flow.
+- `updateBLEStaleState()` runs every 3 seconds; if the latest Type‑1 packet is older than 30 seconds, logs "Telemetry LOST" and downgrades connection state from `dataReady` to `readyForCommands`; when telemetry resumes it logs "Telemetry GAINED".
+- Note: This function manages the BLE connection state transitions based on telemetry age. The state machine in `BalloonPositionService` monitors these connection state changes to trigger APRS fallback.
 
 **Stability Notes**
 
@@ -1519,7 +1519,8 @@ No calculations or business logic in views. Search for an appropriate service to
 This panel covers the full width of the display and the full height left by the map. It displays the following fields (font sizes adjusted to ensure all data fits within the view without a title):
 
     Connection status icon (BLE, APRS, or disconnected).
-  * **BLE Icon Behavior**: Shows red when RadioSondy connected but no telemetry data (readyForCommands state), indicates device is connected but waiting for first telemetry packet
+  * **BLE Icon (antenna)**: Shown in `liveBLEFlying` and `liveBLELanded` states. Green when data is fresh (< 3s), red when stale or in `waitingForAPRS`/`noTelemetry` states
+  * **APRS Icon (globe)**: Shown in `aprsFlying` and `aprsLanded` states. Color reflects API status: green (connected), red (failed), yellow (in progress)
   * **Flash Animation**: Green flashing animation triggers only when telemetry data received (dataReady state), providing visual feedback for active telemetry reception
   * **iOS 17 Compatibility**: Fixed deprecated onChange method syntax for proper iOS 17 support
 * Sonde Identification: Sonde type, number, and frequency.  
