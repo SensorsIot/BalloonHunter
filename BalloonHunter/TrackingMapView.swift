@@ -287,6 +287,22 @@ struct TrackingMapView: View {
                         return
                     }
 
+                    // Enforce minimum zoom limit for satellite view (Apple Maps satellite tiles unavailable beyond ~111)
+                    if isSatelliteView {
+                        let minSpan = 0.002 // ~111m at equator, prevents black tiles
+                        if context.region.span.latitudeDelta < minSpan || context.region.span.longitudeDelta < minSpan {
+                            let limitedSpan = MKCoordinateSpan(
+                                latitudeDelta: max(context.region.span.latitudeDelta, minSpan),
+                                longitudeDelta: max(context.region.span.longitudeDelta, minSpan)
+                            )
+                            let limitedRegion = MKCoordinateRegion(center: context.region.center, span: limitedSpan)
+                            position = .region(limitedRegion)
+                            savedZoomLevel = limitedSpan
+                            appLog("🗺️ MAP: Satellite zoom limited to ~\(Int(minSpan * 111000))m (tile coverage limit)", category: .general, level: .debug)
+                            return
+                        }
+                    }
+
                     savedZoomLevel = context.region.span
                     logZoomChange("Map camera changed by user", span: context.region.span, center: context.region.center)
                 }
@@ -323,7 +339,7 @@ struct TrackingMapView: View {
                         )
                     }
 
-                    // Map type toggle button (top-right corner)
+                    // Map type toggle button (positioned below built-in map compass)
                     VStack {
                         HStack {
                             Spacer()
@@ -336,8 +352,8 @@ struct TrackingMapView: View {
                             }
                             .background(.ultraThinMaterial)
                             .cornerRadius(8)
-                            .padding(.trailing, 16)
-                            .padding(.top, 16)
+                            .padding(.trailing, 5)
+                            .padding(.top, 60)
                         }
                         Spacer()
                     }
