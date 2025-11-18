@@ -444,8 +444,9 @@ struct TrackingMapView: View {
             // Then enable heading tracking after a brief delay, letting map preserve current zoom
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
                 appLog("🔍 ZOOM: Enabling heading tracking (preserving current zoom)", category: .general, level: .info)
-                // Don't provide fallback - let map preserve current view
-                position = .userLocation(followsHeading: true, fallback: .automatic)
+                // Use explicit region as fallback to prevent map from showing all annotations (.automatic behavior)
+                let fallbackRegion = MKCoordinateRegion(center: userCoordinate, span: savedZoomLevel)
+                position = .userLocation(followsHeading: true, fallback: .region(fallbackRegion))
             }
             
         } else {

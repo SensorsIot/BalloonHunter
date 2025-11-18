@@ -81,7 +81,8 @@ extension ServiceCoordinator {
 
         let sondeName = persistenceService.loadSondeName()
         let track = persistenceService.loadBalloonTrack() ?? []
-        let landingPoints = persistenceService.loadLandingPoints() ?? []
+        // Don't load old landing points - they should only exist for current session
+        let landingPoints: [LandingPredictionPoint] = []
 
         // Validate consistency (sondeName must match track)
         if let sondeName = sondeName, !track.isEmpty {

@@ -1705,7 +1705,11 @@ final class LandingPointTrackingService: ObservableObject {
         currentLandingPoint = nil
         currentSondeName = nil
         pendingLandingPoint = nil
-        appLog("LandingPointTrackingService: All data cleared for new sonde", category: .service, level: .info)
+
+        // Clear landing points from disk so old sonde landing points don't reload on next startup
+        persistenceService.saveLandingPoints([])
+
+        appLog("LandingPointTrackingService: All data cleared for new sonde (including persisted landing points)", category: .service, level: .info)
     }
 }
 
