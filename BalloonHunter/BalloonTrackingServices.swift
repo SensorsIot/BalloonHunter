@@ -179,6 +179,14 @@ final class BalloonPositionService: ObservableObject {
             }
             .store(in: &cancellables)
 
+        // Subscribe to APRS radio channel data stream (for frequency display)
+        aprsService.$latestRadioChannel
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] radioData in
+                self?.handleRadioChannelUpdate(radioData, source: "APRS")
+            }
+            .store(in: &cancellables)
+
         // Subscribe to APRS connection status to detect failures
         aprsService.$connectionStatus
             .receive(on: DispatchQueue.main)
