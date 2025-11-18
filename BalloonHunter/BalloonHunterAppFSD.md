@@ -1171,6 +1171,39 @@ Request a route from the user’s current location to the landing point using Ap
 6. Successful routes are cached in `RoutingCache` for 5 minutes (LRU eviction, capacity 100). Callers check the cache before invoking Apple Maps again.
 7. **Task cancellation**: Tracks `currentRouteTask` and cancels it immediately when starting a new route calculation or when `clearAllData()` is called during sonde changes. Running tasks check `Task.checkCancellation()` before route calculation and before publishing results to exit cleanly with `CancellationError` when cancelled. This prevents stale routes to old sonde landing points being published after sonde change completes.
 
+#### Smart Route Recalculation
+
+The service implements intelligent route recalculation to minimize API calls while maintaining accuracy:
+
+**Recalculation Triggers**:
+1. **Landing Point Movement** (≥100m threshold):
+   - When predicted landing point moves ≥100 meters, route is recalculated
+   - Minor prediction updates (<100m) keep existing route to prevent excessive API calls
+   - Typical balloon chase: 2-5 recalculations as landing point converges during descent
+
+2. **Off-Route Detection** (≥50m threshold):
+   - User's current position is continuously compared to planned route polyline
+   - Perpendicular distance to nearest route segment is calculated using point-to-line geometry
+   - If user deviates ≥50 meters from route, automatic recalculation is triggered
+   - Follows navigation best practices similar to commercial navigation apps
+
+3. **Transport Mode Changes**:
+   - Switching between car/bike modes immediately recalculates route with new transport type
+   - Mode is preserved across all automatic recalculations
+
+**Off-Route Detection Implementation**:
+- Route polyline is stored in `CurrentLocationService` for deviation monitoring
+- On each location update (every 10m in normal mode, 2m in heading mode):
+  - Calculates minimum perpendicular distance from user position to route segments
+  - Uses dot product projection to find closest point on each line segment
+  - Triggers `shouldUpdateRoute` flag when threshold exceeded
+- `RouteCalculationService` subscribes to off-route events and recalculates automatically
+
+**API Efficiency**:
+- Typical balloon chase: 3-8 total API calls (initial + landing point moves + off-route corrections)
+- No time-based periodic recalculation (eliminates ~360 calls/hour overhead)
+- No redundant calls when user stays on route and landing point is stable
+
 #### Automatic Route Calculation on GPS Availability
 
 The service includes a retry mechanism for when route calculation is triggered before user location is available (common during startup):

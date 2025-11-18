@@ -280,11 +280,15 @@ struct TrackingMapView: View {
                 .onMapCameraChange { context in
                     guard !showSettings else { return }
 
+                    // DISABLED: Automatic startup zoom - user wants manual control only
+                    // if needsStartupZoom {
+                    //     needsStartupZoom = false
+                    //     appLog("🔍 ZOOM: Map initialized, triggering startup zoom", category: .general, level: .info)
+                    //     mapPresenter.updateCameraToShowAllAnnotations()
+                    //     return
+                    // }
                     if needsStartupZoom {
                         needsStartupZoom = false
-                        appLog("🔍 ZOOM: Map initialized, triggering startup zoom", category: .general, level: .info)
-                        mapPresenter.updateCameraToShowAllAnnotations()
-                        return
                     }
 
                     // Enforce minimum zoom limit for satellite view (Apple Maps satellite tiles unavailable beyond ~111)
@@ -308,7 +312,8 @@ struct TrackingMapView: View {
                 }
                 .onReceive(mapPresenter.$region) { region in
                     guard !showSettings else { return }
-                    if let region = region, !mapPresenter.isHeadingMode {
+                    // Only update position when explicitly triggered by "All" button
+                    if let region = region, !mapPresenter.isHeadingMode, mapPresenter.showAllAnnotations {
                         position = .region(region)
                     }
                 }

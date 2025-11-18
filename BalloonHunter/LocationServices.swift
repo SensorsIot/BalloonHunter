@@ -29,11 +29,9 @@ final class CurrentLocationService: NSObject, ObservableObject, CLLocationManage
     private var cancellables = Set<AnyCancellable>()
     private var userLocationLogCount: Int = 0
 
-    // Movement thresholds for route updates (moved from Coordinator)
-    private var lastRouteUpdateLocation: CLLocationCoordinate2D? = nil
-    private var lastRouteUpdateTime = Date.distantPast
-    private let routeUpdateMovementThreshold: CLLocationDistance = 100.0 // meters
-    private let routeUpdateTimeThreshold: TimeInterval = 60.0 // seconds
+    // Route deviation detection thresholds
+    private let offRouteDistanceThreshold: CLLocationDistance = 50.0 // meters - distance from route to trigger recalculation
+    private var currentRoutePolyline: MKPolyline? = nil
     
     // Location service operational modes
     enum LocationMode {
@@ -238,37 +236,36 @@ final class CurrentLocationService: NSObject, ObservableObject, CLLocationManage
 
     // MARK: - Route Update Logic (moved from Coordinator)
 
+    /// Update current route polyline for deviation detection
+    func updateCurrentRoute(_ routeCoordinates: [CLLocationCoordinate2D]?) {
+        if let coordinates = routeCoordinates, coordinates.count >= 2 {
+            currentRoutePolyline = MKPolyline(coordinates: coordinates, count: coordinates.count)
+        } else {
+            currentRoutePolyline = nil
+        }
+    }
+
     private func checkForRouteUpdate(_ newLocation: LocationData) {
         let currentCoordinate = CLLocationCoordinate2D(
             latitude: newLocation.latitude,
             longitude: newLocation.longitude
         )
-        let now = Date()
 
-        // Check time threshold first (every minute)
-        let timeSinceLastUpdate = now.timeIntervalSince(lastRouteUpdateTime)
-        guard timeSinceLastUpdate >= routeUpdateTimeThreshold else {
+        // Check if user has deviated from the planned route
+        guard let routePolyline = currentRoutePolyline else {
+            // No route exists - don't trigger updates
+            // Route will be calculated when landing point becomes available
             return
         }
 
-        // Check movement threshold
-        var shouldTriggerUpdate = false
-        if let lastLocation = lastRouteUpdateLocation {
-            let distance = CLLocation(latitude: lastLocation.latitude, longitude: lastLocation.longitude)
-                .distance(from: CLLocation(latitude: currentCoordinate.latitude, longitude: currentCoordinate.longitude))
+        // Calculate distance from user location to the route
+        let userPoint = MKMapPoint(currentCoordinate)
+        let distanceToRoute = distanceFromPoint(userPoint, toPolyline: routePolyline)
 
-            if distance >= routeUpdateMovementThreshold {
-                shouldTriggerUpdate = true
-                appLog("CurrentLocationService: User moved \(Int(distance))m - triggering route update", category: .service, level: .info)
-            }
-        } else {
-            // First time - always trigger
-            shouldTriggerUpdate = true
-        }
+        // Trigger recalculation if user is off-route
+        if distanceToRoute > offRouteDistanceThreshold {
+            appLog("CurrentLocationService: Off-route detected (\(Int(distanceToRoute))m from route) - triggering recalculation", category: .service, level: .info)
 
-        if shouldTriggerUpdate {
-            lastRouteUpdateLocation = currentCoordinate
-            lastRouteUpdateTime = now
             shouldUpdateRoute = true
 
             // Reset flag after brief delay to allow subscribers to react
@@ -276,6 +273,53 @@ final class CurrentLocationService: NSObject, ObservableObject, CLLocationManage
                 self?.shouldUpdateRoute = false
             }
         }
+    }
+
+    /// Calculate minimum distance from a point to a polyline
+    private func distanceFromPoint(_ point: MKMapPoint, toPolyline polyline: MKPolyline) -> CLLocationDistance {
+        let polylinePoints = polyline.points()
+        let pointCount = polyline.pointCount
+
+        guard pointCount > 0 else { return .infinity }
+
+        var minDistance: CLLocationDistance = .infinity
+
+        // Check distance to each segment of the polyline
+        for i in 0..<(pointCount - 1) {
+            let segmentStart = polylinePoints[i]
+            let segmentEnd = polylinePoints[i + 1]
+
+            let distance = distanceFromPoint(point, toSegmentStart: segmentStart, segmentEnd: segmentEnd)
+            minDistance = min(minDistance, distance)
+        }
+
+        return minDistance
+    }
+
+    /// Calculate distance from a point to a line segment
+    private func distanceFromPoint(_ point: MKMapPoint, toSegmentStart start: MKMapPoint, segmentEnd end: MKMapPoint) -> CLLocationDistance {
+        let dx = end.x - start.x
+        let dy = end.y - start.y
+
+        // If segment is a point, return distance to that point
+        if dx == 0 && dy == 0 {
+            let px = point.x - start.x
+            let py = point.y - start.y
+            return sqrt(px * px + py * py)
+        }
+
+        // Calculate projection of point onto line segment
+        let t = max(0, min(1, ((point.x - start.x) * dx + (point.y - start.y) * dy) / (dx * dx + dy * dy)))
+
+        // Find closest point on segment
+        let closestX = start.x + t * dx
+        let closestY = start.y + t * dy
+
+        // Calculate distance
+        let distX = point.x - closestX
+        let distY = point.y - closestY
+
+        return sqrt(distX * distX + distY * distY)
     }
 
     // MARK: - Distance and Proximity Calculations

@@ -214,25 +214,26 @@ struct BalloonHunterApp: App {
         appLog("BalloonHunterApp: Step 2 - Triggering state machine evaluation", category: .lifecycle, level: .info)
         let previousState = appServices.balloonPositionService.currentState
         appServices.balloonPositionService.triggerStateEvaluation()
+        let currentState = appServices.balloonPositionService.currentState
 
-        // 3. Check if we were in flying state - trigger APRS fetch with forced detection
-        // Scenario 3: Background return during flight
-        if previousState == .liveBLEFlying || previousState == .aprsFlying {
-            appLog("BalloonHunterApp: Step 3 - Was flying during background (\(previousState)) - triggering APRS fetch with forced track-based landing detection", category: .lifecycle, level: .info)
+        // 3. Check CURRENT state after evaluation - if flying, fill track gaps
+        // This ensures we make decisions based on reality NOW, not what happened before backgrounding
+        if currentState == .liveBLEFlying || currentState == .aprsFlying {
+            appLog("BalloonHunterApp: Step 3 - Currently flying (\(currentState)) - triggering APRS fetch with forced track-based landing detection", category: .lifecycle, level: .info)
             await MainActor.run {
                 appServices.balloonTrackService.fillTrackGapsFromAPRS(forceDetection: true)
             }
         } else {
-            appLog("BalloonHunterApp: Step 3 - Was not flying during background (\(previousState)) - skipping forced detection", category: .lifecycle, level: .info)
+            appLog("BalloonHunterApp: Step 3 - Not flying (\(currentState)) - skipping forced detection", category: .lifecycle, level: .info)
         }
 
         // 4. If state didn't change, refresh current state to ensure services are active
         // This handles edge cases where timers/services need to be restarted
-        if appServices.balloonPositionService.currentState == previousState {
+        if currentState == previousState {
             appLog("BalloonHunterApp: Step 4 - State unchanged (\(previousState)), refreshing service configuration", category: .lifecycle, level: .info)
             appServices.balloonPositionService.refreshCurrentState()
         } else {
-            appLog("BalloonHunterApp: Step 4 - State changed: \(previousState) → \(appServices.balloonPositionService.currentState)", category: .lifecycle, level: .info)
+            appLog("BalloonHunterApp: Step 4 - State changed: \(previousState) → \(currentState)", category: .lifecycle, level: .info)
         }
 
         // State machine now controls all service activation based on current state

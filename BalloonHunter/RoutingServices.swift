@@ -157,6 +157,7 @@ final class RouteCalculationService: ObservableObject {
     private var appSettings: AppSettings?
     private var cancellables = Set<AnyCancellable>()
     private var currentRouteTask: Task<Void, Never>?  // Track in-flight route calculation for cancellation
+    private let destinationMovementThreshold: CLLocationDistance = 100.0 // meters - recalculate if landing point moves this much
 
     init(currentLocationService: CurrentLocationService) {
         self.currentLocationService = currentLocationService
@@ -182,6 +183,27 @@ final class RouteCalculationService: ObservableObject {
 
                 appLog("RouteCalculationService: User location available, calculating route", category: .service, level: .info)
                 self.calculateAndPublishRoute(from: locationData, to: destination)
+            }
+            .store(in: &cancellables)
+
+        // Update location service with current route for off-route detection
+        $currentRoute
+            .sink { [weak currentLocationService] route in
+                currentLocationService?.updateCurrentRoute(route?.coordinates)
+            }
+            .store(in: &cancellables)
+
+        // Listen for off-route triggers from location service
+        currentLocationService.$shouldUpdateRoute
+            .sink { [weak self] shouldUpdate in
+                guard let self = self, shouldUpdate else { return }
+
+                // Recalculate route if we have a destination and user location
+                if let destination = self.lastDestination,
+                   let userLocation = self.currentLocationService.locationData {
+                    appLog("RouteCalculationService: Off-route detected, recalculating route", category: .service, level: .info)
+                    self.calculateAndPublishRoute(from: userLocation, to: destination)
+                }
             }
             .store(in: &cancellables)
     }
@@ -212,15 +234,39 @@ final class RouteCalculationService: ObservableObject {
     func calculateRoute(to destination: CLLocationCoordinate2D) {
         appLog("RouteCalculationService: calculateRoute called to destination [\(String(format: "%.4f", destination.latitude)), \(String(format: "%.4f", destination.longitude))]", category: .service, level: .info)
 
-        // Store destination for retry when user location becomes available
+        // Check if destination has moved significantly
+        var shouldRecalculate = false
+        if let previousDestination = lastDestination {
+            let distance = CLLocation(latitude: previousDestination.latitude, longitude: previousDestination.longitude)
+                .distance(from: CLLocation(latitude: destination.latitude, longitude: destination.longitude))
+
+            if distance >= destinationMovementThreshold {
+                shouldRecalculate = true
+                appLog("RouteCalculationService: Landing point moved \(Int(distance))m - triggering recalculation", category: .service, level: .info)
+            } else {
+                appLog("RouteCalculationService: Landing point moved only \(Int(distance))m - keeping existing route", category: .service, level: .debug)
+                // Update destination but don't recalculate
+                lastDestination = destination
+                return
+            }
+        } else {
+            // First time - always calculate
+            shouldRecalculate = true
+            appLog("RouteCalculationService: Initial route calculation", category: .service, level: .info)
+        }
+
+        // Store new destination
         lastDestination = destination
 
         guard let userLocation = currentLocationService.locationData else {
             appLog("RouteCalculationService: User location not yet available, will calculate route automatically when location is ready", category: .service, level: .info)
             return
         }
-        appLog("RouteCalculationService: User location available at [\(String(format: "%.4f", userLocation.latitude)), \(String(format: "%.4f", userLocation.longitude))], proceeding with route calculation", category: .service, level: .info)
-        calculateAndPublishRoute(from: userLocation, to: destination)
+
+        if shouldRecalculate {
+            appLog("RouteCalculationService: User location available at [\(String(format: "%.4f", userLocation.latitude)), \(String(format: "%.4f", userLocation.longitude))], proceeding with route calculation", category: .service, level: .info)
+            calculateAndPublishRoute(from: userLocation, to: destination)
+        }
     }
 
     /// Calculate and publish route - called by state machine

@@ -22,6 +22,11 @@ A sophisticated iOS application for tracking and recovering weather balloons in 
 ### 🗺️ Hunter-Focused Interface
 - **Map-Centric Design**: 70% map view optimized for field tracking operations
 - **Live Overlays**: Balloon track, prediction path, landing zones, and hunter position
+- **Smart Route Recalculation**: Intelligent navigation that only recalculates when needed:
+  - Off-route detection (≥50m deviation)
+  - Landing point movement (≥100m shift)
+  - Transport mode changes (car/bike)
+  - Minimizes API calls (3-8 per chase vs 360+/hour with time-based updates)
 - **Apple Maps Navigation**: One-tap routing with car/bike transport modes
 - **Landing Change Alerts**: Notifications when prediction shifts >300m during CarPlay navigation
 - **Heading Mode**: Compass-locked view for directional navigation to landing site
