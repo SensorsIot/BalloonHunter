@@ -1542,7 +1542,7 @@ final class BalloonTrackService: ObservableObject {
         currentAPRSFillTask?.cancel()
         currentAPRSFillTask = nil
 
-        // Clear all track data
+        // Clear all track data from memory
         currentBalloonTrack = []
         currentBalloonName = nil
         currentEffectiveDescentRate = nil
@@ -1572,8 +1572,13 @@ final class BalloonTrackService: ObservableObject {
             smoothedVerticalSpeedMS: 0,
             adjustedDescentRateMS: nil
         )
+
+        // Clear all track data from disk
+        persistenceService.saveBalloonTrack([])
+        persistenceService.saveSondeName("")
+
         trackUpdated.send()
-        appLog("BalloonTrackService: All data cleared for new sonde (cancelled in-flight APRS fill)", category: .service, level: .info)
+        appLog("BalloonTrackService: All data cleared for new sonde (memory + disk, cancelled in-flight APRS fill)", category: .service, level: .info)
     }
 }
 
