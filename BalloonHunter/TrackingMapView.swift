@@ -329,13 +329,6 @@ struct TrackingMapView: View {
 
                     updateMapPositionForHeadingMode(isHeadingMode)
                 }
-                .onReceive(mapPresenter.$userLocation) { _ in
-                    guard !showSettings else { return }
-                    guard hasPreservedStartupZoom else { return }
-                    if mapPresenter.isHeadingMode {
-                        updateMapPositionForHeadingMode(true)
-                    }
-                }
 
                     // Distance annotation overlay (landing mode only)
                     if isLanded {
