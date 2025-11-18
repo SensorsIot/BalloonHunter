@@ -234,7 +234,7 @@ struct TrackingMapView: View {
                             case .ascending: return ("balloon.fill", .green)
                             case .descendingAbove10k: return ("balloon.fill", .orange)
                             case .descendingBelow10k: return ("balloon.fill", .red)
-                            case .landed: return ("target", .purple)
+                            case .landed: return ("balloon.fill", .purple)
                             case .unknown: return ("balloon.fill", .gray)
                             }
                         }()
