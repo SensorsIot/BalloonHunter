@@ -329,6 +329,18 @@ struct TrackingMapView: View {
 
                     updateMapPositionForHeadingMode(isHeadingMode)
                 }
+                .onReceive(mapPresenter.$userLocation) { userLocation in
+                    guard !showSettings else { return }
+                    guard hasPreservedStartupZoom else { return }
+                    guard mapPresenter.isHeadingMode else { return }
+                    guard let userLocation = userLocation else { return }
+
+                    // Update position in heading mode to keep following user
+                    // Use current savedZoomLevel to prevent zoom jumping
+                    let userCoordinate = CLLocationCoordinate2D(latitude: userLocation.latitude, longitude: userLocation.longitude)
+                    let fallbackRegion = MKCoordinateRegion(center: userCoordinate, span: savedZoomLevel)
+                    position = .userLocation(followsHeading: true, fallback: .region(fallbackRegion))
+                }
 
                     // Distance annotation overlay (landing mode only)
                     if isLanded {
