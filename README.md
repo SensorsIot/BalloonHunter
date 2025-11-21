@@ -5,6 +5,23 @@ A sophisticated iOS application for tracking and recovering weather balloons in 
 ![iOS](https://img.shields.io/badge/iOS-17.6+-blue.svg)
 ![Swift](https://img.shields.io/badge/Swift-5.9+-orange.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
+![App Store](https://img.shields.io/badge/App%20Store-Pending%20Review-yellow.svg)
+
+## 📱 Availability
+
+**App Store Status**: Pending Review (Submitted November 21, 2025)
+
+BalloonHunter has been submitted to the Apple App Store and is currently under review. Once approved, it will be available for free download on all iPhones running iOS 17.6+.
+
+<!-- Uncomment when approved and add App Store ID:
+[![Download on App Store](https://img.shields.io/badge/Download-App%20Store-blue.svg)](https://apps.apple.com/app/idXXXXXXXXXX)
+-->
+
+**Submission Details**:
+- Version: 1.0
+- Bundle ID: HB9BLA.BalloonHunter
+- Platform: iPhone only
+- Submission ID: 20b1826d-41da-4e95-8fc6-db265b9d7a6c
 
 ## ✨ Key Features
 
@@ -46,11 +63,22 @@ Modern SwiftUI app with service-coordinator pattern and 7-state telemetry state 
 - MySondyGo device (optional - works with APRS-only)
 
 ### Installation
+
+**From App Store** (Recommended - when available):
+- Search for "BalloonHunter" in the App Store
+- Or visit the App Store link above once approved
+
+**From Source** (For Development):
 ```bash
 git clone https://github.com/SensorsIot/BalloonHunter.git
 cd BalloonHunter
 open BalloonHunter.xcodeproj
 ```
+
+**Requirements for building from source**:
+- Xcode 16.1+ (official release, not beta)
+- macOS with iOS 17.6+ SDK
+- Apple Developer account (for device deployment)
 
 ### Setup
 1. **Configure Station ID**: Enter your SondeHub station ID in Settings
@@ -90,6 +118,12 @@ swift -syntax-test BalloonHunter/*.swift
 
 Intelligent polling with coordinate/time-based caching for optimal performance.
 
+## 📄 Documentation
+
+- **[Privacy Policy](Privacy-Policy.md)**: Complete privacy and data usage policy
+- **[App Store Metadata](AppStoreMetadata_Clean.md)**: Official App Store listing information
+- **[Submission Summary](SUBMISSION_COMPLETE.md)**: App Store submission details and timeline
+
 ## 🙏 Acknowledgments
 
 - **SondeHub Community**: Global APRS network and prediction services
@@ -97,6 +131,16 @@ Intelligent polling with coordinate/time-based caching for optimal performance.
 - **CUSF**: Professional Tawhiri trajectory prediction engine
 - **Amateur Radio Community**: Worldwide balloon tracking infrastructure
 
+## 📞 Contact & Support
+
+- **Issues**: [GitHub Issues](https://github.com/SensorsIot/BalloonHunter/issues)
+- **Developer**: Andreas Spiess (HB9BLA)
+- **Email**: [Contact via GitHub]
+
+## 📜 License
+
+MIT License - See LICENSE file for details
+
 ---
 
-**Built with ❤️ for the weather balloon tracking community**
+**Built with ❤️ for the weather balloon tracking community by HB9BLA**

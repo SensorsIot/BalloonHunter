@@ -46,6 +46,9 @@ fastlane/Preview.html
 fastlane/screenshots
 fastlane/test_output
 
+# App Store Assets (screenshots are large binary files)
+BalloonHunter/Screenshots/
+
 # macOS
 .DS_Store
 
