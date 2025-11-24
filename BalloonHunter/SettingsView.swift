@@ -398,7 +398,13 @@ struct SettingsView: View {
     @EnvironmentObject var bleService: BLECommunicationService
     @EnvironmentObject var persistenceService: PersistenceService
     @EnvironmentObject var userSettings: UserSettings
-    
+    @Environment(\.horizontalSizeClass) var horizontalSizeClass
+
+    // Computed property for picker height
+    private var pickerHeight: CGFloat {
+        horizontalSizeClass == .regular ? 220 : 180
+    }
+
     @State private var selectedTab: Int = 0
     @State private var isShowingDeviceSettings = false
     @State private var isShowingPredictionSettings = false
@@ -432,24 +438,30 @@ struct SettingsView: View {
             }
             .navigationTitle(titleForTab(selectedTab))
             .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
+                ToolbarItemGroup(placement: .navigationBarTrailing) {
                     if selectedTab == 0 { // Sonde
-                        HStack {
-                            Button("Prediction Settings") { isShowingPredictionSettings = true }
-                            Spacer()
-                            Button("Device Settings") { isShowingDeviceSettings = true }
-                                .disabled(!bleService.connectionState.canReceiveCommands)
-                            Spacer()
-                            Button("Tune") { selectedTab = 1 }
-                                .disabled(!bleService.connectionState.canReceiveCommands)
+                        // Use shorter labels on iPhone, full text on iPad
+                        Button(horizontalSizeClass == .regular ? "Prediction Settings" : "Prediction") {
+                            isShowingPredictionSettings = true
                         }
+                        .font(.system(size: 24))
+
+                        Button(horizontalSizeClass == .regular ? "Device Settings" : "Device") {
+                            isShowingDeviceSettings = true
+                        }
+                        .font(.system(size: 24))
+                        .disabled(!bleService.connectionState.canReceiveCommands)
+
+                        Button("Tune") { selectedTab = 1 }
+                            .font(.system(size: 24))
+                            .disabled(!bleService.connectionState.canReceiveCommands)
                     } else { // Tune
-                        HStack(spacing: 16) {
-                            Button("Done") { selectedTab = 0 }
-                            Button("Reset") {
-                                saveTuneSettings(correctionValue: 0)
-                            }
+                        Button("Done") { selectedTab = 0 }
+                            .font(.system(size: 24))
+                        Button("Reset") {
+                            saveTuneSettings(correctionValue: 0)
                         }
+                        .font(.system(size: 24))
                     }
                 }
             }
@@ -628,7 +640,8 @@ struct SettingsView: View {
                 }
                 Section(header: Text("Sonde Type & Frequency")) {
                     Picker("Sonde Type", selection: $tempRadioSettings.probeType) {
-                        ForEach(["RS41", "M20", "M10", "PILOT", "DFM"], id: \.self) { Text($0) }
+                        Text("N/A").tag("")
+                        ForEach(["RS41", "M20", "M10", "PILOT", "DFM"], id: \.self) { Text($0).tag($0) }
                     }
                     .disabled(true)
                     
@@ -643,7 +656,7 @@ struct SettingsView: View {
                                 }
                             }
                             .pickerStyle(WheelPickerStyle())
-                            .frame(maxWidth: .infinity, maxHeight: 180)
+                            .frame(maxWidth: .infinity, maxHeight: pickerHeight)
                             .clipped()
                             .disabled(true)
                             .layoutPriority(1)
@@ -656,7 +669,8 @@ struct SettingsView: View {
             } else {
                 Section(header: Text("Sonde Type & Frequency")) {
                     Picker("Sonde Type", selection: $tempRadioSettings.probeType) {
-                        ForEach(["RS41", "M20", "M10", "PILOT", "DFM"], id: \.self) { Text($0) }
+                        Text("N/A").tag("")
+                        ForEach(["RS41", "M20", "M10", "PILOT", "DFM"], id: \.self) { Text($0).tag($0) }
                     }
                     .disabled(!bleService.connectionState.canReceiveCommands)
                     
@@ -671,7 +685,7 @@ struct SettingsView: View {
                                 }
                             }
                             .pickerStyle(WheelPickerStyle())
-                            .frame(maxWidth: .infinity, maxHeight: 180)
+                            .frame(maxWidth: .infinity, maxHeight: pickerHeight)
                             .clipped()
                             .disabled(!bleService.connectionState.canReceiveCommands)
                             .layoutPriority(1)

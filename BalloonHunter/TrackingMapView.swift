@@ -64,89 +64,46 @@ struct TrackingMapView: View {
         mapPresenter.logZoomChange(description, span: span, center: center)
     }
 
+    // Environment property to detect device size class
+    @Environment(\.horizontalSizeClass) var horizontalSizeClass
+
+    // Computed properties for adaptive layout
+    private var isIPad: Bool {
+        horizontalSizeClass == .regular
+    }
+
+    private var mapHeightRatio: CGFloat {
+        isIPad ? 0.75 : 0.7
+    }
+
+    private var pickerWidth: CGFloat {
+        isIPad ? 120 : 100
+    }
+
     var body: some View {
         GeometryReader { geometry in
             VStack(spacing: 0) {
-                // Top control panel
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 12) {
-                        // Settings button
-                        Button {
-                            showSettings = true
-                        } label: {
-                            Image(systemName: "gearshape")
-                                .imageScale(.large)
-                                .padding(8)
+                // Top control panel - adaptive layout for iPad
+                Group {
+                    if isIPad {
+                        // iPad: Use horizontal layout without scrolling
+                        HStack(spacing: 12) {
+                            controlPanelButtons
                         }
-                        .background(.ultraThinMaterial)
-                        .cornerRadius(8)
-
-                        // Transport mode picker
-                        Picker("Mode", selection: Binding(
-                            get: { mapPresenter.transportMode },
-                            set: { newValue in mapPresenter.setTransportMode(newValue) }
-                        )) {
-                            Image(systemName: "car.fill").tag(TransportationMode.car)
-                            Image(systemName: "bicycle").tag(TransportationMode.bike)
-                        }
-                        .pickerStyle(.segmented)
-                        .frame(width: 100)
-
-
-                        // Show All button - always functional
-                        Button("All") {
-                            if mapPresenter.isHeadingMode { mapPresenter.toggleHeadingMode() }
-                            mapPresenter.triggerShowAllAnnotations()
-                        }
-                        .buttonStyle(.bordered)
-
-                        // Heading mode toggle
-                        Button {
-                            mapPresenter.toggleHeadingMode()
-                        } label: {
-                            Image(systemName: mapPresenter.isHeadingMode ? "location.north.circle.fill" : "location.circle")
-                                .imageScale(.large)
-                                .padding(8)
-                        }
-                        .background(.ultraThinMaterial)
-                        .cornerRadius(8)
-
-                        // Buzzer mute toggle (hidden but keeps space when BLE not connected)
-                        Button {
-                            let newMuteState = !mapPresenter.isBuzzerMuted
-                            mapPresenter.setMuteState(newMuteState)
-
-                            // Haptic feedback
-                            let impactFeedback = UIImpactFeedbackGenerator(style: .medium)
-                            impactFeedback.impactOccurred()
-
-                            appLog("🔇 Mute button pressed: \(newMuteState ? "MUTED" : "UNMUTED")", category: .ui, level: .info)
-                        } label: {
-                            Image(systemName: mapPresenter.isBuzzerMuted ? "speaker.slash.fill" : "speaker.2.fill")
-                                .imageScale(.large)
-                                .padding(8)
-                        }
-                        .background(.ultraThinMaterial)
-                        .cornerRadius(8)
-                        .opacity(mapPresenter.connectionStatus == .connected ? 1.0 : 0.0)
-                        .disabled(mapPresenter.connectionStatus != .connected)
-
-                        // Apple Maps navigation button (only show when landing point available)
-                        if shouldShowNavigationButton {
-                            Button {
-                                mapPresenter.openInAppleMaps()
-                            } label: {
-                                Image(systemName: "location.fill.viewfinder")
-                                    .imageScale(.large)
-                                    .padding(8)
+                        .padding(.horizontal, 16)
+                        .padding(.top, 16)
+                        .padding(.bottom, 8)
+                    } else {
+                        // iPhone: Keep horizontal scroll for compact screens
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 12) {
+                                controlPanelButtons
                             }
-                            .background(.ultraThinMaterial)
-                            .cornerRadius(8)
+                            .padding(.horizontal, 16)
+                            .padding(.top, 16)
+                            .padding(.bottom, 8)
                         }
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.top, 16)
-                    .padding(.bottom, 8)
                 }
 
                 // Direct ServiceCoordinator Map Rendering
@@ -276,7 +233,7 @@ struct TrackingMapView: View {
                 }
                 .mapStyle(isSatelliteView ? .hybrid(pointsOfInterest: .excludingAll, showsTraffic: false) : .standard(pointsOfInterest: .excludingAll, showsTraffic: false))
                 .mapControlVisibility(mapPresenter.isHeadingMode ? .hidden : .automatic)
-                .frame(height: geometry.size.height * 0.7)
+                .frame(height: geometry.size.height * mapHeightRatio)
                 .onMapCameraChange { context in
                     guard !showSettings else { return }
 
@@ -421,6 +378,83 @@ struct TrackingMapView: View {
         }
     }
     
+    // Control panel buttons ViewBuilder
+    @ViewBuilder
+    private var controlPanelButtons: some View {
+        // Settings button
+        Button {
+            showSettings = true
+        } label: {
+            Image(systemName: "gearshape")
+                .imageScale(.large)
+                .padding(8)
+        }
+        .background(.ultraThinMaterial)
+        .cornerRadius(8)
+
+        // Transport mode picker
+        Picker("Mode", selection: Binding(
+            get: { mapPresenter.transportMode },
+            set: { newValue in mapPresenter.setTransportMode(newValue) }
+        )) {
+            Image(systemName: "car.fill").tag(TransportationMode.car)
+            Image(systemName: "bicycle").tag(TransportationMode.bike)
+        }
+        .pickerStyle(.segmented)
+        .frame(width: pickerWidth)
+
+        // Show All button - always functional
+        Button("All") {
+            if mapPresenter.isHeadingMode { mapPresenter.toggleHeadingMode() }
+            mapPresenter.triggerShowAllAnnotations()
+        }
+        .buttonStyle(.bordered)
+
+        // Heading mode toggle
+        Button {
+            mapPresenter.toggleHeadingMode()
+        } label: {
+            Image(systemName: mapPresenter.isHeadingMode ? "location.north.circle.fill" : "location.circle")
+                .imageScale(.large)
+                .padding(8)
+        }
+        .background(.ultraThinMaterial)
+        .cornerRadius(8)
+
+        // Buzzer mute toggle (hidden but keeps space when BLE not connected)
+        Button {
+            let newMuteState = !mapPresenter.isBuzzerMuted
+            mapPresenter.setMuteState(newMuteState)
+
+            // Haptic feedback
+            let impactFeedback = UIImpactFeedbackGenerator(style: .medium)
+            impactFeedback.impactOccurred()
+
+            appLog("🔇 Mute button pressed: \(newMuteState ? "MUTED" : "UNMUTED")", category: .ui, level: .info)
+        } label: {
+            Image(systemName: mapPresenter.isBuzzerMuted ? "speaker.slash.fill" : "speaker.2.fill")
+                .imageScale(.large)
+                .padding(8)
+        }
+        .background(.ultraThinMaterial)
+        .cornerRadius(8)
+        .opacity(mapPresenter.connectionStatus == .connected ? 1.0 : 0.0)
+        .disabled(mapPresenter.connectionStatus != .connected)
+
+        // Apple Maps navigation button (only show when landing point available)
+        if shouldShowNavigationButton {
+            Button {
+                mapPresenter.openInAppleMaps()
+            } label: {
+                Image(systemName: "location.fill.viewfinder")
+                    .imageScale(.large)
+                    .padding(8)
+            }
+            .background(.ultraThinMaterial)
+            .cornerRadius(8)
+        }
+    }
+
     private func updateMapToShowAllAnnotations() {
         if mapPresenter.isHeadingMode {
             return

@@ -20,37 +20,41 @@ struct DataPanelView: View {
 
     var body: some View {
         GeometryReader { geometry in // Added GeometryReader
+            // Calculate widths for Table 2 (3 equal columns)
+            let table2ColumnWidth = (geometry.size.width - 32 - 10) / 3.0 // Account for padding and spacing (2 gaps × 5px)
 
             VStack {
                 // Table 1: 5 columns - Connected, Flight Status, Sonde Type, Sonde Name, Altitude
+                // Let Grid handle layout naturally with flexible widths
                 Grid(alignment: .leading, horizontalSpacing: 5, verticalSpacing: 10) {
                     GridRow {
                         let icon = connectionIcon()
                         Image(systemName: icon.name)
                             .foregroundColor(icon.color)
                             .font(.system(size: 24))
-                            .frame(width: 48, alignment: .center)
+                            .frame(minWidth: 40, alignment: .center)
                             .scaleEffect(isFlashing ? 1.3 : 1.0)
                             .animation(.easeInOut(duration: 0.1), value: isFlashing)
                         Image(systemName: flightStatusIconName)
                             .foregroundColor(flightStatusTint)
                             .font(.system(size: 24))
-                            .frame(width: 48, alignment: .center)
+                            .frame(minWidth: 40, alignment: .center)
                             .accessibilityLabel(Text(flightStatusString))
                         Text(showingPlaceholders ? "N/A" : (balloonPositionService.currentRadioChannel?.probeType ?? "N/A"))
-                            .frame(width: 70, alignment: .center)
+                            .frame(minWidth: 60, alignment: .center)
                             .lineLimit(1)
                             .multilineTextAlignment(.center)
                         Text(showingPlaceholders ? "N/A" : (balloonPositionService.currentPositionData?.sondeName ?? "N/A"))
-                            .frame(width: 120, alignment: .center)
+                            .frame(minWidth: 100, maxWidth: .infinity, alignment: .center)
                             .lineLimit(1)
                             .multilineTextAlignment(.center)
                         Text(showingPlaceholders ? "N/A" : (balloonPositionService.currentPositionData != nil ? "\(Int(balloonPositionService.currentPositionData!.altitude)) m" : "N/A"))
-                            .frame(width: 80, alignment: .center)
+                            .frame(minWidth: 80, maxWidth: .infinity, alignment: .center)
                             .lineLimit(1)
                             .multilineTextAlignment(.center)
                     }
                 }
+                .frame(maxWidth: .infinity)
                 .padding(.horizontal)
 
                 // Table 2: 3 columns - Per FSD specification
@@ -58,32 +62,32 @@ struct DataPanelView: View {
                     // Row 1: Frequency, Signal Strength, Battery %
                     GridRow {
                         Text("\(frequencyString)")
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .frame(width: table2ColumnWidth, alignment: .leading)
                         Text("\(signalStrengthString) dBm")
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .frame(width: table2ColumnWidth, alignment: .leading)
                         Text("\(batteryPercentageString)%")
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .frame(width: table2ColumnWidth, alignment: .leading)
                     }
                     // Row 2: Vertical speed, Horizontal speed, Distance
                     GridRow {
                         let verticalSpeed = motionMetricsZeroed ? 0.0 : balloonTrackService.motionMetrics.smoothedVerticalSpeedMS
                         let horizontalSpeed = motionMetricsZeroed ? 0.0 : balloonTrackService.motionMetrics.smoothedHorizontalSpeedMS * 3.6
                         Text("V: \(String(format: "%.1f", verticalSpeed)) m/s")
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .frame(width: table2ColumnWidth, alignment: .leading)
                             .foregroundColor(verticalSpeed >= 0 ? .green : .red)
                         Text("H: \(String(format: "%.1f", horizontalSpeed)) km/h")
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .frame(width: table2ColumnWidth, alignment: .leading)
                         Text("Dist: \(distanceString) km")
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .frame(width: table2ColumnWidth, alignment: .leading)
                     }
                     // Row 3: Flight time, Landing time, Arrival time
                     GridRow {
                         Text("Flight: \(remainingFlightTimeString)")
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .frame(width: table2ColumnWidth, alignment: .leading)
                         Text("Landing: \(predictedLandingTimeString)")
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .frame(width: table2ColumnWidth, alignment: .leading)
                         Text("Arrival: \(arrivalTimeString)")
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .frame(width: table2ColumnWidth, alignment: .leading)
                     }
                     // Row 4: Adjusted descent rate (per FSD requirement) - spans all 3 columns
                     GridRow {
@@ -106,9 +110,10 @@ struct DataPanelView: View {
                         .gridCellColumns(3)
                     }
                 }
+                .frame(maxWidth: .infinity) // Ensure Grid takes full width
                 .padding(.horizontal)
             }
-            .padding(.top, -10) // Reduced top padding
+            .padding(.top, 5) // Positive padding to prevent cutoff on iPad
             .font(.system(size: 18)) // Apply font size to the VStack
             .frame(maxWidth: .infinity, maxHeight: .infinity) // Fill available space
             .background(Color(.systemGray6))

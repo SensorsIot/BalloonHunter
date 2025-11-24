@@ -5,7 +5,17 @@ All notable changes to BalloonHunter will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.0.0] - 2025-11-21
+## [1.0.0] - Build 2 - 2025-11-24
+
+### Fixed
+- iPad Pro 13" layout improvements:
+  - **Data panel**: Altitude column now fully visible with flexible layout using `minWidth` + `maxWidth: .infinity`
+  - **Control panel**: Removed horizontal scrolling - all buttons visible without scrolling
+  - **Settings view**: Fixed Picker warnings for sonde type selection
+  - **Map height**: Optimized to use 75% of screen height on iPad (vs 70% on iPhone)
+  - **Transport picker**: Wider (120px vs 100px) for better touch targets
+
+## [1.0.0] - Build 1 - 2025-11-21
 
 ### App Store Submission
 - **Status**: Pending Review
