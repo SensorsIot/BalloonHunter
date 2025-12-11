@@ -78,6 +78,10 @@ final class APRSDataService: ObservableObject {
     private var apiCallCount: Int = 0
     var lastApiError: String? = nil
 
+    // User-specified sonde serial override (set via startup popup)
+    // When set, APRS will fetch this specific sonde using /sonde/{serial} endpoint
+    var overrideSondeSerial: String? = nil
+
     // Sonde name mismatch tracking (display only)
     @Published var bleSerialName: String? = nil
     @Published var aprsSerialName: String? = nil
@@ -261,6 +265,14 @@ final class APRSDataService: ObservableObject {
         // Reduced logging frequency for APRS fetches
 
         do {
+            // If user specified an override sonde, fetch it directly using /sonde/{serial}
+            if let override = overrideSondeSerial?.trimmingCharacters(in: .whitespacesAndNewlines).uppercased(),
+               !override.isEmpty {
+                try await fetchSondeBySerial(override)
+                return
+            }
+
+            // Otherwise, use station-based fetch (default behavior)
             let siteResponse = try await fetchSiteData()
 
             // Filter out ground-based test sondes before selecting
@@ -305,6 +317,159 @@ final class APRSDataService: ObservableObject {
             connectionStatus = .failed(error.localizedDescription)
             lastApiError = error.localizedDescription
         }
+    }
+
+    /// Fetch telemetry for a specific sonde by serial
+    /// First tries /sondes/telemetry (3-day limit), then falls back to /sonde/{serial} with streaming (for older sondes)
+    private func fetchSondeBySerial(_ serial: String) async throws {
+        apiCallCount += 1
+
+        // First try /sondes/telemetry?serial=X&duration=3d - fast and limited data
+        let telemetryUrl = URL(string: "\(Self.sondeHubBaseURL)/sondes/telemetry?serial=\(serial)&duration=3d")!
+        var telemetryRequest = URLRequest(url: telemetryUrl)
+        telemetryRequest.timeoutInterval = Self.aprsApiTimeout
+        telemetryRequest.setValue("application/json", forHTTPHeaderField: "Accept")
+        telemetryRequest.setValue("gzip, deflate", forHTTPHeaderField: "Accept-Encoding")
+        telemetryRequest.setValue("BalloonHunter iOS App", forHTTPHeaderField: "User-Agent")
+
+        appLog("APRSDataService: GET \(telemetryUrl.absoluteString) (override sonde - trying 3d first)", category: .service, level: .info)
+
+        let (telemetryData, telemetryResponse) = try await URLSession.shared.data(for: telemetryRequest)
+
+        guard let httpResponse = telemetryResponse as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+            appLog("APRSDataService: Telemetry endpoint failed for \(serial)", category: .service, level: .error)
+            throw APRSError.invalidResponse
+        }
+
+        // Try to decode the telemetry response
+        let decoder = JSONDecoder()
+        if let telemetryResult = try? decoder.decode([String: [String: SondeHubSondeData]].self, from: telemetryData),
+           let sondeData = telemetryResult[serial], !sondeData.isEmpty {
+            // Found in 3-day telemetry!
+            guard let latestPoint = sondeData.values.max(by: { point1, point2 in
+                let date1 = parseISO8601Date(point1.datetime) ?? Date.distantPast
+                let date2 = parseISO8601Date(point2.datetime) ?? Date.distantPast
+                return date1 < date2
+            }) else {
+                throw APRSError.noSondesFound
+            }
+            appLog("APRSDataService: Found \(sondeData.count) points for override sonde \(serial) in 3d telemetry", category: .service, level: .info)
+            try await publishSondeData(latestPoint)
+            return
+        }
+
+        // Not found in 3-day window - try /sonde/{serial} with streaming to get just the first record
+        appLog("APRSDataService: Sonde \(serial) not in 3d window, trying /sonde/{serial} with streaming", category: .service, level: .info)
+        try await fetchSondeBySerialStreaming(serial)
+    }
+
+    /// Fetch sonde data using full download with tail extraction
+    /// The /sonde/{serial} endpoint returns data oldest-first, so we need the LAST record (landing position)
+    /// We download the full response but only parse the last few KB to get the final record
+    private func fetchSondeBySerialStreaming(_ serial: String) async throws {
+        let url = URL(string: "\(Self.sondeHubBaseURL)/sonde/\(serial)")!
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 120  // Longer timeout for large response
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("gzip, deflate", forHTTPHeaderField: "Accept-Encoding")
+        request.setValue("BalloonHunter iOS App", forHTTPHeaderField: "User-Agent")
+
+        appLog("APRSDataService: GET \(url.absoluteString) (downloading for old sonde - need last record)", category: .service, level: .info)
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+            appLog("APRSDataService: HTTP error for sonde fetch", category: .service, level: .error)
+            throw APRSError.invalidResponse
+        }
+
+        appLog("APRSDataService: Downloaded \(data.count) bytes for old sonde \(serial)", category: .service, level: .info)
+
+        guard data.count > 10 else {
+            appLog("APRSDataService: Response too small for sonde \(serial)", category: .service, level: .error)
+            throw APRSError.noSondesFound
+        }
+
+        // Extract the last JSON object from the array
+        // Response format: [{ first }, { ... }, { last }]
+        // We need to find the last complete {...} object
+
+        // Take the last 5KB of data to find the last record
+        let tailSize = min(5000, data.count)
+        let tailData = data.suffix(tailSize)
+
+        // Find the last complete JSON object by searching backwards for "}]" then backwards for "{"
+        guard let tailString = String(data: tailData, encoding: .utf8) else {
+            appLog("APRSDataService: Could not decode tail data for \(serial)", category: .service, level: .error)
+            throw APRSError.noSondesFound
+        }
+
+        // Find the last "}" before the closing "]"
+        guard let lastBraceIndex = tailString.lastIndex(of: "}") else {
+            appLog("APRSDataService: No closing brace found in tail for \(serial)", category: .service, level: .error)
+            throw APRSError.noSondesFound
+        }
+
+        // Now find the matching "{" by counting backwards
+        let stringUpToLastBrace = String(tailString[...lastBraceIndex])
+        var braceCount = 0
+        var objectStartIndex: String.Index?
+
+        for index in stringUpToLastBrace.indices.reversed() {
+            let char = stringUpToLastBrace[index]
+            if char == "}" {
+                braceCount += 1
+            } else if char == "{" {
+                braceCount -= 1
+                if braceCount == 0 {
+                    objectStartIndex = index
+                    break
+                }
+            }
+        }
+
+        guard let startIdx = objectStartIndex else {
+            appLog("APRSDataService: Could not find matching brace for last object in \(serial)", category: .service, level: .error)
+            throw APRSError.noSondesFound
+        }
+
+        // Extract the last JSON object
+        let lastObjectString = String(stringUpToLastBrace[startIdx...])
+        guard let lastObjectData = lastObjectString.data(using: .utf8) else {
+            throw APRSError.noSondesFound
+        }
+
+        let decoder = JSONDecoder()
+        let sondeData = try decoder.decode(SondeHubSondeData.self, from: lastObjectData)
+
+        appLog("APRSDataService: Extracted last record for old sonde \(serial) from \(sondeData.datetime ?? "unknown") at [\(sondeData.lat), \(sondeData.lon)]", category: .service, level: .info)
+        try await publishSondeData(sondeData)
+    }
+
+    /// Publish sonde data to the three-channel streams
+    private func publishSondeData(_ latestPoint: SondeHubSondeData) async throws {
+        appLog("APRSDataService: Publishing data for override sonde \(latestPoint.serial)", category: .service, level: .info)
+
+        // Convert to three-channel data
+        let (positionData, radioChannelData) = try convertToThreeChannelData(latestPoint)
+
+        // Update state
+        latestPosition = positionData
+        latestRadioChannel = radioChannelData
+        lastTelemetryUpdateTime = Date()
+        lastSondeSerial = latestPoint.serial
+        connectionStatus = .connected
+        lastApiError = nil
+
+        // Publish through three-channel streams
+        self.positionDataStream.send(positionData)
+        self.radioChannelDataStream.send(radioChannelData)
+
+        appLog("APRSDataService: Published telemetry for override sonde \(latestPoint.serial) at \(String(format: "%.5f, %.5f", latestPoint.lat, latestPoint.lon))", category: .service, level: .info)
+
+        // Adjust polling frequency
+        let aprsDataAge = Date().timeIntervalSince(positionData.timestamp)
+        adjustPollingCadenceForAPIEfficiency(aprsDataAge: aprsDataAge)
     }
 
     private func fetchSiteData() async throws -> SondeHubSiteResponse {

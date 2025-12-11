@@ -25,6 +25,14 @@ final class ServiceCoordinator: ObservableObject {
     @Published var showLogo: Bool = true
     @Published var showTrackingMap: Bool = false
 
+    // Sonde selection popup state
+    @Published var showSondeSelectionPopup: Bool = false
+    @Published var detectedSondeName: String = ""
+    @Published var selectedSondeName: String = ""
+    @Published var sondeSelectionCountdown: Int = 5
+    private var sondeSelectionContinuation: CheckedContinuation<Void, Never>?
+    private var sondeSelectionTimer: Timer?
+    private var userStartedEditing: Bool = false
 
     // Core services
     let currentLocationService: CurrentLocationService
@@ -309,5 +317,103 @@ final class ServiceCoordinator: ObservableObject {
 
         appLog("ServiceCoordinator: Opening Apple Maps with landing point [\(String(format: "%.4f", landingPoint.latitude)), \(String(format: "%.4f", landingPoint.longitude))] from state \(balloonPositionService.currentState)", category: .general, level: .info)
         navigationService.openInAppleMaps(landingPoint: landingPoint)
+    }
+
+    // MARK: - Sonde Selection Popup
+
+    /// Wait for user to confirm sonde selection during startup
+    func waitForSondeSelection() async {
+        // Start the countdown timer
+        startSondeSelectionCountdown()
+
+        await withCheckedContinuation { continuation in
+            sondeSelectionContinuation = continuation
+        }
+    }
+
+    /// Start the 5-second countdown timer for auto-confirm
+    private func startSondeSelectionCountdown() {
+        sondeSelectionCountdown = 5
+        userStartedEditing = false
+
+        sondeSelectionTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self = self else { return }
+
+                // Don't count down if user started editing
+                guard !self.userStartedEditing else {
+                    self.sondeSelectionTimer?.invalidate()
+                    self.sondeSelectionTimer = nil
+                    return
+                }
+
+                self.sondeSelectionCountdown -= 1
+
+                if self.sondeSelectionCountdown <= 0 {
+                    // Auto-confirm with detected sonde
+                    appLog("ServiceCoordinator: Auto-confirming sonde selection after timeout", category: .general, level: .info)
+                    self.confirmSondeSelection()
+                }
+            }
+        }
+    }
+
+    /// Called when user starts editing the sonde name field
+    func userDidStartEditingSondeName() {
+        userStartedEditing = true
+        sondeSelectionTimer?.invalidate()
+        sondeSelectionTimer = nil
+        appLog("ServiceCoordinator: User started editing - countdown cancelled", category: .general, level: .debug)
+    }
+
+    /// User confirmed sonde selection (tapped "Use" or auto-confirmed)
+    func confirmSondeSelection() {
+        // Stop timer if running
+        sondeSelectionTimer?.invalidate()
+        sondeSelectionTimer = nil
+
+        let trimmedName = selectedSondeName.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+
+        appLog("ServiceCoordinator: confirmSondeSelection - selected='\(trimmedName)', detected='\(detectedSondeName)'", category: .general, level: .info)
+
+        if !trimmedName.isEmpty && trimmedName != detectedSondeName {
+            // User entered a different sonde name - clear all old data and set override
+            appLog("ServiceCoordinator: User selected different sonde: '\(trimmedName)' (was: '\(detectedSondeName)') - clearing old data", category: .general, level: .info)
+
+            // Clear all persisted and in-memory data for the old sonde
+            clearAllSondeData()
+
+            // Set override in APRS service for the new sonde
+            balloonPositionService.aprsService.overrideSondeSerial = trimmedName
+
+            // Update the current balloon name to the new sonde
+            balloonPositionService.currentBalloonName = trimmedName
+            balloonTrackService.injectPersistedData(sondeName: trimmedName, track: [])
+
+            // Trigger immediate fetch for the new sonde
+            Task {
+                await balloonPositionService.aprsService.forceImmediateFetch()
+            }
+
+            appLog("ServiceCoordinator: Sonde override set to '\(trimmedName)' - triggering immediate fetch", category: .general, level: .info)
+        } else if !trimmedName.isEmpty {
+            appLog("ServiceCoordinator: User confirmed auto-detected sonde: '\(trimmedName)'", category: .general, level: .info)
+        }
+
+        showSondeSelectionPopup = false
+        sondeSelectionContinuation?.resume()
+        sondeSelectionContinuation = nil
+    }
+
+    /// User skipped sonde selection (tapped "Skip")
+    func skipSondeSelection() {
+        // Stop timer if running
+        sondeSelectionTimer?.invalidate()
+        sondeSelectionTimer = nil
+
+        appLog("ServiceCoordinator: User skipped sonde selection", category: .general, level: .info)
+        showSondeSelectionPopup = false
+        sondeSelectionContinuation?.resume()
+        sondeSelectionContinuation = nil
     }
 }

@@ -157,6 +157,18 @@ struct BalloonHunterApp: App {
                     .onAppear {
                         animateLoading = true
                     }
+                    .sheet(isPresented: $serviceCoordinator.showSondeSelectionPopup) {
+                        SondeSelectionSheet(
+                            detectedSondeName: serviceCoordinator.detectedSondeName,
+                            selectedSondeName: $serviceCoordinator.selectedSondeName,
+                            countdown: serviceCoordinator.sondeSelectionCountdown,
+                            onConfirm: { serviceCoordinator.confirmSondeSelection() },
+                            onSkip: { serviceCoordinator.skipSondeSelection() },
+                            onStartEditing: { serviceCoordinator.userDidStartEditingSondeName() }
+                        )
+                        .presentationDetents([.medium])
+                        .interactiveDismissDisabled()
+                    }
                 }
             }
             .onAppear {
@@ -258,6 +270,101 @@ struct BalloonHunterApp: App {
         center.delegate = notificationDelegate
     }
 
+}
+
+// MARK: - Sonde Selection Sheet
+
+struct SondeSelectionSheet: View {
+    let detectedSondeName: String
+    @Binding var selectedSondeName: String
+    let countdown: Int
+    let onConfirm: () -> Void
+    let onSkip: () -> Void
+    let onStartEditing: () -> Void
+
+    @FocusState private var isTextFieldFocused: Bool
+
+    var body: some View {
+        NavigationView {
+            VStack(spacing: 20) {
+                // Header
+                VStack(spacing: 8) {
+                    Image(systemName: "antenna.radiowaves.left.and.right")
+                        .font(.system(size: 50))
+                        .foregroundColor(.blue)
+
+                    Text("Select Sonde")
+                        .font(.title2)
+                        .fontWeight(.bold)
+
+                    if !detectedSondeName.isEmpty {
+                        Text("Auto-detected from Payerne station")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                    } else {
+                        Text("No sonde detected from Payerne")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                .padding(.top, 20)
+
+                // Text field
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Sonde Serial")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+
+                    TextField("Enter sonde serial (e.g., V3240531)", text: $selectedSondeName)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(.body, design: .monospaced))
+                        .autocapitalization(.allCharacters)
+                        .disableAutocorrection(true)
+                        .focused($isTextFieldFocused)
+                        .onChange(of: isTextFieldFocused) { _, isFocused in
+                            if isFocused {
+                                onStartEditing()
+                            }
+                        }
+                }
+                .padding(.horizontal, 30)
+
+                // Countdown (only shown when not editing)
+                if countdown > 0 {
+                    Text("Auto-continuing in \(countdown)s...")
+                        .font(.subheadline)
+                        .foregroundColor(.orange)
+                } else {
+                    Text("Enter sonde name or tap Use")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                }
+
+                Spacer()
+
+                // Buttons
+                VStack(spacing: 12) {
+                    Button(action: onConfirm) {
+                        Text("Use")
+                            .font(.headline)
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background(Color.blue)
+                            .foregroundColor(.white)
+                            .cornerRadius(12)
+                    }
+
+                    Button(action: onSkip) {
+                        Text("Skip")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                .padding(.horizontal, 30)
+                .padding(.bottom, 30)
+            }
+        }
+    }
 }
 
 // MARK: - Notification Delegate
