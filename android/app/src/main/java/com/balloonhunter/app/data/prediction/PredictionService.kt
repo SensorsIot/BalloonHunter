@@ -73,7 +73,7 @@ class PredictionService(private val scope: CoroutineScope) {
 
         val usedSmoothed = phase == BalloonPhase.DESCENDING_BELOW_10K &&
             adjustedDescentRate != null && adjustedDescentRate != 0.0
-        val descentRate = if (usedSmoothed) {
+        val descentRate = if (usedSmoothed && adjustedDescentRate != null) {
             kotlin.math.abs(adjustedDescentRate)
         } else {
             settings.descentRate

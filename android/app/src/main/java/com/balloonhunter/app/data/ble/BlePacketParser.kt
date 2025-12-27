@@ -172,7 +172,6 @@ class BlePacketParser {
             lcdType = parts[18].toIntOrNull() ?: 0,
             nameType = parts[19].toIntOrNull() ?: 0,
             buzPin = parts[20].toIntOrNull() ?: 0,
-            softwareVersion = parts[21],
             bluetoothStatus = 0,
             lcdStatus = 0,
             serialSpeed = 0,

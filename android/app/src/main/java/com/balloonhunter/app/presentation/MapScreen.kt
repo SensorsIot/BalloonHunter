@@ -38,7 +38,8 @@ import com.google.android.gms.maps.CameraUpdateFactory
 import com.google.android.gms.maps.model.CameraPosition
 import com.google.android.gms.maps.model.LatLng
 import com.google.android.gms.maps.model.LatLngBounds
-import com.google.maps.android.compose.GoogleMap
+import com.google.android.gms.maps.GoogleMap
+import com.google.maps.android.compose.GoogleMap as GoogleMapCompose
 import com.google.maps.android.compose.MapProperties
 import com.google.maps.android.compose.MapUiSettings
 import com.google.maps.android.compose.Marker
@@ -95,11 +96,11 @@ fun MapScreen(viewModel: MapViewModel = hiltViewModel()) {
         )
 
         Box(modifier = Modifier.weight(0.7f).fillMaxWidth()) {
-            GoogleMap(
+            GoogleMapCompose(
                 modifier = Modifier.fillMaxSize(),
                 cameraPositionState = cameraPositionState,
                 properties = MapProperties(
-                    mapType = if (satelliteMode) com.google.android.gms.maps.model.MapType.HYBRID else com.google.android.gms.maps.model.MapType.NORMAL,
+                    mapType = if (satelliteMode) GoogleMap.MAP_TYPE_HYBRID else GoogleMap.MAP_TYPE_NORMAL,
                     isMyLocationEnabled = false
                 ),
                 uiSettings = MapUiSettings(
