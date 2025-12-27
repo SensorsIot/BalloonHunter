@@ -13,7 +13,7 @@ data class TrackPointEntity(
     val verticalSpeed: Double,
     val horizontalSpeed: Double
 ) {
-    val instant: Instant = Instant.ofEpochSecond(epochSeconds)
+    fun toInstant(): Instant = Instant.ofEpochSecond(epochSeconds)
 }
 
 @Entity(tableName = "landing_points")
