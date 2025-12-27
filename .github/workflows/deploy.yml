@@ -31,7 +31,9 @@ jobs:
         run: chmod +x ./gradlew
 
       - name: Build Debug APK
-        run: ./gradlew assembleDebug
+        env:
+          MAPS_API_KEY: ${{ secrets.MAPS_API_KEY }}
+        run: ./gradlew assembleDebug -PMAPS_API_KEY="$MAPS_API_KEY"
 
       - name: Upload APK for Pixel
         uses: actions/upload-artifact@v4
@@ -61,7 +63,9 @@ jobs:
         run: chmod +x ./gradlew
 
       - name: Build Release Bundle (AAB)
-        run: ./gradlew bundleRelease
+        env:
+          MAPS_API_KEY: ${{ secrets.MAPS_API_KEY }}
+        run: ./gradlew bundleRelease -PMAPS_API_KEY="$MAPS_API_KEY"
 
       - name: Sign App Bundle
         uses: r0adkll/sign-android-release@v1
