@@ -148,6 +148,7 @@ class BalloonCoordinator(
 
         scope.launch {
             locationService.location.collectLatest { location ->
+                if (location == null) return@collectLatest
                 val landing = currentLanding.value ?: return@collectLatest
                 val lastOrigin = lastRouteOrigin
                 val now = Instant.now()

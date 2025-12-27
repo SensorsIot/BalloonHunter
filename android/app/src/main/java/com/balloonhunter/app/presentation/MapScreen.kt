@@ -25,6 +25,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -41,13 +42,13 @@ import com.google.maps.android.compose.GoogleMap
 import com.google.maps.android.compose.MapProperties
 import com.google.maps.android.compose.MapUiSettings
 import com.google.maps.android.compose.Marker
+import com.google.maps.android.compose.MarkerState
 import com.google.maps.android.compose.Polyline
 import com.google.maps.android.compose.rememberCameraPositionState
-import com.google.android.gms.maps.model.MapType
 
 @Composable
 fun MapScreen(viewModel: MapViewModel = hiltViewModel()) {
-    val position by viewModel.position.collectAsState()
+    val balloonPosition by viewModel.position.collectAsState()
     val track by viewModel.track.collectAsState()
     val prediction by viewModel.prediction.collectAsState()
     val landing by viewModel.currentLanding.collectAsState()
@@ -59,8 +60,8 @@ fun MapScreen(viewModel: MapViewModel = hiltViewModel()) {
 
     val context = LocalContext.current
     val cameraPositionState = rememberCameraPositionState {
-        position?.let {
-            position = CameraPosition.fromLatLngZoom(it.point.toLatLng(), 8f)
+        position = balloonPosition?.let {
+            CameraPosition.fromLatLngZoom(it.point.toLatLng(), 8f)
         } ?: CameraPosition.fromLatLngZoom(LatLng(0.0, 0.0), 2f)
     }
 
@@ -98,14 +99,13 @@ fun MapScreen(viewModel: MapViewModel = hiltViewModel()) {
                 modifier = Modifier.fillMaxSize(),
                 cameraPositionState = cameraPositionState,
                 properties = MapProperties(
-                    mapType = if (satelliteMode) MapType.HYBRID else MapType.NORMAL,
+                    mapType = if (satelliteMode) com.google.android.gms.maps.model.MapType.HYBRID else com.google.android.gms.maps.model.MapType.NORMAL,
                     isMyLocationEnabled = false
                 ),
                 uiSettings = MapUiSettings(
                     zoomControlsEnabled = false,
                     myLocationButtonEnabled = false,
                     scrollGesturesEnabled = !headingMode,
-                    rotateGesturesEnabled = !headingMode,
                     tiltGesturesEnabled = !headingMode
                 )
             ) {
@@ -126,13 +126,16 @@ fun MapScreen(viewModel: MapViewModel = hiltViewModel()) {
                 }
 
                 landing?.let {
-                    Marker(position = it.point.toLatLng(), title = "Landing")
+                    Marker(
+                        state = remember(it) { MarkerState(position = it.point.toLatLng()) },
+                        title = "Landing"
+                    )
                 }
 
-                val pos = position
+                val pos = balloonPosition
                 if (pos != null) {
                     Marker(
-                        position = pos.point.toLatLng(),
+                        state = remember(pos) { MarkerState(position = pos.point.toLatLng()) },
                         title = pos.sondeName.ifBlank { "Balloon" }
                     )
                 }
