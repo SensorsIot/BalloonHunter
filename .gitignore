@@ -129,7 +129,7 @@ ehthumbs.db
 Desktop.ini
 
 # CI/Testing Infrastructure
-.github/
+# .github/ is now used for workflows - don't ignore
 scripts/ci*
 
 # Secrets and credentials (both platforms)
