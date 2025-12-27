@@ -15,6 +15,10 @@ codex.md
 !BalloonHunter/BalloonHunterAppFSD.md
 !README.md
 
+# =============================================================================
+# iOS / macOS
+# =============================================================================
+
 # Xcode
 *.xcuserdata
 *.xcuserdatad
@@ -52,24 +56,84 @@ BalloonHunter/Screenshots/
 # macOS
 .DS_Store
 
-# Development artifacts
+# iOS Development artifacts
 *.xcuserstate
-xcuserdata/
+
+# =============================================================================
+# Android
+# =============================================================================
+
+# Gradle
+.gradle/
+**/build/
+!src/**/build/
+
+# Local configuration
+local.properties
+
+# Android Studio
+*.iml
+.idea/
+.idea/workspace.xml
+.idea/tasks.xml
+.idea/gradle.xml
+.idea/assetWizardSettings.xml
+.idea/dictionaries
+.idea/libraries
+.idea/caches
+.idea/modules.xml
+.idea/misc.xml
+.idea/vcs.xml
+.idea/navEditor.xml
+.idea/deploymentTargetDropDown.xml
+*.hprof
+
+# Keystore (never commit signing keys)
+*.jks
+*.keystore
+signing.properties
+
+# APK/AAB output
+*.apk
+*.aab
+
+# Native crash logs
+crash-reports/
+
+# Proguard
+proguard/
+
+# Google Services (contains API keys)
+google-services.json
+
+# Kotlin
+*.kotlin_module
+
+# =============================================================================
+# Shared / General
+# =============================================================================
+
+# Logs
 *.log
-*.txt
-default.csv
 Log*.txt
 
-# CI/Testing Infrastructure (removed - using Xcode directly)
+# IDE
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS generated
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# CI/Testing Infrastructure
 .github/
 scripts/ci*
-*.yml
-*.yaml
 
-# Test Directories and Schemes (removed - using Xcode directly)
-*Tests/
-*Tests.xctest
-*test*
-*Test*
-xctestplans/
-*Tests.xcscheme
+# Secrets and credentials (both platforms)
+*.env
+.env.*
+secrets.xml
+credentials.json

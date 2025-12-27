@@ -1,0 +1,146 @@
+# 🎈 BalloonHunter
+
+A sophisticated iOS application for tracking and recovering weather balloons in real-time. BalloonHunter connects to MySondyGo devices via Bluetooth Low Energy to receive telemetry data, integrates with SondeHub APRS network for fallback tracking, and uses Tawhiri prediction API to provide intelligent trajectory forecasting, routing, and mapping for successful balloon recovery operations.
+
+![iOS](https://img.shields.io/badge/iOS-17.6+-blue.svg)
+![Swift](https://img.shields.io/badge/Swift-5.9+-orange.svg)
+![License](https://img.shields.io/badge/license-MIT-green.svg)
+![App Store](https://img.shields.io/badge/App%20Store-Pending%20Review-yellow.svg)
+
+## 📱 Availability
+
+**App Store Status**: Pending Review (Submitted November 21, 2025)
+
+BalloonHunter has been submitted to the Apple App Store and is currently under review. Once approved, it will be available for free download on all iPhones running iOS 17.6+.
+
+<!-- Uncomment when approved and add App Store ID:
+[![Download on App Store](https://img.shields.io/badge/Download-App%20Store-blue.svg)](https://apps.apple.com/app/idXXXXXXXXXX)
+-->
+
+**Submission Details**:
+- Version: 1.0
+- Bundle ID: HB9BLA.BalloonHunter
+- Platform: iPhone only
+- Submission ID: 20b1826d-41da-4e95-8fc6-db265b9d7a6c
+
+## ✨ Key Features
+
+### 🔗 Dual Connectivity
+- **MySondyGo BLE**: Direct connection to RadioSondyGo devices for real-time telemetry
+- **SondeHub APRS**: Automatic fallback to global amateur radio network when BLE unavailable
+- **Smart Polling**: Intelligent API cadence based on data freshness (15s → 5min → 1hr)
+
+### 🎯 Professional Prediction
+- **Tawhiri API**: Leverages CUSF's professional trajectory prediction engine via SondeHub
+- **Real-Time Updates**: Automatic prediction refresh every 60 seconds during flight
+- **Landing Zones**: Accurate burst and landing point calculations with uncertainty mapping
+- **Adaptive Parameters**: Uses live descent rates when available, fallback to user settings
+
+### 🗺️ Hunter-Focused Interface
+- **Map-Centric Design**: 70% map view optimized for field tracking operations
+- **Live Overlays**: Balloon track, prediction path, landing zones, and hunter position
+- **Smart Route Recalculation**: Intelligent navigation that only recalculates when needed:
+  - Off-route detection (≥50m deviation)
+  - Landing point movement (≥100m shift)
+  - Transport mode changes (car/bike)
+  - Minimizes API calls (3-8 per chase vs 360+/hour with time-based updates)
+- **Apple Maps Navigation**: One-tap routing with car/bike transport modes
+- **Landing Change Alerts**: Notifications when prediction shifts >300m during CarPlay navigation
+- **Heading Mode**: Compass-locked view for directional navigation to landing site
+
+## 🏗️ Architecture
+
+Modern SwiftUI app with service-coordinator pattern and 7-state telemetry state machine for robust tracking operations.
+
+**Key Services**: BLE Communication • SondeHub APRS • Tawhiri Predictions • Location Tracking • Data Persistence
+
+## 🚀 Quick Start
+
+### Requirements
+- iOS 17.6+ device with Bluetooth and Location permissions
+- Xcode 15.0+ for development
+- Internet connection for SondeHub APRS and Tawhiri predictions
+- MySondyGo device (optional - works with APRS-only)
+
+### Installation
+
+**From App Store** (Recommended - when available):
+- Search for "BalloonHunter" in the App Store
+- Or visit the App Store link above once approved
+
+**From Source** (For Development):
+```bash
+git clone https://github.com/SensorsIot/BalloonHunter.git
+cd BalloonHunter
+open BalloonHunter.xcodeproj
+```
+
+**Requirements for building from source**:
+- Xcode 16.1+ (official release, not beta)
+- macOS with iOS 17.6+ SDK
+- Apple Developer account (for device deployment)
+
+### Setup
+1. **Configure Station ID**: Enter your SondeHub station ID in Settings
+2. **Grant Permissions**: Allow Bluetooth and Location access
+3. **Pair MySondyGo**: Optional BLE device pairing for direct telemetry
+4. **Ready to Track**: App automatically finds active sondes via APRS
+
+## 📱 Usage
+
+**Automatic Operation**: App initializes services, connects to MySondyGo (if available), and displays live tracking map with prediction overlays.
+
+**Key Controls**: Settings gear • Transport mode picker • Heading lock • Apple Maps navigation
+
+**Data Panel**: Real-time telemetry, flight metrics, and prediction timers in compact lower panel.
+
+## 🛠️ Development
+
+### Build Commands
+```bash
+# Build and test
+xcodebuild -project BalloonHunter.xcodeproj -scheme BalloonHunter \
+  -destination 'platform=iOS Simulator,name=iPhone 15' build
+
+# Swift syntax validation
+swift -syntax-test BalloonHunter/*.swift
+```
+
+### Architecture
+- **Services**: Domain logic (BLE, APRS, Prediction, Location, Persistence)
+- **ServiceCoordinator**: Cross-service orchestration and state management
+- **Views**: SwiftUI presentation layer with environment objects
+
+## 📡 API Integration
+
+**SondeHub APRS**: `https://api.v2.sondehub.org/sondes/site/{station_id}`
+**Tawhiri Predictions**: `https://predict.sondehub.org/`
+
+Intelligent polling with coordinate/time-based caching for optimal performance.
+
+## 📄 Documentation
+
+- **[Privacy Policy](Privacy-Policy.md)**: Complete privacy and data usage policy
+- **[App Store Metadata](AppStoreMetadata_Clean.md)**: Official App Store listing information
+- **[Submission Summary](SUBMISSION_COMPLETE.md)**: App Store submission details and timeline
+
+## 🙏 Acknowledgments
+
+- **SondeHub Community**: Global APRS network and prediction services
+- **MySondyGo Project**: Open-source BLE telemetry hardware
+- **CUSF**: Professional Tawhiri trajectory prediction engine
+- **Amateur Radio Community**: Worldwide balloon tracking infrastructure
+
+## 📞 Contact & Support
+
+- **Issues**: [GitHub Issues](https://github.com/SensorsIot/BalloonHunter/issues)
+- **Developer**: Andreas Spiess (HB9BLA)
+- **Email**: [Contact via GitHub]
+
+## 📜 License
+
+MIT License - See LICENSE file for details
+
+---
+
+**Built with ❤️ for the weather balloon tracking community by HB9BLA**
