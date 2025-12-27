@@ -203,15 +203,15 @@ class AprsService(private val scope: CoroutineScope) {
     }
 
     suspend fun fetchGapFill(serial: String): List<BalloonTrackPoint> = withContextIO {
-        val url = URL(\"https://api.v2.sondehub.org/sondes/telemetry?serial=$serial&duration=3d\")
+        val url = URL("https://api.v2.sondehub.org/sondes/telemetry?serial=$serial&duration=3d")
         val array = fetchJsonArray(url, 30000) ?: return@withContextIO emptyList()
         val dedupe = mutableMapOf<Long, BalloonTrackPoint>()
         for (i in 0 until array.length()) {
             val obj = array.optJSONObject(i) ?: continue
-            val timestamp = parseInstant(obj.optString(\"datetime\")) ?: continue
-            val lat = obj.optDouble(\"lat\", Double.NaN)
-            val lon = obj.optDouble(\"lon\", Double.NaN)
-            val alt = obj.optDouble(\"alt\", Double.NaN)
+            val timestamp = parseInstant(obj.optString("datetime")) ?: continue
+            val lat = obj.optDouble("lat", Double.NaN)
+            val lon = obj.optDouble("lon", Double.NaN)
+            val alt = obj.optDouble("alt", Double.NaN)
             if (!lat.isFinite() || !lon.isFinite() || !alt.isFinite()) continue
             val key = timestamp.epochSecond
             if (dedupe.containsKey(key)) continue
@@ -220,8 +220,8 @@ class AprsService(private val scope: CoroutineScope) {
                 longitude = lon,
                 altitude = alt,
                 timestamp = timestamp,
-                verticalSpeed = obj.optDouble(\"vel_v\", 0.0),
-                horizontalSpeed = obj.optDouble(\"vel_h\", 0.0)
+                verticalSpeed = obj.optDouble("vel_v", 0.0),
+                horizontalSpeed = obj.optDouble("vel_h", 0.0)
             )
         }
         return@withContextIO dedupe.toSortedMap().values.toList()
