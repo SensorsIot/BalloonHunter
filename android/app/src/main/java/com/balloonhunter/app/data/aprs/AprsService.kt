@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
@@ -202,9 +203,9 @@ class AprsService(private val scope: CoroutineScope) {
         }
     }
 
-    suspend fun fetchGapFill(serial: String): List<BalloonTrackPoint> = withContextIO {
+    suspend fun fetchGapFill(serial: String): List<BalloonTrackPoint> = withContext(Dispatchers.IO) {
         val url = URL("https://api.v2.sondehub.org/sondes/telemetry?serial=$serial&duration=3d")
-        val array = fetchJsonArray(url, 30000) ?: return@withContextIO emptyList()
+        val array = fetchJsonArray(url, 30000) ?: return@withContext emptyList()
         val dedupe = mutableMapOf<Long, BalloonTrackPoint>()
         for (i in 0 until array.length()) {
             val obj = array.optJSONObject(i) ?: continue
@@ -224,7 +225,7 @@ class AprsService(private val scope: CoroutineScope) {
                 horizontalSpeed = obj.optDouble("vel_h", 0.0)
             )
         }
-        return@withContextIO dedupe.toSortedMap().values.toList()
+        return@withContext dedupe.toSortedMap().values.toList()
     }
 
     private suspend fun <T> withContextIO(block: suspend () -> T): T {

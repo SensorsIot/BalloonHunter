@@ -36,8 +36,7 @@ class BalloonCoordinator(
     private val locationService: LocationService,
     private val routingService: RoutingService,
     private val notificationSink: TrackNotificationSink? = null,
-    private val telemetryLogger: TelemetryLogger? = null,
-    private val notificationHelper: NotificationHelper? = null
+    private val telemetryLogger: TelemetryLogger? = null
 ) : LandingPointListener {
     private val positionService = BalloonPositionService()
     private val trackService = BalloonTrackService(trackRepository, notificationSink)
@@ -285,6 +284,6 @@ class BalloonCoordinator(
             lastRouteOrigin = location.point
             lastRouteUpdate = Instant.now()
         }
-        notificationHelper?.notifyNavigationUpdate(point, settingsStore.settings.value.transportMode)
+        (notificationSink as? NotificationHelper)?.notifyNavigationUpdate(point, settingsStore.settings.value.transportMode)
     }
 }

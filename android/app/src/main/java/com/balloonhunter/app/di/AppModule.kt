@@ -101,8 +101,7 @@ object AppModule {
             locationService = locationService,
             routingService = routingService,
             notificationSink = notificationHelper,
-            telemetryLogger = telemetryLogger,
-            notificationHelper = notificationHelper
+            telemetryLogger = telemetryLogger
         )
     }
 }

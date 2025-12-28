@@ -90,6 +90,8 @@ dependencies {
     implementation("com.google.android.gms:play-services-maps:18.2.0")
     implementation("com.google.maps.android:maps-compose:2.14.0")
 
+    implementation("com.google.accompanist:accompanist-permissions:0.34.0")
+
     implementation("androidx.lifecycle:lifecycle-service:2.8.6")
     implementation("androidx.work:work-runtime-ktx:2.9.1")
 
