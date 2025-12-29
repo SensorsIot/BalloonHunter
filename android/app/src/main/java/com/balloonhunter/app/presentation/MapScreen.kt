@@ -27,6 +27,8 @@ import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.Layers
+import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.PedalBike
 import androidx.compose.material.icons.filled.Settings
@@ -210,6 +212,7 @@ fun MapScreen(viewModel: MapViewModel = hiltViewModel()) {
             transportMode = transportMode,
             headingMode = headingMode,
             isMuted = isMuted,
+            satelliteMode = satelliteMode,
             mapProvider = userSettings.mapProvider,
             onHeadingToggle = { viewModel.toggleHeading() },
             onShowAll = { viewModel.toggleShowAll() },
@@ -218,6 +221,7 @@ fun MapScreen(viewModel: MapViewModel = hiltViewModel()) {
                 isMuted = !isMuted
                 viewModel.setMute(isMuted)
             },
+            onSatelliteToggle = { viewModel.toggleSatellite() },
             onNavigate = {
                 landing?.let { landingPoint ->
                     val lat = landingPoint.latitude
@@ -386,11 +390,13 @@ private fun TopControls(
     transportMode: TransportationMode,
     headingMode: Boolean,
     isMuted: Boolean,
+    satelliteMode: Boolean,
     mapProvider: MapProvider,
     onHeadingToggle: () -> Unit,
     onShowAll: () -> Unit,
     onTransportMode: (TransportationMode) -> Unit,
     onMuteToggle: () -> Unit,
+    onSatelliteToggle: () -> Unit,
     onNavigate: () -> Unit,
     navigationEnabled: Boolean,
     onSettings: () -> Unit
@@ -414,6 +420,15 @@ private fun TopControls(
                 if (isMuted) Icons.Default.VolumeOff else Icons.Default.VolumeUp,
                 contentDescription = if (isMuted) "Unmute" else "Mute",
                 tint = if (isMuted) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
+            )
+        }
+
+        // Map type toggle - standard/satellite
+        IconButton(onClick = onSatelliteToggle) {
+            Icon(
+                if (satelliteMode) Icons.Default.Map else Icons.Default.Layers,
+                contentDescription = if (satelliteMode) "Standard map" else "Satellite map",
+                tint = if (satelliteMode) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
             )
         }
 
