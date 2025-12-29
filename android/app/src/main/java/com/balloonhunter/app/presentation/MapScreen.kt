@@ -59,6 +59,10 @@ import com.balloonhunter.app.domain.models.RadioChannelData
 import com.balloonhunter.app.domain.models.TransportationMode
 import com.balloonhunter.app.domain.models.UserSettings
 import com.balloonhunter.app.domain.models.NavigationProvider
+import com.balloonhunter.app.domain.models.MapProvider
+import com.balloonhunter.app.presentation.map.GoogleMapContent
+import com.balloonhunter.app.presentation.map.OsmMapContent
+import com.balloonhunter.app.presentation.map.toLatLng
 import com.balloonhunter.app.presentation.state.MapViewModel
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.rememberMultiplePermissionsState
@@ -279,91 +283,43 @@ fun MapScreen(viewModel: MapViewModel = hiltViewModel()) {
             )
         }
 
+        val landingHistoryPoints by viewModel.landingHistory.collectAsState()
+
         Box(modifier = Modifier.weight(0.7f).fillMaxWidth()) {
-            GoogleMap(
-                modifier = Modifier.fillMaxSize(),
-                cameraPositionState = cameraPositionState,
-                properties = MapProperties(
-                    mapType = if (satelliteMode) MapType.HYBRID else MapType.NORMAL,
-                    isMyLocationEnabled = permissionsState.allPermissionsGranted
-                ),
-                uiSettings = MapUiSettings(
-                    zoomControlsEnabled = false,
-                    myLocationButtonEnabled = false,
-                    scrollGesturesEnabled = !headingMode,
-                    tiltGesturesEnabled = !headingMode
-                )
-            ) {
-                if (track.isNotEmpty()) {
-                    Polyline(
-                        points = track.map { it.point.toLatLng() },
-                        color = Color.Red,
-                        width = 6f
+            when (userSettings.mapProvider) {
+                MapProvider.GOOGLE_MAPS -> {
+                    GoogleMapContent(
+                        modifier = Modifier.fillMaxSize(),
+                        cameraPositionState = cameraPositionState,
+                        satelliteMode = satelliteMode,
+                        headingMode = headingMode,
+                        locationEnabled = permissionsState.allPermissionsGranted,
+                        track = track,
+                        prediction = prediction,
+                        balloonPhase = balloonPhase,
+                        balloonPosition = balloonPosition,
+                        landing = landing,
+                        landingHistory = landingHistoryPoints,
+                        route = route,
+                        routeVisible = routeVisible
                     )
                 }
-
-                prediction?.path?.let { path ->
-                    Polyline(points = path.map { it.toLatLng() }, color = Color(0xFF00AAFF), width = 8f)
-                }
-
-                // Burst marker - only visible while ascending
-                if (balloonPhase == BalloonPhase.ASCENDING) {
-                    prediction?.burstPoint?.let { burstPoint ->
-                        Marker(
-                            state = remember(burstPoint) { MarkerState(position = burstPoint.toLatLng()) },
-                            title = "Burst Point",
-                            icon = BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_ORANGE)
-                        )
-                    }
-                }
-
-                // Route polyline - hidden if user within 100m of balloon
-                if (routeVisible) {
-                    route?.let { routeData ->
-                        Polyline(points = routeData.coordinates.map { it.toLatLng() }, color = Color.Green, width = 5f)
-                    }
-                }
-
-                // Landing history overlay - purple polyline + dots
-                val landingHistoryPoints by viewModel.landingHistory.collectAsState()
-                if (landingHistoryPoints.size >= 2) {
-                    Polyline(
-                        points = landingHistoryPoints.map { it.point.toLatLng() },
-                        color = Color(0xFF9C27B0), // Purple
-                        width = 3f
-                    )
-                }
-                landingHistoryPoints.forEach { historyPoint ->
-                    Circle(
-                        center = historyPoint.point.toLatLng(),
-                        radius = 20.0,
-                        fillColor = Color(0xFF9C27B0).copy(alpha = 0.7f),
-                        strokeColor = Color(0xFF9C27B0),
-                        strokeWidth = 2f
-                    )
-                }
-
-                landing?.let {
-                    Marker(
-                        state = remember(it) { MarkerState(position = it.point.toLatLng()) },
-                        title = "Landing",
-                        icon = BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_VIOLET)
-                    )
-                }
-
-                val pos = balloonPosition
-                if (pos != null) {
-                    val balloonHue = when (balloonPhase) {
-                        BalloonPhase.ASCENDING -> BitmapDescriptorFactory.HUE_GREEN
-                        BalloonPhase.DESCENDING_ABOVE_10K -> BitmapDescriptorFactory.HUE_ORANGE
-                        BalloonPhase.DESCENDING_BELOW_10K -> BitmapDescriptorFactory.HUE_RED
-                        BalloonPhase.LANDED -> BitmapDescriptorFactory.HUE_VIOLET
-                        BalloonPhase.UNKNOWN -> BitmapDescriptorFactory.HUE_AZURE
-                    }
-                    Marker(
-                        state = remember(pos) { MarkerState(position = pos.point.toLatLng()) },
-                        title = pos.sondeName.ifBlank { "Balloon" },
-                        icon = BitmapDescriptorFactory.defaultMarker(balloonHue)
+                MapProvider.OSM -> {
+                    OsmMapContent(
+                        modifier = Modifier.fillMaxSize(),
+                        centerLat = balloonPosition?.latitude ?: 47.0,
+                        centerLon = balloonPosition?.longitude ?: 8.0,
+                        zoom = 10.0,
+                        satelliteMode = satelliteMode,
+                        track = track,
+                        prediction = prediction,
+                        balloonPhase = balloonPhase,
+                        balloonPosition = balloonPosition,
+                        landing = landing,
+                        landingHistory = landingHistoryPoints,
+                        route = route,
+                        routeVisible = routeVisible,
+                        onMapMoved = { _, _, _ -> }
                     )
                 }
             }
@@ -460,6 +416,7 @@ private fun UnifiedSettingsDialog(
     var ascentRate by remember(userSettings) { mutableStateOf(userSettings.ascentRate.toString()) }
     var descentRate by remember(userSettings) { mutableStateOf(userSettings.descentRate.toString()) }
     var navigationProvider by remember(userSettings) { mutableStateOf(userSettings.navigationProvider) }
+    var mapProvider by remember(userSettings) { mutableStateOf(userSettings.mapProvider) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -553,6 +510,43 @@ private fun UnifiedSettingsDialog(
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
+
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Text("Map Display", style = MaterialTheme.typography.labelMedium)
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Button(
+                                    onClick = { mapProvider = MapProvider.GOOGLE_MAPS },
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = if (mapProvider == MapProvider.GOOGLE_MAPS)
+                                            MaterialTheme.colorScheme.primary
+                                        else MaterialTheme.colorScheme.surfaceVariant
+                                    ),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Text("Google")
+                                }
+                                Button(
+                                    onClick = { mapProvider = MapProvider.OSM },
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = if (mapProvider == MapProvider.OSM)
+                                            MaterialTheme.colorScheme.primary
+                                        else MaterialTheme.colorScheme.surfaceVariant
+                                    ),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Text("OSM")
+                                }
+                            }
+                            Text(
+                                text = if (mapProvider == MapProvider.OSM)
+                                    "OpenStreetMap (no API key needed)"
+                                else "Google Maps (requires API key)",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
                     }
                     1 -> {
@@ -570,7 +564,8 @@ private fun UnifiedSettingsDialog(
                         burstAltitude = burstAltitude.toDoubleOrNull() ?: userSettings.burstAltitude,
                         ascentRate = ascentRate.toDoubleOrNull() ?: userSettings.ascentRate,
                         descentRate = descentRate.toDoubleOrNull() ?: userSettings.descentRate,
-                        navigationProvider = navigationProvider
+                        navigationProvider = navigationProvider,
+                        mapProvider = mapProvider
                     )
                     onSaveUserSettings(newSettings)
                     onDismiss()

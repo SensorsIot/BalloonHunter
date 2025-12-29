@@ -99,6 +99,9 @@ dependencies {
     implementation("com.google.android.gms:play-services-maps:18.2.0")
     implementation("com.google.maps.android:maps-compose:2.14.0")
 
+    // OSM map support
+    implementation("org.osmdroid:osmdroid-android:6.1.18")
+
     implementation("com.google.accompanist:accompanist-permissions:0.34.0")
 
     implementation("androidx.lifecycle:lifecycle-service:2.8.6")
