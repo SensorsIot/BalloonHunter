@@ -122,6 +122,8 @@ fun MapScreen(viewModel: MapViewModel = hiltViewModel()) {
     val cameraUpdate by viewModel.cameraUpdate.collectAsState()
     val frequencyMismatch by viewModel.frequencyMismatch.collectAsState()
     val routeVisible by viewModel.routeVisible.collectAsState()
+    val userLocation by viewModel.userLocation.collectAsState()
+    val compassHeading by viewModel.compassHeading.collectAsState()
 
     // Track mute state from radio data
     var isMuted by remember { mutableStateOf(false) }
@@ -201,6 +203,22 @@ fun MapScreen(viewModel: MapViewModel = hiltViewModel()) {
                 viewModel.requestFitAll()
             }
             viewModel.toggleShowAll()
+        }
+    }
+
+    // Heading mode: rotate map to match compass and center on user location
+    LaunchedEffect(headingMode, compassHeading, userLocation, userSettings.mapProvider) {
+        if (!headingMode || userLocation == null) return@LaunchedEffect
+
+        // Only for Google Maps - OSM handles this differently
+        if (userSettings.mapProvider == MapProvider.GOOGLE_MAPS) {
+            val newPos = CameraPosition.builder()
+                .target(LatLng(userLocation!!.latitude, userLocation!!.longitude))
+                .zoom(cameraPositionState.position.zoom.coerceAtLeast(15f))
+                .bearing(compassHeading)
+                .tilt(45f) // Add slight tilt for better forward view
+                .build()
+            cameraPositionState.animate(CameraUpdateFactory.newCameraPosition(newPos), 300)
         }
     }
 
@@ -366,6 +384,10 @@ fun MapScreen(viewModel: MapViewModel = hiltViewModel()) {
                         centerLon = balloonPosition?.longitude ?: 8.0,
                         zoom = 10.0,
                         satelliteMode = satelliteMode,
+                        headingMode = headingMode,
+                        compassHeading = compassHeading,
+                        userLat = userLocation?.latitude,
+                        userLon = userLocation?.longitude,
                         track = track,
                         prediction = prediction,
                         balloonPhase = balloonPhase,

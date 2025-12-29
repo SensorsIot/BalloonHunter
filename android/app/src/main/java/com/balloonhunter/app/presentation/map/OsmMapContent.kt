@@ -51,6 +51,10 @@ fun OsmMapContent(
     centerLon: Double,
     zoom: Double,
     satelliteMode: Boolean,
+    headingMode: Boolean,
+    compassHeading: Float,
+    userLat: Double?,
+    userLon: Double?,
     track: List<BalloonTrackPoint>,
     prediction: PredictionData?,
     balloonPhase: BalloonPhase,
@@ -151,6 +155,28 @@ fun OsmMapContent(
             mapView.controller.setCenter(allPoints.first())
             mapView.controller.setZoom(12.0)
         }
+    }
+
+    // Handle heading mode - rotate map and center on user
+    LaunchedEffect(headingMode, compassHeading, userLat, userLon) {
+        if (!headingMode || userLat == null || userLon == null) {
+            // Reset rotation when exiting heading mode
+            mapView.mapOrientation = 0f
+            return@LaunchedEffect
+        }
+
+        // Rotate map to match compass (OSM uses negative rotation)
+        mapView.mapOrientation = -compassHeading
+
+        // Center on user location
+        mapView.controller.setCenter(OsmGeoPoint(userLat, userLon))
+
+        // Ensure minimum zoom for heading mode
+        if (mapView.zoomLevelDouble < 15.0) {
+            mapView.controller.setZoom(15.0)
+        }
+
+        mapView.invalidate()
     }
 
     // Create a data key to detect actual changes

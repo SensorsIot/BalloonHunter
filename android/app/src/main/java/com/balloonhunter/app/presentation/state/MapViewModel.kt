@@ -2,6 +2,7 @@ package com.balloonhunter.app.presentation.state
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.balloonhunter.app.data.CompassService
 import com.balloonhunter.app.domain.models.CameraUpdate
 import com.balloonhunter.app.domain.models.DataState
 import com.balloonhunter.app.domain.models.GeoPoint
@@ -21,7 +22,8 @@ import javax.inject.Inject
 
 @HiltViewModel
 class MapViewModel @Inject constructor(
-    private val coordinator: BalloonCoordinator
+    private val coordinator: BalloonCoordinator,
+    private val compassService: CompassService
 ) : ViewModel() {
     val dataState = coordinator.dataState
     val position = coordinator.currentPosition
@@ -43,6 +45,9 @@ class MapViewModel @Inject constructor(
 
     private val _headingMode = MutableStateFlow(false)
     val headingMode: StateFlow<Boolean> = _headingMode.asStateFlow()
+
+    // Compass heading from device sensors (0-360 degrees from north)
+    val compassHeading: StateFlow<Float> = compassService.heading
 
     private val _satelliteMode = MutableStateFlow(false)
     val satelliteMode: StateFlow<Boolean> = _satelliteMode.asStateFlow()
@@ -128,12 +133,18 @@ class MapViewModel @Inject constructor(
     }
 
     override fun onCleared() {
+        compassService.stopListening()
         coordinator.stop()
         super.onCleared()
     }
 
     fun toggleHeading() {
         _headingMode.value = !_headingMode.value
+        if (_headingMode.value) {
+            compassService.startListening()
+        } else {
+            compassService.stopListening()
+        }
     }
 
     fun toggleSatellite() {

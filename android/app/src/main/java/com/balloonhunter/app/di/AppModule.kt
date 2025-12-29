@@ -2,6 +2,7 @@ package com.balloonhunter.app.di
 
 import android.content.Context
 import androidx.room.Room
+import com.balloonhunter.app.data.CompassService
 import com.balloonhunter.app.data.LocationService
 import com.balloonhunter.app.data.aprs.AprsService
 import com.balloonhunter.app.data.ble.BleService
@@ -69,6 +70,10 @@ object AppModule {
     @Provides
     @Singleton
     fun provideLocationService(@ApplicationContext context: Context): LocationService = LocationService(context)
+
+    @Provides
+    @Singleton
+    fun provideCompassService(@ApplicationContext context: Context): CompassService = CompassService(context)
 
     @Provides
     @Singleton
