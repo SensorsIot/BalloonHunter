@@ -10,9 +10,13 @@ import kotlinx.coroutines.flow.asStateFlow
 import java.time.Instant
 
 class LandingPointService(
-    private val repository: LandingHistoryRepository,
-    private val listener: LandingPointListener? = null
+    private val repository: LandingHistoryRepository
 ) {
+    private var listener: LandingPointListener? = null
+
+    fun setListener(listener: LandingPointListener) {
+        this.listener = listener
+    }
     private val _currentLanding = MutableStateFlow<LandingPredictionPoint?>(null)
     val currentLanding: StateFlow<LandingPredictionPoint?> = _currentLanding.asStateFlow()
 
@@ -21,6 +25,11 @@ class LandingPointService(
 
     suspend fun loadPersisted(points: List<LandingPredictionPoint>) {
         _history.value = points
+    }
+
+    fun clear() {
+        _currentLanding.value = null
+        _history.value = emptyList()
     }
 
     suspend fun updateLandingPoint(

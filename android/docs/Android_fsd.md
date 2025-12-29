@@ -173,6 +173,7 @@ Target SDK: latest at ship (2026 best practice). Min SDK: 26.
 ### 4.4 Message framing
 - The iOS implementation assumes each BLE notification is a complete message string.
 - Messages are split by "/"; no explicit reassembly or buffer handling is used.
+- After the first valid packet, request device settings once with o{?}o after a short delay (~0.5s).
 
 ### 4.5 Packet parsing (mirror iOS mapping exactly)
 
@@ -217,9 +218,9 @@ Indexes used:
 - afcFrequency [6], batteryVoltage [7]
 - buzmute [8], softwareVersion [9]
 Behavior:
-- Emit RadioChannelData only
-- Update radioSettings
-- Do NOT emit position
+- Do NOT emit PositionData
+- Update radioSettings and cached device fields
+- If a radio channel stream exists, emit RadioChannelData (no position update)
 
 Type 3: Device configuration (note mapping matches iOS implementation)
 Format: 3/probeType/frequency/oledSDA/oledSCL/oledRST/ledPin/RS41BW/M20BW/M10BW/PILOTBW/DFMBW/frequencyCorrection/callSign/batPin/batMin/batMax/batType/lcdType/nameType/buzPin/softwareVersion/o
@@ -249,11 +250,11 @@ Behavior:
 - Publish AFCData(currentFrequency, smoothedFrequency = average of history).
 
 ### 4.8 Commands
-All commands must be sent as ASCII strings wrapped in o{...}o.
+All commands must be sent as ASCII strings wrapped in o{...}o. Multiple settings can be combined in one command using "/" separators (o{key=value/other=value}o).
 - Request status: o{?}o
 - Set frequency: o{f=403.50/tipo=1}o
 - Mute: o{mute=0|1}o
-- Settings (individual): o{key=value}o
+- Settings (individual or grouped): o{key=value}o or o{key=value/other=value}o
 
 Device settings diff logic (used by Device Settings screen) uses these keys:
 - oled_sda, oled_scl, oled_rst, led_pout, buz_pin
@@ -264,6 +265,28 @@ Device settings diff logic (used by Device Settings screen) uses these keys:
 - call (aprsName)
 
 Note: These keys match the iOS implementation even if they differ from earlier docs.
+
+Settings command variables (master list):
+- lcd (0=SSD1306_128x64, 1=SH1106_128x64) [reboot]
+- lcdOn (0=off, 1=on) [reboot]
+- oled_sda, oled_scl, oled_rst (GPIO pins) [reboot]
+- led_pout (GPIO; 0 disables) [reboot]
+- buz_pin (GPIO; 0 disables) [reboot]
+- myCall (max 8 chars; empty hides)
+- blu (BLE on/off) [reboot]
+- baud (0=4800, 1=9600, 2=19200, 3=38400, 4=57600, 5=115200) [reboot]
+- com (0=TX1/RX3/USB, 1=TX12/RX2 3.3V logic) [reboot]
+- rs41.rxbw, m20.rxbw, m10.rxbw, pilot.rxbw, dfm.rxbw (see bandwidth table)
+- aprsName (0=Serial, 1=APRS name)
+- freqofs (frequency correction)
+- battery (batPin; 0 disables) [reboot]
+- vBatMin, vBatMax (mV)
+- vBatType (0=Linear, 1=Sigmoidal, 2=Asigmoidal)
+
+Bandwidth table (kHz):
+0=2.6, 1=3.1, 2=3.9, 3=5.2, 4=6.3, 5=7.8, 6=10.4, 7=12.5, 8=15.6, 9=20.8,
+10=25.0, 11=31.3, 12=41.7, 13=50.0, 14=62.5, 15=83.3, 16=100.0, 17=125.0,
+18=166.7, 19=200.0
 
 ---
 
@@ -499,7 +522,8 @@ https://api.v2.sondehub.org/tawhiri
 
 ### 11.2 Route updates
 - Recalculate on transport mode change.
-- Recalculate when user moved > 100m and > 60s since last route update.
+- Recalculate when user location updates while navigating (roughly every minute while moving).
+- Recalculate when landing point changes (prediction updates or landing updates).
 - If user location unavailable, store destination and calculate when location arrives.
 
 ### 11.3 Optional OpenStreetMap backend (user selectable)
@@ -531,7 +555,7 @@ If the user selects the OSM option, replace Google Maps + Directions with an OSM
   - Transport mode (car/bike segmented)
   - Show All button
   - Heading mode toggle
-  - Mute toggle (visible only when BLE connected)
+  - Mute toggle (visible only when BLE connected; UI state syncs from buzmute in Type 0/1/2 packets)
   - Navigation button (visible if landing point exists)
 - Map area: ~70% height
 - Data panel: ~30% height
@@ -541,10 +565,11 @@ If the user selects the OSM option, replace Google Maps + Directions with an OSM
 - Prediction path: blue polyline (flying only)
 - Route to landing: green polyline (when routeVisible)
 - Landing history: purple polyline + purple dots
-- Balloon marker: color by phase (green ascending, orange descendingAbove10k, red descendingBelow10k, purple landed)
-- Burst marker: orange
+- Balloon marker: green ascending, red descending (both descent phases share red); landed uses target icon
+- Burst marker: orange (visible only while ascending)
 - Landing marker: purple target
 - User marker: runner icon (hidden in heading mode)
+Route overlay is hidden if distance between user and balloon < 100 m.
 
 ### 13.3 Camera behavior
 - Show All fits all annotations, track, prediction, route, landing history.
@@ -559,7 +584,12 @@ If the user selects the OSM option, replace Google Maps + Directions with an OSM
 - If balloon is landed, show distance-to-balloon at bottom overlay.
 
 ### 13.6 Sonde name mismatch banner
-- If bleSerialName != aprsSerialName (both non-empty), show an orange banner.
+- If bleSerialName != aprsSerialName (both non-empty), show a centered confirmation popup:
+  - Copy: "Use SondeHub serial {aprsName} changed to {bleName}?"
+  - Confirm required before APRS polling continues
+  - Not persisted; re-prompts on next launch if still mismatched
+
+Note: Prediction path visibility toggle is not implemented; prediction paths are always shown when available during flight phases.
 
 ---
 
@@ -581,12 +611,32 @@ Rules:
   - noTelemetry: red antenna or red slash depending on BLE state
 - Flight status icons: target (landed), arrow up (ascending), arrow down (descending), question mark (unknown)
 - Vertical speed uses smoothed metrics; color green if positive, red if negative.
-- Descent rate shows 0.0 when not applicable; uses smoothedDescentRate if available else user setting.
+- Descent rate shows 0.0 when not applicable; uses smoothedDescentRate if available else user setting. Color green when adjustedDescentRateMS is used.
 - Burst killer time only available from BLE radio data (burstKillerTime). Display HH:mm or --:--.
 - Arrival time is now + route ETA when route exists.
 
 BLE icon flash:
 - When new BLE message arrives and connectionState == dataReady, animate a brief scale flash.
+
+Layout:
+- Two stacked tables (all fonts same size, left-aligned text)
+- Table 1 (5 columns): Connection status | Flight state | Sonde type | Sonde name | Altitude
+- Table 2 (3 columns, 4 rows):
+  - Frequency | Signal strength | Battery %
+  - Vertical speed | Horizontal speed | Distance
+  - Flight time | Landing time | Arrival time
+  - Adjusted descent rate | Burst killer expiry time | (empty)
+- Text labels: "V: ... m/s", "H: ... km/h", "Dist: ... km", "Flight: ...", "Landing: ...", "Arrival: ...", RSSI shows " dB", battery shows " Batt%"
+
+Dynamic elements:
+- Panel frame color: green when live BLE telemetry, orange in APRS fallback, red when telemetry stale (>3s).
+- Panel frame turns red if no telemetry for last 3 seconds.
+- Vertical speed color: green for ascending, red for descending.
+
+Burst killer caching:
+- Store burstKillerTime and BLE telemetry timestamp in memory to compute expiry time.
+- APRS never overwrites cached burst killer values.
+- Burst killer data is not persisted across app sessions.
 
 ---
 
@@ -594,7 +644,9 @@ BLE icon flash:
 
 ### 15.1 Sonde Settings
 - Probe type picker: RS41, M20, M10, PILOT, DFM
-- Frequency digit picker (5 digits) with validation
+- Frequency digit picker (5 digits) with validation (400-406 MHz only)
+- Wheel-pickers per digit (keyboard-free), horizontally arranged with "MHz" label
+- Cascading digit adjustments; invalid digits revert to last valid value
 - Save on dismiss: send BLE frequency command
 - Revert button restores initial values
 
@@ -605,6 +657,12 @@ BLE icon flash:
   - If timeout, load cached settings if any
 - Tabs: Pins, Battery, Radio, Other
 - On close, compute diffs and send individual commands via BLE
+
+Tab contents:
+- Pins: oled_sda, oled_scl, oled_rst, led_pout, buz_pin, lcd
+- Battery: battery, vBatMin, vBatMax, vBatType
+- Radio: rs41.rxbw, m20.rxbw, m10.rxbw, pilot.rxbw, dfm.rxbw, freqofs
+- Other: bt, lcdOn, serBaud, ser, aprsName, myCall
 
 ### 15.3 Prediction Settings
 - Burst altitude, ascent rate, descent rate, station ID
@@ -621,6 +679,7 @@ BLE icon flash:
 
 - Navigation update: when landing point changes by >300m; notification opens Google Maps with new destination and transport mode.
 - Track truncation: when track-based landing detection truncates the track (telemetry blackout or stationary).
+- Navigation notifications only fire when the app is in foreground (background predictions are suspended).
 
 Notification channels must be created on Android 8+.
 

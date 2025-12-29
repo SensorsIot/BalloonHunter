@@ -153,3 +153,46 @@ data class RouteData(
     val expectedTravelTime: Double,
     val transportType: TransportationMode
 )
+
+// Map annotation models for MapViewModel
+sealed class MapAnnotationItem {
+    data class BalloonMarker(
+        val position: GeoPoint,
+        val title: String,
+        val phase: BalloonPhase
+    ) : MapAnnotationItem()
+
+    data class LandingMarker(
+        val position: GeoPoint
+    ) : MapAnnotationItem()
+
+    data class TrackPolyline(
+        val points: List<GeoPoint>
+    ) : MapAnnotationItem()
+
+    data class PredictionPolyline(
+        val points: List<GeoPoint>
+    ) : MapAnnotationItem()
+
+    data class RoutePolyline(
+        val points: List<GeoPoint>
+    ) : MapAnnotationItem()
+}
+
+sealed class CameraUpdate {
+    data class FitBounds(
+        val points: List<GeoPoint>,
+        val padding: Int = 64
+    ) : CameraUpdate()
+
+    data class CenterOn(
+        val point: GeoPoint,
+        val zoom: Float? = null
+    ) : CameraUpdate()
+
+    data class FollowHeading(
+        val point: GeoPoint,
+        val heading: Float,
+        val zoom: Float
+    ) : CameraUpdate()
+}

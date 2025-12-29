@@ -11,8 +11,13 @@ import com.balloonhunter.app.data.persistence.LandingHistoryRepository
 import com.balloonhunter.app.data.persistence.TelemetryLogger
 import com.balloonhunter.app.data.persistence.TrackRepository
 import com.balloonhunter.app.data.persistence.UserSettingsStore
+import com.balloonhunter.app.data.prediction.PredictionService
 import com.balloonhunter.app.data.routing.RoutingService
 import com.balloonhunter.app.domain.services.BalloonCoordinator
+import com.balloonhunter.app.domain.services.BalloonPositionService
+import com.balloonhunter.app.domain.services.BalloonTrackService
+import com.balloonhunter.app.domain.services.LandingPointService
+import com.balloonhunter.app.domain.startup.StartupOrchestrator
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -79,29 +84,72 @@ object AppModule {
 
     @Provides
     @Singleton
+    fun provideBalloonPositionService(): BalloonPositionService = BalloonPositionService()
+
+    @Provides
+    @Singleton
+    fun provideBalloonTrackService(trackRepository: TrackRepository): BalloonTrackService =
+        BalloonTrackService(trackRepository)
+
+    @Provides
+    @Singleton
+    fun provideLandingPointService(landingHistoryRepository: LandingHistoryRepository): LandingPointService =
+        LandingPointService(landingHistoryRepository)
+
+    @Provides
+    @Singleton
+    fun providePredictionService(@AppScope scope: CoroutineScope): PredictionService =
+        PredictionService(scope)
+
+    @Provides
+    @Singleton
+    fun provideStartupOrchestrator(
+        @AppScope scope: CoroutineScope,
+        bleService: BleService,
+        aprsService: AprsService,
+        locationService: LocationService,
+        trackRepository: TrackRepository,
+        landingHistoryRepository: LandingHistoryRepository
+    ): StartupOrchestrator = StartupOrchestrator(
+        scope = scope,
+        bleService = bleService,
+        aprsService = aprsService,
+        locationService = locationService,
+        trackRepository = trackRepository,
+        landingHistoryRepository = landingHistoryRepository
+    )
+
+    @Provides
+    @Singleton
     fun provideCoordinator(
         @AppScope scope: CoroutineScope,
         bleService: BleService,
         aprsService: AprsService,
-        trackRepository: TrackRepository,
-        landingHistoryRepository: LandingHistoryRepository,
         settingsStore: UserSettingsStore,
         locationService: LocationService,
         routingService: RoutingService,
         notificationHelper: NotificationHelper,
-        telemetryLogger: TelemetryLogger
+        telemetryLogger: TelemetryLogger,
+        positionService: BalloonPositionService,
+        trackService: BalloonTrackService,
+        landingService: LandingPointService,
+        predictionService: PredictionService,
+        startupOrchestrator: StartupOrchestrator
     ): BalloonCoordinator {
         return BalloonCoordinator(
             scope = scope,
             bleService = bleService,
             aprsService = aprsService,
-            trackRepository = trackRepository,
-            landingHistoryRepository = landingHistoryRepository,
             settingsStore = settingsStore,
             locationService = locationService,
             routingService = routingService,
             notificationSink = notificationHelper,
-            telemetryLogger = telemetryLogger
+            telemetryLogger = telemetryLogger,
+            positionService = positionService,
+            trackService = trackService,
+            landingService = landingService,
+            predictionService = predictionService,
+            startupOrchestrator = startupOrchestrator
         )
     }
 }

@@ -15,7 +15,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import org.json.JSONArray
+import android.util.Log
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
@@ -23,12 +23,21 @@ import java.time.Instant
 import java.time.OffsetDateTime
 import java.time.format.DateTimeFormatter
 
+private const val TAG = "debugAPRS"
+
 class AprsService(private val scope: CoroutineScope) {
     private val _aprsDataAvailable = MutableStateFlow(false)
     val aprsDataAvailable: StateFlow<Boolean> = _aprsDataAvailable.asStateFlow()
 
     val positionUpdates = MutableSharedFlow<PositionData>(extraBufferCapacity = 16)
     val radioUpdates = MutableSharedFlow<RadioChannelData>(extraBufferCapacity = 16)
+
+    // Expose current frequency and probe type for frequency mismatch detection
+    private val _currentFrequency = MutableStateFlow<Double?>(null)
+    val currentFrequency: StateFlow<Double?> = _currentFrequency.asStateFlow()
+
+    private val _currentProbeType = MutableStateFlow<String?>(null)
+    val currentProbeType: StateFlow<String?> = _currentProbeType.asStateFlow()
 
     private var pollingJob: Job? = null
     private var stationId: String = "06610"
@@ -42,20 +51,31 @@ class AprsService(private val scope: CoroutineScope) {
     }
 
     fun startPolling() {
-        if (pollingJob != null) return
+        if (pollingJob != null) {
+            Log.d(TAG, "startPolling: already polling, ignoring")
+            return
+        }
+        Log.d(TAG, "startPolling: starting polling for station $stationId")
         pollingJob = scope.launch(Dispatchers.IO) {
             while (true) {
+                Log.d(TAG, "poll: fetching telemetry...")
                 val result = fetchSiteTelemetry()
                 if (result != null) {
+                    Log.d(TAG, "poll: SUCCESS - sonde=${result.first.sondeName}, lat=${result.first.latitude}, lon=${result.first.longitude}, alt=${result.first.altitude}")
                     _aprsDataAvailable.value = true
                     lastTelemetryTimestamp = result.first.timestamp
+                    _currentFrequency.value = result.second.frequency
+                    _currentProbeType.value = result.second.probeType
                     positionUpdates.tryEmit(result.first)
                     radioUpdates.tryEmit(result.second)
                 } else {
+                    Log.d(TAG, "poll: FAILED - no data returned")
                     _aprsDataAvailable.value = false
                 }
 
-                delay(nextPollDelaySeconds().coerceAtLeast(15).toLong() * 1000)
+                val delaySeconds = nextPollDelaySeconds().coerceAtLeast(15)
+                Log.d(TAG, "poll: next poll in ${delaySeconds}s")
+                delay(delaySeconds.toLong() * 1000)
             }
         }
     }
@@ -82,52 +102,131 @@ class AprsService(private val scope: CoroutineScope) {
 
     private fun fetchSiteTelemetry(): Pair<PositionData, RadioChannelData>? {
         val url = URL("https://api.v2.sondehub.org/sondes/site/$stationId")
-        val response = fetchJsonArray(url, 5000) ?: return null
-        val best = selectLatestSonde(response) ?: return null
+        Log.d(TAG, "fetchSiteTelemetry: GET $url")
+        val response = fetchJsonObject(url, 5000)
+        if (response == null) {
+            Log.d(TAG, "fetchSiteTelemetry: fetchJsonObject returned null")
+            return null
+        }
+        Log.d(TAG, "fetchSiteTelemetry: got JSON with ${response.length()} keys: ${response.keys().asSequence().toList()}")
+        val best = selectLatestSonde(response)
+        if (best == null) {
+            Log.d(TAG, "fetchSiteTelemetry: selectLatestSonde returned null")
+            return null
+        }
+        Log.d(TAG, "fetchSiteTelemetry: selected sonde ${best.optString("serial")}")
         return convertAprs(best)
     }
 
-    private fun selectLatestSonde(array: JSONArray): JSONObject? {
+    private fun selectLatestSonde(sondesObject: JSONObject): JSONObject? {
+        Log.d(TAG, "selectLatestSonde: processing ${sondesObject.length()} sondes")
         var best: JSONObject? = null
         var bestTime: Instant? = null
-        for (i in 0 until array.length()) {
-            val obj = array.optJSONObject(i) ?: continue
-            if (isGroundTest(obj)) continue
-            val timestamp = parseInstant(obj.optString("datetime")) ?: continue
+        val keys = sondesObject.keys()
+        while (keys.hasNext()) {
+            val serial = keys.next()
+            val obj = sondesObject.optJSONObject(serial)
+            if (obj == null) {
+                Log.d(TAG, "selectLatestSonde: $serial - not a JSONObject, skipping")
+                continue
+            }
+            if (isGroundTest(obj)) {
+                Log.d(TAG, "selectLatestSonde: $serial - ground test, skipping")
+                continue
+            }
+            val datetimeStr = obj.optString("datetime")
+            val timestamp = parseInstant(datetimeStr)
+            if (timestamp == null) {
+                Log.d(TAG, "selectLatestSonde: $serial - no valid datetime ($datetimeStr), skipping")
+                continue
+            }
+            Log.d(TAG, "selectLatestSonde: $serial - datetime=$timestamp")
             if (bestTime == null || timestamp.isAfter(bestTime)) {
                 best = obj
                 bestTime = timestamp
+                Log.d(TAG, "selectLatestSonde: $serial is now best candidate")
             }
         }
+        Log.d(TAG, "selectLatestSonde: returning ${best?.optString("serial") ?: "null"}")
         return best
     }
 
     private fun isGroundTest(obj: JSONObject): Boolean {
-        val uploader = obj.optJSONObject("uploader_position") ?: return false
+        val serial = obj.optString("serial", "unknown")
         val sondeLat = obj.optDouble("lat", Double.NaN)
         val sondeLon = obj.optDouble("lon", Double.NaN)
-        val uploaderLat = uploader.optDouble("lat", Double.NaN)
-        val uploaderLon = uploader.optDouble("lon", Double.NaN)
-        if (!sondeLat.isFinite() || !sondeLon.isFinite() || !uploaderLat.isFinite() || !uploaderLon.isFinite()) {
+        if (!sondeLat.isFinite() || !sondeLon.isFinite()) {
+            Log.d(TAG, "isGroundTest: $serial - no valid sonde coords, not ground test")
             return false
         }
+
+        val uploaderPos = obj.opt("uploader_position")
+        if (uploaderPos == null) {
+            Log.d(TAG, "isGroundTest: $serial - no uploader_position, not ground test")
+            return false
+        }
+        Log.d(TAG, "isGroundTest: $serial - uploader_position type=${uploaderPos.javaClass.simpleName}, value=$uploaderPos")
+
+        val (uploaderLat, uploaderLon) = when (uploaderPos) {
+            is String -> {
+                val parts = uploaderPos.split(",")
+                if (parts.size != 2) {
+                    Log.d(TAG, "isGroundTest: $serial - uploader_position string invalid format")
+                    return false
+                }
+                val lat = parts[0].trim().toDoubleOrNull()
+                val lon = parts[1].trim().toDoubleOrNull()
+                if (lat == null || lon == null) {
+                    Log.d(TAG, "isGroundTest: $serial - uploader_position string parse failed")
+                    return false
+                }
+                lat to lon
+            }
+            is JSONObject -> {
+                val lat = uploaderPos.optDouble("lat", Double.NaN)
+                val lon = uploaderPos.optDouble("lon", Double.NaN)
+                if (!lat.isFinite() || !lon.isFinite()) {
+                    Log.d(TAG, "isGroundTest: $serial - uploader_position object has invalid coords")
+                    return false
+                }
+                lat to lon
+            }
+            else -> {
+                Log.d(TAG, "isGroundTest: $serial - uploader_position unknown type")
+                return false
+            }
+        }
+
         val distance = GeoUtils.haversineMeters(
             com.balloonhunter.app.domain.models.GeoPoint(sondeLat, sondeLon),
             com.balloonhunter.app.domain.models.GeoPoint(uploaderLat, uploaderLon)
         )
-        return distance < 1000
+        val isGround = distance < 1000
+        Log.d(TAG, "isGroundTest: $serial - distance to uploader=${distance}m, isGroundTest=$isGround")
+        return isGround
     }
 
     private fun convertAprs(obj: JSONObject): Pair<PositionData, RadioChannelData>? {
+        val serial = obj.optString("serial", "unknown")
+        Log.d(TAG, "convertAprs: processing $serial")
         val lat = obj.optDouble("lat", Double.NaN)
         val lon = obj.optDouble("lon", Double.NaN)
-        if (!lat.isFinite() || !lon.isFinite() || (lat == 0.0 && lon == 0.0)) return null
+        if (!lat.isFinite() || !lon.isFinite() || (lat == 0.0 && lon == 0.0)) {
+            Log.d(TAG, "convertAprs: $serial - invalid coords lat=$lat, lon=$lon")
+            return null
+        }
         val alt = obj.optDouble("alt", 0.0)
         val hSpeed = obj.optDouble("vel_h", 0.0)
         val vSpeed = obj.optDouble("vel_v", 0.0)
         val sondeName = obj.optString("serial", "")
-        val timestamp = parseInstant(obj.optString("datetime")) ?: return null
+        val datetimeStr = obj.optString("datetime")
+        val timestamp = parseInstant(datetimeStr)
+        if (timestamp == null) {
+            Log.d(TAG, "convertAprs: $serial - failed to parse datetime: $datetimeStr")
+            return null
+        }
         val apiTime = parseInstant(obj.optString("time_received"))
+        Log.d(TAG, "convertAprs: $serial - lat=$lat, lon=$lon, alt=$alt, timestamp=$timestamp")
 
         val freq = when {
             obj.has("tx_frequency") -> obj.optDouble("tx_frequency", 0.0)
@@ -184,19 +283,25 @@ class AprsService(private val scope: CoroutineScope) {
         }
     }
 
-    private fun fetchJsonArray(url: URL, timeoutMs: Int): JSONArray? {
+    private fun fetchJsonObject(url: URL, timeoutMs: Int): JSONObject? {
+        Log.d(TAG, "fetchJsonObject: connecting to $url (timeout=${timeoutMs}ms)")
         val connection = url.openConnection() as HttpURLConnection
         connection.connectTimeout = timeoutMs
         connection.readTimeout = timeoutMs
         connection.requestMethod = "GET"
         return try {
-            if (connection.responseCode in 200..299) {
+            val responseCode = connection.responseCode
+            Log.d(TAG, "fetchJsonObject: responseCode=$responseCode")
+            if (responseCode in 200..299) {
                 val body = connection.inputStream.bufferedReader().readText()
-                JSONArray(body)
+                Log.d(TAG, "fetchJsonObject: received ${body.length} chars")
+                JSONObject(body)
             } else {
+                Log.d(TAG, "fetchJsonObject: non-success response code $responseCode")
                 null
             }
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            Log.d(TAG, "fetchJsonObject: exception ${e.javaClass.simpleName}: ${e.message}")
             null
         } finally {
             connection.disconnect()
@@ -204,11 +309,26 @@ class AprsService(private val scope: CoroutineScope) {
     }
 
     suspend fun fetchGapFill(serial: String): List<BalloonTrackPoint> = withContext(Dispatchers.IO) {
+        Log.d(TAG, "fetchGapFill: fetching track history for $serial")
         val url = URL("https://api.v2.sondehub.org/sondes/telemetry?serial=$serial&duration=3d")
-        val array = fetchJsonArray(url, 30000) ?: return@withContext emptyList()
+        val response = fetchJsonObject(url, 30000)
+        if (response == null) {
+            Log.d(TAG, "fetchGapFill: failed to fetch data for $serial")
+            return@withContext emptyList()
+        }
         val dedupe = mutableMapOf<Long, BalloonTrackPoint>()
-        for (i in 0 until array.length()) {
-            val obj = array.optJSONObject(i) ?: continue
+
+        val serialData = response.optJSONObject(serial)
+        if (serialData == null) {
+            Log.d(TAG, "fetchGapFill: no data for serial $serial in response")
+            return@withContext emptyList()
+        }
+        Log.d(TAG, "fetchGapFill: got ${serialData.length()} timestamps for $serial")
+
+        val timestamps = serialData.keys()
+        while (timestamps.hasNext()) {
+            val tsKey = timestamps.next()
+            val obj = serialData.optJSONObject(tsKey) ?: continue
             val timestamp = parseInstant(obj.optString("datetime")) ?: continue
             val lat = obj.optDouble("lat", Double.NaN)
             val lon = obj.optDouble("lon", Double.NaN)
@@ -225,10 +345,7 @@ class AprsService(private val scope: CoroutineScope) {
                 horizontalSpeed = obj.optDouble("vel_h", 0.0)
             )
         }
+        Log.d(TAG, "fetchGapFill: returning ${dedupe.size} track points for $serial")
         return@withContext dedupe.toSortedMap().values.toList()
-    }
-
-    private suspend fun <T> withContextIO(block: suspend () -> T): T {
-        return kotlinx.coroutines.withContext(Dispatchers.IO) { block() }
     }
 }

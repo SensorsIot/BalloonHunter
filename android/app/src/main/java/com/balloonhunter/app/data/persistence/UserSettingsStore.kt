@@ -4,10 +4,8 @@ import android.content.Context
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.datastore.preferences.core.doublePreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
-import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.preferencesDataStoreFile
-import com.balloonhunter.app.domain.models.TransportationMode
 import com.balloonhunter.app.domain.models.UserSettings
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharingStarted
@@ -26,20 +24,15 @@ class UserSettingsStore(context: Context, scope: CoroutineScope) {
         val ascentRate = doublePreferencesKey("ascent_rate")
         val descentRate = doublePreferencesKey("descent_rate")
         val stationId = stringPreferencesKey("station_id")
-        val transportMode = intPreferencesKey("transport_mode")
+        // transportMode removed - now ephemeral (not persisted)
     }
 
     private val settingsFlow: Flow<UserSettings> = dataStore.data.map { prefs ->
-        val mode = when (prefs[Keys.transportMode] ?: 0) {
-            1 -> TransportationMode.BIKE
-            else -> TransportationMode.CAR
-        }
         UserSettings(
             burstAltitude = prefs[Keys.burstAltitude] ?: 30000.0,
             ascentRate = prefs[Keys.ascentRate] ?: 5.0,
             descentRate = prefs[Keys.descentRate] ?: 7.0,
-            stationId = prefs[Keys.stationId] ?: "06610",
-            transportMode = mode
+            stationId = prefs[Keys.stationId] ?: "06610"
         )
     }
 
@@ -50,8 +43,7 @@ class UserSettingsStore(context: Context, scope: CoroutineScope) {
             burstAltitude = 30000.0,
             ascentRate = 5.0,
             descentRate = 7.0,
-            stationId = "06610",
-            transportMode = TransportationMode.CAR
+            stationId = "06610"
         )
     )
 
@@ -61,7 +53,6 @@ class UserSettingsStore(context: Context, scope: CoroutineScope) {
             prefs[Keys.ascentRate] = settings.ascentRate
             prefs[Keys.descentRate] = settings.descentRate
             prefs[Keys.stationId] = settings.stationId
-            prefs[Keys.transportMode] = if (settings.transportMode == TransportationMode.BIKE) 1 else 0
         }
     }
 }

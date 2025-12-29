@@ -4,6 +4,6 @@ data class UserSettings(
     val burstAltitude: Double,
     val ascentRate: Double,
     val descentRate: Double,
-    val stationId: String,
-    val transportMode: TransportationMode
+    val stationId: String
+    // transportMode is ephemeral - managed in MapViewModel, not persisted
 )

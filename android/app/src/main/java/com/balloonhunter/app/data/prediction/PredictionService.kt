@@ -52,6 +52,10 @@ class PredictionService(private val scope: CoroutineScope) {
         timerJob = null
     }
 
+    fun clear() {
+        _prediction.value = null
+    }
+
     suspend fun requestPrediction(
         position: PositionData,
         settings: UserSettings,
@@ -113,38 +117,70 @@ class PredictionService(private val scope: CoroutineScope) {
     }
 
     private fun parsePrediction(json: JSONObject, usedSmoothed: Boolean): PredictionData {
-        val ascent = json.optJSONArray("ascent") ?: JSONArray()
-        val descent = json.optJSONArray("descent") ?: JSONArray()
-        val path = mutableListOf<GeoPoint>()
+        // SondeHub API: { "prediction": [ { "stage": "ascent", "trajectory": [...] }, { "stage": "descent", "trajectory": [...] } ] }
+        val predictionArray = json.optJSONArray("prediction")
+            ?: return PredictionData(null, null, null, null, null, null, null, null, usedSmoothed)
 
-        fun addPath(array: JSONArray) {
-            for (i in 0 until array.length()) {
-                val point = array.optJSONArray(i) ?: continue
-                val lat = point.optDouble(0, Double.NaN)
-                val lon = point.optDouble(1, Double.NaN)
-                if (!lat.isFinite() || !lon.isFinite()) continue
-                path.add(GeoPoint(lat, lon))
+        var ascentTrajectory: JSONArray? = null
+        var descentTrajectory: JSONArray? = null
+        for (i in 0 until predictionArray.length()) {
+            val stage = predictionArray.optJSONObject(i) ?: continue
+            when (stage.optString("stage", "").lowercase()) {
+                "ascent" -> ascentTrajectory = stage.optJSONArray("trajectory")
+                "descent" -> descentTrajectory = stage.optJSONArray("trajectory")
             }
         }
 
-        addPath(ascent)
-        addPath(descent)
+        val path = mutableListOf<GeoPoint>()
+        fun addTrajectory(trajectory: JSONArray?) {
+            trajectory ?: return
+            for (i in 0 until trajectory.length()) {
+                val pt = trajectory.optJSONObject(i) ?: continue
+                val lat = pt.optDouble("latitude", Double.NaN)
+                val lon = pt.optDouble("longitude", Double.NaN)
+                if (lat.isFinite() && lon.isFinite()) path.add(GeoPoint(lat, lon))
+            }
+        }
+        addTrajectory(ascentTrajectory)
+        addTrajectory(descentTrajectory)
 
-        val burstPoint = ascent.takeIf { it.length() > 0 }?.let {
-            val last = it.optJSONArray(it.length() - 1)
-            if (last != null) GeoPoint(last.optDouble(0), last.optDouble(1)) else null
+        val burstPoint = ascentTrajectory?.let { arr ->
+            if (arr.length() > 0) arr.optJSONObject(arr.length() - 1)?.let { last ->
+                val lat = last.optDouble("latitude", Double.NaN)
+                val lon = last.optDouble("longitude", Double.NaN)
+                if (lat.isFinite() && lon.isFinite()) GeoPoint(lat, lon) else null
+            } else null
         }
 
-        val landingPoint = descent.takeIf { it.length() > 0 }?.let {
-            val last = it.optJSONArray(it.length() - 1)
-            if (last != null) GeoPoint(last.optDouble(0), last.optDouble(1)) else null
+        var landingPoint: GeoPoint? = null
+        var landingInstant: Instant? = null
+        var burstAltitude: Double? = null
+        descentTrajectory?.let { arr ->
+            if (arr.length() > 0) arr.optJSONObject(arr.length() - 1)?.let { last ->
+                val lat = last.optDouble("latitude", Double.NaN)
+                val lon = last.optDouble("longitude", Double.NaN)
+                if (lat.isFinite() && lon.isFinite()) landingPoint = GeoPoint(lat, lon)
+                val datetime = last.optString("datetime", "")
+                if (datetime.isNotEmpty()) {
+                    landingInstant = try {
+                        OffsetDateTime.parse(datetime, DateTimeFormatter.ISO_OFFSET_DATE_TIME).toInstant()
+                    } catch (_: Exception) { null }
+                }
+            }
+        }
+        ascentTrajectory?.let { arr ->
+            if (arr.length() > 0) arr.optJSONObject(arr.length() - 1)?.let { last ->
+                val alt = last.optDouble("altitude", Double.NaN)
+                if (alt.isFinite()) burstAltitude = alt
+            }
         }
 
-        val landingTime = json.optString("landing_time")
-        val landingInstant = try {
-            OffsetDateTime.parse(landingTime, DateTimeFormatter.ISO_OFFSET_DATE_TIME).toInstant()
-        } catch (_: Exception) {
-            null
+        val launchPoint = ascentTrajectory?.let { arr ->
+            if (arr.length() > 0) arr.optJSONObject(0)?.let { first ->
+                val lat = first.optDouble("latitude", Double.NaN)
+                val lon = first.optDouble("longitude", Double.NaN)
+                if (lat.isFinite() && lon.isFinite()) GeoPoint(lat, lon) else null
+            } else null
         }
 
         return PredictionData(
@@ -152,8 +188,8 @@ class PredictionService(private val scope: CoroutineScope) {
             burstPoint = burstPoint,
             landingPoint = landingPoint,
             landingTime = landingInstant,
-            launchPoint = null,
-            burstAltitude = json.optDouble("burst_altitude", Double.NaN).takeIf { it.isFinite() },
+            launchPoint = launchPoint,
+            burstAltitude = burstAltitude,
             flightTime = null,
             metadata = null,
             usedSmoothedDescentRate = usedSmoothed

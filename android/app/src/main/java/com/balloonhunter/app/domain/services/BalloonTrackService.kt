@@ -10,14 +10,21 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.time.Duration
 import java.time.Instant
+import android.util.Log
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 
+private const val TAG = "debugAPRS"
+
 class BalloonTrackService(
-    private val trackRepository: TrackRepository,
-    private val notificationSink: TrackNotificationSink? = null
+    private val trackRepository: TrackRepository
 ) {
+    private var notificationSink: TrackNotificationSink? = null
+
+    fun setNotificationSink(sink: TrackNotificationSink) {
+        this.notificationSink = sink
+    }
     private val _track = MutableStateFlow<List<BalloonTrackPoint>>(emptyList())
     val track: StateFlow<List<BalloonTrackPoint>> = _track.asStateFlow()
 
@@ -88,13 +95,25 @@ class BalloonTrackService(
         detectTrackBasedLanding(updated)
     }
 
+    fun clearTrack() {
+        Log.d(TAG, "clearTrack: clearing ${_track.value.size} points")
+        _track.value = emptyList()
+        _trackBasedLandingDetected.value = false
+    }
+
     fun insertGapFill(points: List<BalloonTrackPoint>) {
         if (points.isEmpty()) return
-        val current = _track.value.associateBy { it.timestamp.epochSecond }.toMutableMap()
-        for (point in points) {
-            current.putIfAbsent(point.timestamp.epochSecond, point)
+        Log.d(TAG, "insertGapFill: REPLACING track with ${points.size} gap fill points (was ${_track.value.size})")
+        points.firstOrNull()?.let { first ->
+            Log.d(TAG, "insertGapFill: first point lat=${first.latitude}, lon=${first.longitude}, alt=${first.altitude}")
         }
-        _track.value = current.values.sortedBy { it.timestamp }
+        points.lastOrNull()?.let { last ->
+            Log.d(TAG, "insertGapFill: last point lat=${last.latitude}, lon=${last.longitude}, alt=${last.altitude}")
+        }
+        // Replace track entirely with gap fill data (don't merge with potentially stale persisted data)
+        val deduped = points.associateBy { it.timestamp.epochSecond }
+        _track.value = deduped.values.sortedBy { it.timestamp }
+        Log.d(TAG, "insertGapFill: track now has ${_track.value.size} points")
     }
 
     private fun updateMotionMetrics(rawHorizontal: Double, rawVertical: Double, timestamp: Instant) {

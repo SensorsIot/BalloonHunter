@@ -1,6 +1,7 @@
 package com.balloonhunter.app.data.routing
 
 import android.content.Context
+import android.util.LruCache
 import com.balloonhunter.app.domain.models.GeoPoint
 import com.balloonhunter.app.domain.models.RouteData
 import com.balloonhunter.app.domain.models.TransportationMode
@@ -10,28 +11,85 @@ import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
+import java.time.Instant
 import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.random.Random
 
+private data class CacheKey(
+    val originLat: Double,
+    val originLon: Double,
+    val destLat: Double,
+    val destLon: Double,
+    val mode: TransportationMode
+) {
+    companion object {
+        // Round to ~100m precision to improve cache hits
+        fun create(origin: GeoPoint, dest: GeoPoint, mode: TransportationMode): CacheKey {
+            return CacheKey(
+                originLat = (origin.latitude * 1000).toLong() / 1000.0,
+                originLon = (origin.longitude * 1000).toLong() / 1000.0,
+                destLat = (dest.latitude * 1000).toLong() / 1000.0,
+                destLon = (dest.longitude * 1000).toLong() / 1000.0,
+                mode = mode
+            )
+        }
+    }
+}
+
+private data class CachedRoute(
+    val route: RouteData,
+    val timestamp: Instant
+)
+
 class RoutingService(private val context: Context) {
+    companion object {
+        private const val CACHE_SIZE = 20
+        private const val CACHE_TTL_SECONDS = 300L // 5 minutes
+    }
+
+    private val routeCache = LruCache<CacheKey, CachedRoute>(CACHE_SIZE)
+
     suspend fun calculateRoute(
         origin: GeoPoint,
         destination: GeoPoint,
         mode: TransportationMode
     ): RouteData = withContext(Dispatchers.IO) {
+        // Check cache first
+        val cacheKey = CacheKey.create(origin, destination, mode)
+        val cached = routeCache.get(cacheKey)
+        if (cached != null) {
+            val age = java.time.Duration.between(cached.timestamp, Instant.now()).seconds
+            if (age < CACHE_TTL_SECONDS) {
+                return@withContext cached.route
+            }
+            // Expired, remove from cache
+            routeCache.remove(cacheKey)
+        }
         val key = MapsKeyProvider.getApiKey(context)
         val apiMode = if (mode == TransportationMode.BIKE) "bicycling" else "driving"
-        val route = if (!key.isNullOrBlank()) {
+
+        // Try direct route
+        val directRoute = if (!key.isNullOrBlank()) {
             fetchRoute(origin, destination, apiMode, key)
         } else {
             null
         }
 
-        if (route != null) return@withContext route
+        if (directRoute != null) {
+            routeCache.put(cacheKey, CachedRoute(directRoute, Instant.now()))
+            return@withContext directRoute
+        }
 
-        val shifted = attemptShiftedRoutes(origin, destination, apiMode, key)
-        shifted ?: fallbackStraightLine(origin, destination, mode)
+        // Try shifted routes
+        val shiftedRoute = attemptShiftedRoutes(origin, destination, apiMode, key)
+        if (shiftedRoute != null) {
+            routeCache.put(cacheKey, CachedRoute(shiftedRoute, Instant.now()))
+            return@withContext shiftedRoute
+        }
+
+        // Fallback - not cached (straight line estimation)
+        fallbackStraightLine(origin, destination, mode)
     }
 
     private fun fallbackStraightLine(

@@ -10,11 +10,11 @@ import android.bluetooth.BluetoothGattDescriptor
 import android.bluetooth.BluetoothGattService
 import android.bluetooth.BluetoothManager
 import android.bluetooth.le.ScanCallback
-import android.bluetooth.le.ScanFilter
 import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
 import android.content.Context
-import android.os.ParcelUuid
+import android.content.Intent
+import android.util.Log
 import com.balloonhunter.app.domain.models.BLEConnectionState
 import com.balloonhunter.app.domain.models.PositionData
 import com.balloonhunter.app.domain.models.RadioChannelData
@@ -42,6 +42,7 @@ class BleService(
         val TX_UUID: UUID = UUID.fromString("53797268-614D-6972-6B6F-44616C6D6F7E")
         val RX_UUID: UUID = UUID.fromString("53797267-614D-6972-6B6F-44616C6D6F8E")
         private val CLIENT_CONFIG_UUID: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
+        private const val TAG = "BleService"
     }
 
     private val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
@@ -67,6 +68,11 @@ class BleService(
     val afcUpdates = MutableSharedFlow<AfcData>(extraBufferCapacity = 16)
 
     fun start() {
+        if (bluetoothAdapter?.isEnabled == false) {
+            val enableBtIntent = Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)
+            enableBtIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(enableBtIntent)
+        }
         startScanLoop()
         startStalenessChecks()
     }
@@ -78,12 +84,116 @@ class BleService(
         disconnectGatt()
     }
 
+    @SuppressLint("MissingPermission")
+    fun resetConnection() {
+        Log.d(TAG, "Resetting BLE connection")
+        stopScan()
+        disconnectGatt()
+        gatt?.let { g ->
+            try {
+                val refresh = g.javaClass.getMethod("refresh")
+                refresh.invoke(g)
+            } catch (_: Exception) { }
+        }
+        scope.launch {
+            delay(500)
+            startScanLoop()
+        }
+    }
+
+    @SuppressLint("MissingPermission")
     fun sendCommand(command: String) {
         val characteristic = txCharacteristic ?: return
-        val gatt = gatt ?: return
+        val g = gatt ?: return
         val payload = command.toByteArray(Charset.forName("US-ASCII"))
         characteristic.value = payload
-        gatt.writeCharacteristic(characteristic)
+        g.writeCharacteristic(characteristic)
+    }
+
+    fun requestSettings() {
+        sendCommand("o{?}o")
+    }
+
+    fun setFrequency(frequency: Double, probeType: String) {
+        val formatted = String.format("%.2f", frequency)
+        // Convert probe type name to command value: RS41=1, M20=2, M10=3, PILOT=4, DFM=5
+        val tipoValue = when (probeType.uppercase()) {
+            "RS41" -> 1
+            "M20" -> 2
+            "M10" -> 3
+            "PILOT" -> 4
+            "DFM" -> 5
+            else -> 1
+        }
+        sendCommand("o{f=$formatted/tipo=$tipoValue}o")
+    }
+
+    fun setMute(muted: Boolean) {
+        sendCommand("o{mute=${if (muted) 1 else 0}}o")
+    }
+
+    fun sendSettings(settings: Map<String, Any>) {
+        val pairs = settings.entries.joinToString("/") { "${it.key}=${it.value}" }
+        sendCommand("o{$pairs}o")
+    }
+
+    fun setOLEDPins(sda: Int, scl: Int, rst: Int) {
+        sendSettings(mapOf("oled_sda" to sda, "oled_scl" to scl, "oled_rst" to rst))
+    }
+
+    fun setLEDPin(pin: Int) {
+        sendSettings(mapOf("led_pout" to pin))
+    }
+
+    fun setBuzzerPin(pin: Int) {
+        sendSettings(mapOf("buz_pin" to pin))
+    }
+
+    fun setBatterySettings(pin: Int, minVoltage: Int, maxVoltage: Int, dischargeType: Int) {
+        sendSettings(mapOf(
+            "battery" to pin,
+            "vBatMin" to minVoltage,
+            "vBatMax" to maxVoltage,
+            "vBatType" to dischargeType
+        ))
+    }
+
+    fun setCallSign(callSign: String) {
+        sendSettings(mapOf("myCall" to callSign))
+    }
+
+    fun setRXBandwidth(rs41: Int?, m20: Int?, m10: Int?, pilot: Int?, dfm: Int?) {
+        val settings = mutableMapOf<String, Any>()
+        rs41?.let { settings["rs41.rxbw"] = it }
+        m20?.let { settings["m20.rxbw"] = it }
+        m10?.let { settings["m10.rxbw"] = it }
+        pilot?.let { settings["pilot.rxbw"] = it }
+        dfm?.let { settings["dfm.rxbw"] = it }
+        if (settings.isNotEmpty()) sendSettings(settings)
+    }
+
+    fun setLCDDriver(type: Int) {
+        sendSettings(mapOf("lcd" to type))
+    }
+
+    fun setLCDOn(enabled: Boolean) {
+        sendSettings(mapOf("lcdOn" to if (enabled) 1 else 0))
+    }
+
+    fun setBluetooth(enabled: Boolean) {
+        sendSettings(mapOf("blu" to if (enabled) 1 else 0))
+    }
+
+    fun setSerialBaudRate(rate: Int) {
+        sendSettings(mapOf("baud" to rate))
+    }
+
+    fun setSerialPort(port: Int) {
+        sendSettings(mapOf("com" to port))
+    }
+
+    fun setNameType(type: Int) {
+        sendSettings(mapOf("aprsName" to type))
     }
 
     @SuppressLint("MissingPermission")
@@ -107,13 +217,10 @@ class BleService(
     private fun startScan() {
         val adapter = bluetoothAdapter ?: return
         val scanner = adapter.bluetoothLeScanner ?: return
-        val filter = ScanFilter.Builder()
-            .setServiceUuid(ParcelUuid(SERVICE_UUID))
-            .build()
         val settings = ScanSettings.Builder()
             .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
             .build()
-        scanner.startScan(listOf(filter), settings, scanCallback)
+        scanner.startScan(null, settings, scanCallback)
     }
 
     @SuppressLint("MissingPermission")
@@ -121,24 +228,37 @@ class BleService(
         bluetoothAdapter?.bluetoothLeScanner?.stopScan(scanCallback)
     }
 
+    @Volatile
+    private var isConnecting = false
+
     private val scanCallback = object : ScanCallback() {
+        @SuppressLint("MissingPermission")
         override fun onScanResult(callbackType: Int, result: ScanResult) {
+            if (isConnecting || gatt != null) return
+
             val device = result.device ?: return
             val name = device.name ?: ""
-            if (name.contains("MySondy", ignoreCase = true)) {
+
+            if (name.contains("MySondyGO", ignoreCase = true)) {
+                Log.i(TAG, "Found MySondyGO: ${device.address}")
+                isConnecting = true
                 stopScan()
                 connect(device)
             }
+        }
+
+        override fun onScanFailed(errorCode: Int) {
+            Log.e(TAG, "Scan failed: $errorCode")
         }
     }
 
     @SuppressLint("MissingPermission")
     private fun connect(device: BluetoothDevice) {
-        disconnectGatt()
         gatt = device.connectGatt(context, false, gattCallback)
     }
 
     private fun disconnectGatt() {
+        isConnecting = false
         gatt?.close()
         gatt = null
         rxCharacteristic = null
@@ -153,15 +273,32 @@ class BleService(
         @SuppressLint("MissingPermission")
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
             if (newState == BluetoothGatt.STATE_CONNECTED) {
-                gatt.discoverServices()
+                Log.i(TAG, "Connected to MySondyGO")
+                gatt.requestMtu(512)
             } else {
+                Log.i(TAG, "Disconnected from MySondyGO")
                 disconnectGatt()
             }
         }
 
         @SuppressLint("MissingPermission")
+        override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
+            gatt.discoverServices()
+        }
+
+        @SuppressLint("MissingPermission")
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
-            val service: BluetoothGattService = gatt.getService(SERVICE_UUID) ?: return
+            if (status != BluetoothGatt.GATT_SUCCESS) {
+                Log.e(TAG, "Service discovery failed")
+                return
+            }
+
+            val service: BluetoothGattService? = gatt.getService(SERVICE_UUID)
+            if (service == null) {
+                Log.e(TAG, "MySondyGO service not found")
+                return
+            }
+
             rxCharacteristic = service.getCharacteristic(RX_UUID)
             txCharacteristic = service.getCharacteristic(TX_UUID)
             enableNotifications(gatt, rxCharacteristic)
@@ -169,23 +306,60 @@ class BleService(
 
         override fun onCharacteristicChanged(
             gatt: BluetoothGatt,
-            characteristic: BluetoothGattCharacteristic
+            characteristic: BluetoothGattCharacteristic,
+            value: ByteArray
         ) {
             if (characteristic.uuid != RX_UUID) return
-            val raw = characteristic.value?.toString(Charset.forName("US-ASCII")) ?: return
+            val raw = value.toString(Charset.forName("US-ASCII"))
             handleMessage(raw)
+        }
+
+        @Deprecated("Deprecated in Java")
+        override fun onCharacteristicChanged(
+            gatt: BluetoothGatt,
+            characteristic: BluetoothGattCharacteristic
+        ) {
+            val value = characteristic.value ?: return
+            if (characteristic.uuid != RX_UUID) return
+            val raw = value.toString(Charset.forName("US-ASCII"))
+            handleMessage(raw)
+        }
+
+        @SuppressLint("MissingPermission")
+        override fun onDescriptorWrite(gatt: BluetoothGatt?, descriptor: BluetoothGattDescriptor?, status: Int) {
+            if (status != BluetoothGatt.GATT_SUCCESS) {
+                Log.e(TAG, "Failed to enable notifications")
+            }
+        }
+
+        @SuppressLint("MissingPermission")
+        override fun onCharacteristicRead(
+            gatt: BluetoothGatt,
+            characteristic: BluetoothGattCharacteristic,
+            value: ByteArray,
+            status: Int
+        ) {
+            // Not used
         }
     }
 
     @SuppressLint("MissingPermission")
     private fun enableNotifications(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic?) {
-        characteristic ?: return
-        gatt.setCharacteristicNotification(characteristic, true)
-        val descriptor = characteristic.getDescriptor(CLIENT_CONFIG_UUID)
-        descriptor?.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
-        if (descriptor != null) {
-            gatt.writeDescriptor(descriptor)
+        if (characteristic == null) {
+            Log.e(TAG, "RX characteristic not found")
+            return
         }
+
+        gatt.setCharacteristicNotification(characteristic, true)
+
+        val descriptor = characteristic.getDescriptor(CLIENT_CONFIG_UUID)
+        if (descriptor == null) {
+            Log.e(TAG, "CCCD descriptor not found")
+            return
+        }
+
+        descriptor.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+        gatt.writeDescriptor(descriptor)
     }
 
     private fun handleMessage(raw: String) {
