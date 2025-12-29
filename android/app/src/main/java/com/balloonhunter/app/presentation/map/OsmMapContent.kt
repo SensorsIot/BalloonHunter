@@ -1,8 +1,6 @@
 package com.balloonhunter.app.presentation.map
 
-import android.content.Context
 import android.graphics.Color as AndroidColor
-import android.graphics.drawable.Drawable
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -11,8 +9,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.core.content.ContextCompat
-import com.balloonhunter.app.R
 import com.balloonhunter.app.domain.models.BalloonPhase
 import com.balloonhunter.app.domain.models.BalloonTrackPoint
 import com.balloonhunter.app.domain.models.GeoPoint
@@ -48,13 +44,14 @@ fun OsmMapContent(
 ) {
     val context = LocalContext.current
 
-    // Initialize osmdroid configuration
-    DisposableEffect(Unit) {
-        Configuration.getInstance().userAgentValue = context.packageName
-        onDispose { }
-    }
+    // Initialize osmdroid configuration BEFORE creating MapView
+    val mapView = remember(context) {
+        // Must configure before creating MapView
+        Configuration.getInstance().apply {
+            load(context, context.getSharedPreferences("osmdroid", android.content.Context.MODE_PRIVATE))
+            userAgentValue = context.packageName
+        }
 
-    val mapView = remember {
         MapView(context).apply {
             setTileSource(TileSourceFactory.MAPNIK)
             setMultiTouchControls(true)
