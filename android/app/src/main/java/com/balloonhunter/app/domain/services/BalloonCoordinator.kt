@@ -1,5 +1,6 @@
 package com.balloonhunter.app.domain.services
 
+import android.util.Log
 import com.balloonhunter.app.data.LocationService
 import com.balloonhunter.app.data.aprs.AprsService
 import com.balloonhunter.app.data.ble.BleService
@@ -97,15 +98,8 @@ class BalloonCoordinator(
             positionService.setStartupComplete(true)
         }
 
-        // Watch for persisted data from orchestrator
-        scope.launch {
-            startupOrchestrator.persistedTrack.collectLatest { track ->
-                if (track.isNotEmpty()) {
-                    trackService.loadPersisted(track)
-                }
-            }
-        }
-
+        // Watch for persisted landing history from orchestrator
+        // Note: Track is NOT persisted - it's fetched from SondeHub API on sonde change
         scope.launch {
             startupOrchestrator.persistedLandingHistory.collectLatest { history ->
                 if (history.isNotEmpty()) {
@@ -194,7 +188,7 @@ class BalloonCoordinator(
                 val distance = GeoUtils.haversineMeters(lastOrigin, location.point)
                 val age = java.time.Duration.between(lastRouteUpdate, now).seconds
                 if (distance > 100 && age > 60) {
-                    val route = routingService.calculateRoute(location.point, landing.point, _transportMode.value)
+                    val route = routingService.calculateRoute(location.point, landing.point, _transportMode.value, settingsStore.settings.value.mapProvider)
                     _route.value = route
                     lastRouteOrigin = location.point
                     lastRouteUpdate = now
@@ -260,6 +254,30 @@ class BalloonCoordinator(
 
     fun updateTransportMode(mode: TransportationMode) {
         _transportMode.value = mode
+        // Recalculate route with new mode
+        scope.launch(Dispatchers.IO) {
+            val location = locationService.location.value
+            val landing = currentLanding.value
+            Log.d("BalloonCoordinator", "updateTransportMode: mode=$mode location=$location landing=$landing")
+            if (location == null) {
+                Log.w("BalloonCoordinator", "updateTransportMode: no user location, cannot calculate route")
+                return@launch
+            }
+            if (landing == null) {
+                Log.w("BalloonCoordinator", "updateTransportMode: no landing point, cannot calculate route")
+                return@launch
+            }
+            val route = routingService.calculateRoute(
+                location.point,
+                landing.point,
+                mode,
+                settingsStore.settings.value.mapProvider
+            )
+            Log.d("BalloonCoordinator", "updateTransportMode: route calculated - distance=${route.distance}m, eta=${route.expectedTravelTime}s, points=${route.coordinates.size}")
+            _route.value = route
+            lastRouteOrigin = location.point
+            lastRouteUpdate = Instant.now()
+        }
     }
 
     fun updateSettings(settings: com.balloonhunter.app.domain.models.UserSettings) {
@@ -330,9 +348,9 @@ class BalloonCoordinator(
      */
     private fun handleSondeChange(newSondeName: String) {
         if (newSondeName.isBlank()) return
-        
+
         val oldName = currentSondeName
-        
+
         // Clear and fetch on any sonde change OR on first sonde (oldName is null)
         // This ensures persisted track from different sonde is cleared on startup
         if (oldName != newSondeName) {
@@ -341,26 +359,27 @@ class BalloonCoordinator(
             } else {
                 android.util.Log.i("BalloonCoordinator", "First sonde detected: $newSondeName - clearing any persisted data")
             }
-            
-            // Clear track data for new sonde
-            trackService.clearTrack()
-            
-            // Clear landing history for new sonde
-            landingService.clear()
-            
-            // Clear prediction data
+
+            // Update current sonde name FIRST to prevent race conditions
+            currentSondeName = newSondeName
+
+            // Clear prediction data (not suspend)
             predictionService.clear()
-            
+
             // Clear route
             _route.value = null
             lastRouteOrigin = null
             lastRouteUpdate = null
-            
-            // Update current sonde name
-            currentSondeName = newSondeName
-            
-            // Fetch historical track from SondeHub for new sonde (async)
+
+            // Clear all persisted data and fetch gap fill - must be sequential in IO context
             scope.launch(Dispatchers.IO) {
+                // Clear track from memory AND database
+                trackService.clearTrack()
+
+                // Clear landing history from memory AND database
+                landingService.clear()
+
+                // Then fetch historical track from SondeHub for new sonde
                 val historyPoints = aprsService.fetchGapFill(newSondeName)
                 if (historyPoints.isNotEmpty()) {
                     trackService.insertGapFill(historyPoints)
@@ -482,7 +501,7 @@ class BalloonCoordinator(
     override fun onLandingPointChanged(point: com.balloonhunter.app.domain.models.LandingPredictionPoint) {
         scope.launch(Dispatchers.IO) {
             val location = locationService.location.value ?: return@launch
-            val route = routingService.calculateRoute(location.point, point.point, _transportMode.value)
+            val route = routingService.calculateRoute(location.point, point.point, _transportMode.value, settingsStore.settings.value.mapProvider)
             _route.value = route
             lastRouteOrigin = location.point
             lastRouteUpdate = Instant.now()

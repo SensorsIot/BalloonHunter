@@ -1365,7 +1365,15 @@ It is not shown if the distance between the balloon and the Android phone is les
 A centered alert presented on the tracking map when SondeHub reports a serial different from the BLE telemetry name. The message reads “Use SondeHub serial T4630250 changed to V4210123?” with Confirm and Cancel buttons. Confirmation is required before APRS polling continues; the mapping is not persisted across app launches so the prompt reappears on the next run if needed.
 
 ### Data Panel
-The data panel is displayed at the bottom of the screen and provides real-time telemetry and calculated data. It is implemented using a `Grid`-based layout for a compact and organized presentation.
+The data panel is displayed at the bottom of the screen and provides real-time telemetry and calculated data. It is implemented using a Material 3 `Card` component with a `Column`-based layout for a compact and organized presentation.
+
+**Material 3 Implementation**:
+- Uses `Card` with `CardDefaults.cardColors()` for dynamic background color
+- Animated background via `animateColorAsState` (warning color when stale)
+- Dynamic `BorderStroke` for status indication (green/blue/red frame)
+- All colors use `MaterialTheme.colorScheme` semantic tokens
+- Icon sizes standardized to 24.dp per Material 3 guidelines
+- Spacing follows M3 4dp baseline grid (8dp between rows, 12dp padding)
 
 No calculations or business logic in views. Search for an appropriate service to place and publish them.
 
@@ -1445,74 +1453,98 @@ While the `MapViewModel` handles complex presentation logic for the map, simpler
 
 ## Settings
 
-The settings window is triggered by a button in the button bar. It enters the Sonde Settings window and, with a swipe down, saves the sonde settings (frequency and sonde type). If a mismatch with the current settings exists, transmits it to the device via BLE command ("o{f=frequency/tipo=probeType}o"),  and closes the window.  If no sonde is for command or transmitting telemetry, it displays a red warning text.
+The settings are accessed via a gear icon button in the button bar. Settings are presented in a **ModalBottomSheet** (Material 3 pattern for large content) with four tabs organized by function.
 
-### Sonde Settings Window
+### Settings Architecture
 
-When opened, this window displays the currently configured sonde type and frequency, allowing the user to change them. 
+The settings sheet uses a `ModalBottomSheet` with `skipPartiallyExpanded = true` for full-height display. A header row contains the title "Settings" and action buttons (Save/Close). Navigation between sections uses `ScrollableTabRow` with four tabs.
 
-#### Keyboard-free interface: 
+### Tab Organization
 
- \- **5 Independent Wheel Pickers**: Each digit of the frequency (XXX.XX MHz) has its own wheel picker
+| Tab | Name | Purpose |
+|-----|------|---------|
+| 0 | **Freq** | Sonde type and frequency configuration (requires BLE connection) |
+| 1 | **App** | Map display, navigation app, BLE reset |
+| 2 | **Balloon** | Prediction parameters (Station ID, burst altitude, rates) |
+| 3 | **Device** | AFC tune and advanced MySondyGo device settings |
 
- \- **Large Font Display**: Each digit displays in 40pt bold font for clear visibility
+### Tab 0: Frequency Settings
 
- \- **Horizontal Layout**: The 5 pickers are arranged horizontally with "MHz" label at the end
+When MySondyGO is not connected, displays error text "MySondyGO not connected". When connected:
 
- \- **Fixed Height**: Each picker has a 180pt height with clipped overflow
+#### Sonde Type Selection
+- Uses `SingleChoiceSegmentedButtonRow` for exclusive selection
+- Options: RS41, M20, M10, PILOT, DFM
+- Selection updates device via BLE command
 
- \- **Restricted Range**: Only 400-406 MHz frequencies are allowed
+#### Frequency Picker (Keyboard-free interface)
 
- \- **Real-time Validation**: Invalid digits show in gray, valid ones in primary color
+- **5 Independent Digit Pickers**: Each digit of the frequency (XXX.XX MHz) has its own picker
+- **Large Font Display**: Each digit displays in headline style for clear visibility
+- **Horizontal Layout**: The 5 pickers are arranged horizontally with "MHz" label at the end
+- **Restricted Range**: Only 400-406 MHz frequencies are allowed
+- **Real-time Validation**: Invalid digits show in gray, valid ones in primary color
+- **Cascading Adjustments**: When a digit changes, dependent positions auto-adjust
 
- \- **Cascading Adjustments**: When a digit changes, dependent positions auto-adjust
-
- \- **Reversion Protection**: Invalid selections automatically revert to previous valid value
-
-**Navigation**: The main settings screen shows three buttons evenly distributed across the top toolbar: "Prediction Settings", "Device Settings", and "Tune". These provide access to the secondary settings views.
-
-**Revert Button**: A "Revert" button is located below the frequency selector in the main content area as a full-width button. This button resets the values to the values present when the screen was entered.
+**Revert Button**: Full-width outlined button resets values to initial state when screen was opened.
 
 #### Sonde types (enum)
 
-1 RS41
+1 RS41, 2 M20, 3 M10, 4 PILOT, 5 DFM
 
-2 M20
+The human readable text (e.g. RS41) is displayed. The single number (e.g. 1) is transferred in BLE commands.
 
-3 M10
+### Tab 1: App Settings
 
-4 PILOT
+Contains application-level preferences using Material 3 SegmentedButton components for selections:
 
-5 DFM
+#### Map Display
+- `SingleChoiceSegmentedButtonRow` with two options: "Google Maps" | "OpenStreetMap"
+- Helper text shows "No API key needed" for OSM, "Requires API key" for Google Maps
 
-The human readable text (e.g. RS41) should be used in the display. However, the single number (e.g. 1\) has to be transferred in the command
+#### Navigation App
+- `SingleChoiceSegmentedButtonRow` with three options: "Google" | "OsmAnd" | "Organic"
+- Controls which external app receives navigation intents
 
-### Secondary Settings Views
+#### Bluetooth Reset
+- `OutlinedButton` (full-width) labeled "Reset BLE Connection"
+- Triggers `viewModel.resetBle()` to reconnect to MySondyGO device
+- Helper text: "Reconnect to MySondyGO device"
 
-The following views are accessed from the top navigation bar of the main settings screen. Each is presented as a separate sub-view.
+### Tab 2: Balloon Settings
 
-#### Prediction Settings
-* **Purpose**: Allows the user to configure the parameters used for flight predictions.
-* **Controls**: Provides fields for "Burst Altitude", "Ascent Rate", "Descent Rate", and "Station ID".
-* **Navigation**: Accessed via "Prediction Settings" button in the top toolbar. Three buttons ("Prediction Settings", "Device Settings", "Tune") are arranged evenly across the toolbar using Spacer elements.
-* **Saving**: This view has a "Done" button. When tapped or when the view disappears (via onDisappear), the values are saved to the UserSettings object via PersistenceService, and the user is returned to the main settings screen.
+Contains prediction parameters stored locally via PersistenceService (never transmitted to device):
 
-#### Tune View
-* **Purpose**: Provides an interface for the AFC (Automatic Frequency Control) tune function.
-* **Controls**: Displays the live AFC value, a "Transfer" button to copy the value, and an input field with a "Save" button to apply the new frequency correction.
-* **Navigation**: Accessed via "Tune" button in the top toolbar, evenly spaced with other buttons. Has a "Done" button that returns the user to the main settings screen (selectedTab = 0).
-* **Saving**: The "Save" button within the view is used to apply the tune value immediately to the device. Device settings are not persisted (stored in MySondyGo device).
+| Field | Type | Validation |
+|-------|------|------------|
+| Station ID | Text | Any string |
+| Burst Altitude (m) | Number | Must be positive number |
+| Ascent Rate (m/s) | Decimal | Must be positive number |
+| Descent Rate (m/s) | Decimal | Must be positive number |
 
-#### Device Settings
+**Input Validation**: Fields use `isError` and `supportingText` to show validation errors. Invalid inputs display "Enter a positive number" helper text with error styling.
 
-**Access**: Triggered by the "Device Settings" button in the main settings toolbar.
+**Saving**: "Save" button appears when on App or Balloon tabs. Saves all settings and dismisses sheet.
 
-**Startup**: The device settings have to be read from RadioSondyGo via BLE command and the cache has to be updated
+### Tab 3: Device Settings
 
-**Layout**: Opens a new sheet with four tabs: "Pins", "Battery", "Radio", and "Other" 
+Contains advanced MySondyGO device configuration. Requires BLE connection.
 
-**Done**: "Done" button  saves the changed settings to RadioSondyGo via BLE and returns to main settings.
+#### Tune Section
+- Displays live AFC (Automatic Frequency Control) value from device
+- "Transfer" button copies smoothed AFC value to input field
+- "Save Offset" button applies correction to device
+- "Reset" button (destructive styling) clears offset to 0
 
+#### Advanced Settings (Expandable)
+Collapsible section with sub-tabs for hardware configuration:
+
+| Sub-Tab | Settings |
+|---------|----------|
+| **Pins** | OLED SDA/SCL/RST, LED Pin, Buzzer Pin |
+| **Battery** | Battery pin, min/max voltage, battery type (Linear/Sigmoidal/Asigmoidal) |
+| **Radio** | Callsign, bandwidth settings per sonde type |
+| **Others** | LCD status, Bluetooth, serial settings, APRS name display |
 
 ### Tab Structure & Contents in Settings
 

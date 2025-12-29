@@ -88,8 +88,7 @@ object AppModule {
 
     @Provides
     @Singleton
-    fun provideBalloonTrackService(trackRepository: TrackRepository): BalloonTrackService =
-        BalloonTrackService(trackRepository)
+    fun provideBalloonTrackService(): BalloonTrackService = BalloonTrackService()
 
     @Provides
     @Singleton
@@ -108,14 +107,12 @@ object AppModule {
         bleService: BleService,
         aprsService: AprsService,
         locationService: LocationService,
-        trackRepository: TrackRepository,
         landingHistoryRepository: LandingHistoryRepository
     ): StartupOrchestrator = StartupOrchestrator(
         scope = scope,
         bleService = bleService,
         aprsService = aprsService,
         locationService = locationService,
-        trackRepository = trackRepository,
         landingHistoryRepository = landingHistoryRepository
     )
 

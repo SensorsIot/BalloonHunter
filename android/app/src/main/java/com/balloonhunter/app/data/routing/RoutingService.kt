@@ -1,8 +1,10 @@
 package com.balloonhunter.app.data.routing
 
 import android.content.Context
+import android.util.Log
 import android.util.LruCache
 import com.balloonhunter.app.domain.models.GeoPoint
+import com.balloonhunter.app.domain.models.MapProvider
 import com.balloonhunter.app.domain.models.RouteData
 import com.balloonhunter.app.domain.models.TransportationMode
 import com.balloonhunter.app.domain.services.GeoUtils
@@ -16,22 +18,25 @@ import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.random.Random
 
+private const val TAG = "RoutingService"
+
 private data class CacheKey(
     val originLat: Double,
     val originLon: Double,
     val destLat: Double,
     val destLon: Double,
-    val mode: TransportationMode
+    val mode: TransportationMode,
+    val mapProvider: MapProvider
 ) {
     companion object {
-        // Round to ~100m precision to improve cache hits
-        fun create(origin: GeoPoint, dest: GeoPoint, mode: TransportationMode): CacheKey {
+        fun create(origin: GeoPoint, dest: GeoPoint, mode: TransportationMode, mapProvider: MapProvider): CacheKey {
             return CacheKey(
                 originLat = (origin.latitude * 1000).toLong() / 1000.0,
                 originLon = (origin.longitude * 1000).toLong() / 1000.0,
                 destLat = (dest.latitude * 1000).toLong() / 1000.0,
                 destLon = (dest.longitude * 1000).toLong() / 1000.0,
-                mode = mode
+                mode = mode,
+                mapProvider = mapProvider
             )
         }
     }
@@ -46,6 +51,7 @@ class RoutingService(private val context: Context) {
     companion object {
         private const val CACHE_SIZE = 20
         private const val CACHE_TTL_SECONDS = 300L // 5 minutes
+        private const val OSRM_BASE_URL = "https://router.project-osrm.org/route/v1"
     }
 
     private val routeCache = LruCache<CacheKey, CachedRoute>(CACHE_SIZE)
@@ -53,43 +59,125 @@ class RoutingService(private val context: Context) {
     suspend fun calculateRoute(
         origin: GeoPoint,
         destination: GeoPoint,
-        mode: TransportationMode
+        mode: TransportationMode,
+        mapProvider: MapProvider = MapProvider.OSM
     ): RouteData = withContext(Dispatchers.IO) {
-        // Check cache first
-        val cacheKey = CacheKey.create(origin, destination, mode)
+        val cacheKey = CacheKey.create(origin, destination, mode, mapProvider)
         val cached = routeCache.get(cacheKey)
         if (cached != null) {
             val age = java.time.Duration.between(cached.timestamp, Instant.now()).seconds
             if (age < CACHE_TTL_SECONDS) {
+                Log.d(TAG, "Cache hit for route")
                 return@withContext cached.route
             }
-            // Expired, remove from cache
             routeCache.remove(cacheKey)
         }
+
+        Log.d(TAG, "calculateRoute: provider=$mapProvider mode=$mode origin=$origin dest=$destination")
+        val route = when (mapProvider) {
+            MapProvider.OSM -> calculateOsrmRoute(origin, destination, mode)
+            MapProvider.GOOGLE_MAPS -> calculateGoogleRoute(origin, destination, mode)
+        }
+        Log.d(TAG, "calculateRoute: route result = ${route?.let { "distance=${it.distance}m, eta=${it.expectedTravelTime}s, points=${it.coordinates.size}" } ?: "NULL"}")
+
+        if (route != null) {
+            routeCache.put(cacheKey, CachedRoute(route, Instant.now()))
+            return@withContext route
+        }
+
+        Log.d(TAG, "Falling back to straight line for mode=$mode")
+        fallbackStraightLine(origin, destination, mode)
+    }
+
+    private fun calculateOsrmRoute(
+        origin: GeoPoint,
+        destination: GeoPoint,
+        mode: TransportationMode
+    ): RouteData? {
+        // OSRM public server only supports car routing reliably
+        val profile = "driving"
+        val coordinates = "${origin.longitude},${origin.latitude};${destination.longitude},${destination.latitude}"
+        val url = URL("$OSRM_BASE_URL/$profile/$coordinates?overview=full&geometries=geojson")
+
+        Log.d(TAG, "OSRM request: mode=$mode profile=$profile url=$url")
+
+        val connection = url.openConnection() as HttpURLConnection
+        connection.connectTimeout = 10000
+        connection.readTimeout = 10000
+        connection.setRequestProperty("User-Agent", "BalloonHunter/1.0")
+
+        return try {
+            val responseCode = connection.responseCode
+            if (responseCode !in 200..299) {
+                Log.w(TAG, "OSRM error: $responseCode for profile=$profile")
+                return null
+            }
+            val body = connection.inputStream.bufferedReader().readText()
+            Log.d(TAG, "OSRM response for profile=$profile: ${body.take(200)}...")
+            parseOsrmRoute(JSONObject(body), mode)
+        } catch (e: Exception) {
+            Log.e(TAG, "OSRM exception for profile=$profile: ${e.message}")
+            null
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    private fun parseOsrmRoute(json: JSONObject, mode: TransportationMode): RouteData? {
+        val code = json.optString("code")
+        if (code != "Ok") {
+            Log.w(TAG, "OSRM response code: $code")
+            return null
+        }
+
+        val routes = json.optJSONArray("routes") ?: return null
+        if (routes.length() == 0) return null
+
+        val route = routes.optJSONObject(0) ?: return null
+        val geometry = route.optJSONObject("geometry") ?: return null
+        val coordinatesArray = geometry.optJSONArray("coordinates") ?: return null
+
+        val coordinates = mutableListOf<GeoPoint>()
+        for (i in 0 until coordinatesArray.length()) {
+            val coord = coordinatesArray.optJSONArray(i) ?: continue
+            val lon = coord.optDouble(0)
+            val lat = coord.optDouble(1)
+            coordinates.add(GeoPoint(lat, lon))
+        }
+
+        val distance = route.optDouble("distance", 0.0)
+        val duration = route.optDouble("duration", 0.0)
+
+        Log.d(TAG, "OSRM route: ${coordinates.size} points, ${distance.toInt()}m, ${duration.toInt()}s")
+
+        return RouteData(
+            coordinates = coordinates,
+            distance = distance,
+            expectedTravelTime = duration,
+            transportType = TransportationMode.CAR  // OSRM only does car routing
+        )
+    }
+
+    private fun calculateGoogleRoute(
+        origin: GeoPoint,
+        destination: GeoPoint,
+        mode: TransportationMode
+    ): RouteData? {
         val key = MapsKeyProvider.getApiKey(context)
         val apiMode = if (mode == TransportationMode.BIKE) "bicycling" else "driving"
 
-        // Try direct route
         val directRoute = if (!key.isNullOrBlank()) {
-            fetchRoute(origin, destination, apiMode, key)
+            fetchGoogleRoute(origin, destination, apiMode, key)
         } else {
+            Log.w(TAG, "No Google API key, cannot use Google routing")
             null
         }
 
         if (directRoute != null) {
-            routeCache.put(cacheKey, CachedRoute(directRoute, Instant.now()))
-            return@withContext directRoute
+            return directRoute
         }
 
-        // Try shifted routes
-        val shiftedRoute = attemptShiftedRoutes(origin, destination, apiMode, key)
-        if (shiftedRoute != null) {
-            routeCache.put(cacheKey, CachedRoute(shiftedRoute, Instant.now()))
-            return@withContext shiftedRoute
-        }
-
-        // Fallback - not cached (straight line estimation)
-        fallbackStraightLine(origin, destination, mode)
+        return attemptShiftedGoogleRoutes(origin, destination, apiMode, key)
     }
 
     private fun fallbackStraightLine(
@@ -108,7 +196,7 @@ class RoutingService(private val context: Context) {
         )
     }
 
-    private fun attemptShiftedRoutes(
+    private fun attemptShiftedGoogleRoutes(
         origin: GeoPoint,
         destination: GeoPoint,
         apiMode: String,
@@ -117,7 +205,7 @@ class RoutingService(private val context: Context) {
         if (key.isNullOrBlank()) return null
         repeat(10) {
             val shifted = shiftDestination(destination, 500.0)
-            val route = fetchRoute(origin, shifted, apiMode, key)
+            val route = fetchGoogleRoute(origin, shifted, apiMode, key)
             if (route != null) return route
         }
         val radii = listOf(300.0, 600.0, 1200.0)
@@ -125,7 +213,7 @@ class RoutingService(private val context: Context) {
         for (radius in radii) {
             for (angle in angles) {
                 val shifted = shiftDestination(destination, radius, angle.toDouble())
-                val route = fetchRoute(origin, shifted, apiMode, key)
+                val route = fetchGoogleRoute(origin, shifted, apiMode, key)
                 if (route != null) return route
             }
         }
@@ -142,7 +230,7 @@ class RoutingService(private val context: Context) {
         )
     }
 
-    private fun fetchRoute(
+    private fun fetchGoogleRoute(
         origin: GeoPoint,
         destination: GeoPoint,
         apiMode: String,
@@ -158,7 +246,7 @@ class RoutingService(private val context: Context) {
         return try {
             if (connection.responseCode !in 200..299) return null
             val body = connection.inputStream.bufferedReader().readText()
-            parseRoute(JSONObject(body), apiMode)
+            parseGoogleRoute(JSONObject(body), apiMode)
         } catch (_: Exception) {
             null
         } finally {
@@ -166,7 +254,7 @@ class RoutingService(private val context: Context) {
         }
     }
 
-    private fun parseRoute(json: JSONObject, apiMode: String): RouteData? {
+    private fun parseGoogleRoute(json: JSONObject, apiMode: String): RouteData? {
         val routes = json.optJSONArray("routes") ?: return null
         if (routes.length() == 0) return null
         val route = routes.optJSONObject(0) ?: return null
@@ -235,3 +323,5 @@ object MapsKeyProvider {
         }
     }
 }
+
+

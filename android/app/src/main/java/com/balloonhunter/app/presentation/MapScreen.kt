@@ -14,17 +14,24 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Directions
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.VolumeUp
-import androidx.compose.material.icons.filled.VolumeOff
-import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.BluetoothSearching
+import androidx.compose.material.icons.filled.Directions
+import androidx.compose.material.icons.filled.DirectionsCar
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.MyLocation
+import androidx.compose.material.icons.filled.PedalBike
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.VolumeOff
+import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
@@ -38,19 +45,33 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.balloonhunter.app.domain.models.BalloonPhase
 import com.balloonhunter.app.domain.models.CameraUpdate
@@ -129,8 +150,17 @@ fun MapScreen(viewModel: MapViewModel = hiltViewModel()) {
         permissionsState.launchMultiplePermissionRequest()
     }
 
-    // Handle camera updates from ViewModel
-    LaunchedEffect(cameraUpdate) {
+    // Handle camera updates from ViewModel - only for Google Maps
+    // CameraUpdateFactory requires Google Maps to be initialized
+    LaunchedEffect(cameraUpdate, userSettings.mapProvider) {
+        if (userSettings.mapProvider == MapProvider.OSM) {
+            // OSM handles camera internally, just consume the update
+            if (cameraUpdate != null) {
+                viewModel.consumeCameraUpdate()
+            }
+            return@LaunchedEffect
+        }
+
         when (val update = cameraUpdate) {
             is CameraUpdate.FitBounds -> {
                 val bounds = buildBounds(update.points)
@@ -157,10 +187,17 @@ fun MapScreen(viewModel: MapViewModel = hiltViewModel()) {
         }
     }
 
+    // Track fit-all trigger for OSM
+    var osmFitAllTrigger by remember { mutableStateOf(0) }
+
     // Trigger fit-all when showAll is toggled
     LaunchedEffect(showAll) {
         if (showAll) {
-            viewModel.requestFitAll()
+            if (userSettings.mapProvider == MapProvider.OSM) {
+                osmFitAllTrigger++
+            } else {
+                viewModel.requestFitAll()
+            }
             viewModel.toggleShowAll()
         }
     }
@@ -173,6 +210,7 @@ fun MapScreen(viewModel: MapViewModel = hiltViewModel()) {
             transportMode = transportMode,
             headingMode = headingMode,
             isMuted = isMuted,
+            mapProvider = userSettings.mapProvider,
             onHeadingToggle = { viewModel.toggleHeading() },
             onShowAll = { viewModel.toggleShowAll() },
             onTransportMode = { viewModel.setTransportMode(it) },
@@ -193,54 +231,63 @@ fun MapScreen(viewModel: MapViewModel = hiltViewModel()) {
                             val mapIntent = Intent(Intent.ACTION_VIEW, gmmIntentUri)
                             mapIntent.setPackage("com.google.android.apps.maps")
 
-                            try {
-                                if (mapIntent.resolveActivity(context.packageManager) != null) {
-                                    context.startActivity(mapIntent)
-                                } else {
-                                    val fallbackUri = Uri.parse("geo:$lat,$lon?q=$lat,$lon(Landing)")
-                                    context.startActivity(Intent(Intent.ACTION_VIEW, fallbackUri))
-                                }
-                            } catch (e: Exception) {
-                                val browserUri = Uri.parse("https://www.google.com/maps/dir/?api=1&destination=$lat,$lon&travelmode=${if (isBike) "bicycling" else "driving"}")
-                                context.startActivity(Intent(Intent.ACTION_VIEW, browserUri))
+                            if (mapIntent.resolveActivity(context.packageManager) != null) {
+                                context.startActivity(mapIntent)
+                            } else {
+                                android.widget.Toast.makeText(
+                                    context,
+                                    "Google Maps not installed. Change navigation app in settings.",
+                                    android.widget.Toast.LENGTH_LONG
+                                ).show()
+                                showSettingsDialog = true
                             }
                         }
-                        NavigationProvider.OSM -> {
-                            // Try OsmAnd, then Organic Maps, then geo URI, then browser
-                            val osmandUri = Uri.parse("osmand.navigation:q=$lat,$lon")
-                            val osmandIntent = Intent(Intent.ACTION_VIEW, osmandUri)
-                            val organicUri = Uri.parse("om://route?daddr=$lat,$lon")
-                            val organicIntent = Intent(Intent.ACTION_VIEW, organicUri)
-
-                            try {
-                                when {
-                                    osmandIntent.resolveActivity(context.packageManager) != null -> {
-                                        context.startActivity(osmandIntent)
-                                    }
-                                    organicIntent.resolveActivity(context.packageManager) != null -> {
-                                        context.startActivity(organicIntent)
-                                    }
-                                    else -> {
-                                        val geoUri = Uri.parse("geo:$lat,$lon?q=$lat,$lon(Landing)")
-                                        val geoIntent = Intent(Intent.ACTION_VIEW, geoUri)
-                                        if (geoIntent.resolveActivity(context.packageManager) != null) {
-                                            context.startActivity(geoIntent)
-                                        } else {
-                                            val browserUri = Uri.parse("https://www.openstreetmap.org/directions?from=&to=$lat,$lon&engine=fossgis_osrm_${if (isBike) "bike" else "car"}")
-                                            context.startActivity(Intent(Intent.ACTION_VIEW, browserUri))
-                                        }
-                                    }
-                                }
+                        NavigationProvider.OSMAND -> {
+                            // Check if OsmAnd is installed (free or plus version)
+                            val osmandInstalled = try {
+                                context.packageManager.getPackageInfo("net.osmand", 0)
+                                true
                             } catch (e: Exception) {
-                                val browserUri = Uri.parse("https://www.openstreetmap.org/directions?from=&to=$lat,$lon")
-                                context.startActivity(Intent(Intent.ACTION_VIEW, browserUri))
+                                try {
+                                    context.packageManager.getPackageInfo("net.osmand.plus", 0)
+                                    true
+                                } catch (e: Exception) { false }
+                            }
+
+                            if (osmandInstalled) {
+                                val osmandUri = Uri.parse("osmand.navigation:q=$lat,$lon")
+                                context.startActivity(Intent(Intent.ACTION_VIEW, osmandUri))
+                            } else {
+                                android.widget.Toast.makeText(
+                                    context,
+                                    "OsmAnd not installed. Change navigation app in settings.",
+                                    android.widget.Toast.LENGTH_LONG
+                                ).show()
+                                showSettingsDialog = true
+                            }
+                        }
+                        NavigationProvider.ORGANIC_MAPS -> {
+                            val organicInstalled = try {
+                                context.packageManager.getPackageInfo("app.organicmaps", 0)
+                                true
+                            } catch (e: Exception) { false }
+
+                            if (organicInstalled) {
+                                val organicUri = Uri.parse("om://route?daddr=$lat,$lon")
+                                context.startActivity(Intent(Intent.ACTION_VIEW, organicUri))
+                            } else {
+                                android.widget.Toast.makeText(
+                                    context,
+                                    "Organic Maps not installed. Change navigation app in settings.",
+                                    android.widget.Toast.LENGTH_LONG
+                                ).show()
+                                showSettingsDialog = true
                             }
                         }
                     }
                 }
             },
             navigationEnabled = landing != null,
-            onResetBle = { viewModel.resetBle() },
             onSettings = { showSettingsDialog = true }
         )
 
@@ -250,6 +297,10 @@ fun MapScreen(viewModel: MapViewModel = hiltViewModel()) {
                 userSettings = userSettings,
                 onSaveUserSettings = { newSettings ->
                     viewModel.updateSettings(newSettings)
+                    // Reset to car mode when switching to OSM (bike not supported)
+                    if (newSettings.mapProvider == MapProvider.OSM && transportMode == TransportationMode.BIKE) {
+                        viewModel.setTransportMode(TransportationMode.CAR)
+                    }
                 },
                 onDismiss = { showSettingsDialog = false }
             )
@@ -319,6 +370,7 @@ fun MapScreen(viewModel: MapViewModel = hiltViewModel()) {
                         landingHistory = landingHistoryPoints,
                         route = route,
                         routeVisible = routeVisible,
+                        fitAllTrigger = osmFitAllTrigger,
                         onMapMoved = { _, _, _ -> }
                     )
                 }
@@ -334,13 +386,13 @@ private fun TopControls(
     transportMode: TransportationMode,
     headingMode: Boolean,
     isMuted: Boolean,
+    mapProvider: MapProvider,
     onHeadingToggle: () -> Unit,
     onShowAll: () -> Unit,
     onTransportMode: (TransportationMode) -> Unit,
     onMuteToggle: () -> Unit,
     onNavigate: () -> Unit,
     navigationEnabled: Boolean,
-    onResetBle: () -> Unit,
     onSettings: () -> Unit
 ) {
     Row(
@@ -365,15 +417,22 @@ private fun TopControls(
             )
         }
 
-        IconButton(onClick = onResetBle) {
-            Icon(Icons.Default.BluetoothSearching, contentDescription = "Reset BLE")
+        IconButton(onClick = { onTransportMode(TransportationMode.CAR) }) {
+            Icon(
+                Icons.Default.DirectionsCar,
+                contentDescription = "Car",
+                tint = if (transportMode == TransportationMode.CAR) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f)
+            )
         }
-
-        TextButton(onClick = { onTransportMode(TransportationMode.CAR) }) {
-            Text("Car", color = if (transportMode == TransportationMode.CAR) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface)
-        }
-        TextButton(onClick = { onTransportMode(TransportationMode.BIKE) }) {
-            Text("Bike", color = if (transportMode == TransportationMode.BIKE) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface)
+        // Bike routing only available with Google Maps (OSRM doesn't support cycling)
+        if (mapProvider == MapProvider.GOOGLE_MAPS) {
+            IconButton(onClick = { onTransportMode(TransportationMode.BIKE) }) {
+                Icon(
+                    Icons.Default.PedalBike,
+                    contentDescription = "Bike",
+                    tint = if (transportMode == TransportationMode.BIKE) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f)
+                )
+            }
         }
 
         Button(onClick = onShowAll) { Text("All") }
@@ -407,40 +466,197 @@ private fun UnifiedSettingsDialog(
     onSaveUserSettings: (UserSettings) -> Unit,
     onDismiss: () -> Unit
 ) {
-    // 0 = App, 1 = Device
+    // 0 = Frequency, 1 = App, 2 = Balloon, 3 = Device
     var selectedMainTab by remember { mutableStateOf(0) }
 
-    // App settings state
+    // Balloon settings state
     var stationId by remember(userSettings) { mutableStateOf(userSettings.stationId) }
     var burstAltitude by remember(userSettings) { mutableStateOf(userSettings.burstAltitude.toString()) }
     var ascentRate by remember(userSettings) { mutableStateOf(userSettings.ascentRate.toString()) }
     var descentRate by remember(userSettings) { mutableStateOf(userSettings.descentRate.toString()) }
+
+    // App settings state
     var navigationProvider by remember(userSettings) { mutableStateOf(userSettings.navigationProvider) }
     var mapProvider by remember(userSettings) { mutableStateOf(userSettings.mapProvider) }
 
-    AlertDialog(
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val scope = rememberCoroutineScope()
+
+    fun saveAndClose() {
+        val newSettings = userSettings.copy(
+            stationId = stationId,
+            burstAltitude = burstAltitude.toDoubleOrNull() ?: userSettings.burstAltitude,
+            ascentRate = ascentRate.toDoubleOrNull() ?: userSettings.ascentRate,
+            descentRate = descentRate.toDoubleOrNull() ?: userSettings.descentRate,
+            navigationProvider = navigationProvider,
+            mapProvider = mapProvider
+        )
+        onSaveUserSettings(newSettings)
+        scope.launch { sheetState.hide() }.invokeOnCompletion {
+            if (!sheetState.isVisible) onDismiss()
+        }
+    }
+
+    ModalBottomSheet(
         onDismissRequest = onDismiss,
-        title = { Text("Settings") },
-        text = {
-            Column(modifier = Modifier.fillMaxWidth()) {
-                TabRow(selectedTabIndex = selectedMainTab) {
-                    Tab(
-                        selected = selectedMainTab == 0,
-                        onClick = { selectedMainTab = 0 },
-                        text = { Text("App") }
-                    )
-                    Tab(
-                        selected = selectedMainTab == 1,
-                        onClick = { selectedMainTab = 1 },
-                        text = { Text("Device") }
-                    )
+        sheetState = sheetState
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp)
+                .padding(bottom = 24.dp)
+        ) {
+            // Header with title and action buttons
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("Settings", style = MaterialTheme.typography.titleLarge)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (selectedMainTab == 1 || selectedMainTab == 2) {
+                        TextButton(onClick = { saveAndClose() }) {
+                            Text("Save")
+                        }
+                    }
+                    TextButton(onClick = {
+                        scope.launch { sheetState.hide() }.invokeOnCompletion {
+                            if (!sheetState.isVisible) onDismiss()
+                        }
+                    }) {
+                        Text("Close")
+                    }
                 }
+            }
 
-                Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(8.dp))
 
-                when (selectedMainTab) {
+            // Tab Row
+            ScrollableTabRow(
+                selectedTabIndex = selectedMainTab,
+                edgePadding = 0.dp
+            ) {
+                Tab(
+                    selected = selectedMainTab == 0,
+                    onClick = { selectedMainTab = 0 },
+                    text = { Text("Freq") }
+                )
+                Tab(
+                    selected = selectedMainTab == 1,
+                    onClick = { selectedMainTab = 1 },
+                    text = { Text("App") }
+                )
+                Tab(
+                    selected = selectedMainTab == 2,
+                    onClick = { selectedMainTab = 2 },
+                    text = { Text("Balloon") }
+                )
+                Tab(
+                    selected = selectedMainTab == 3,
+                    onClick = { selectedMainTab = 3 },
+                    text = { Text("Device") }
+                )
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            when (selectedMainTab) {
                     0 -> {
-                        // App settings
+                        // Frequency settings - Sonde type & frequency
+                        FrequencySettingsTab(viewModel = viewModel)
+                    }
+                    1 -> {
+                        // App settings - Navigation, Map, BLE reset
+                        Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                            // Map Display - Segmented buttons
+                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text("Map Display", style = MaterialTheme.typography.labelMedium)
+                                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                                    SegmentedButton(
+                                        selected = mapProvider == MapProvider.GOOGLE_MAPS,
+                                        onClick = { mapProvider = MapProvider.GOOGLE_MAPS },
+                                        shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2)
+                                    ) {
+                                        Text("Google Maps")
+                                    }
+                                    SegmentedButton(
+                                        selected = mapProvider == MapProvider.OSM,
+                                        onClick = { mapProvider = MapProvider.OSM },
+                                        shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2)
+                                    ) {
+                                        Text("OpenStreetMap")
+                                    }
+                                }
+                                Text(
+                                    text = if (mapProvider == MapProvider.OSM) "No API key needed" else "Requires API key",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+
+                            // Navigation App - Segmented buttons (3 options)
+                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text("Navigation App", style = MaterialTheme.typography.labelMedium)
+                                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                                    SegmentedButton(
+                                        selected = navigationProvider == NavigationProvider.GOOGLE_MAPS,
+                                        onClick = { navigationProvider = NavigationProvider.GOOGLE_MAPS },
+                                        shape = SegmentedButtonDefaults.itemShape(index = 0, count = 3)
+                                    ) {
+                                        Text("Google", maxLines = 1)
+                                    }
+                                    SegmentedButton(
+                                        selected = navigationProvider == NavigationProvider.OSMAND,
+                                        onClick = { navigationProvider = NavigationProvider.OSMAND },
+                                        shape = SegmentedButtonDefaults.itemShape(index = 1, count = 3)
+                                    ) {
+                                        Text("OsmAnd", maxLines = 1)
+                                    }
+                                    SegmentedButton(
+                                        selected = navigationProvider == NavigationProvider.ORGANIC_MAPS,
+                                        onClick = { navigationProvider = NavigationProvider.ORGANIC_MAPS },
+                                        shape = SegmentedButtonDefaults.itemShape(index = 2, count = 3)
+                                    ) {
+                                        Text("Organic", maxLines = 1)
+                                    }
+                                }
+                            }
+
+                            HorizontalDivider()
+
+                            // Bluetooth reset - Outlined button (action, not setting)
+                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text("Bluetooth", style = MaterialTheme.typography.labelMedium)
+                                OutlinedButton(
+                                    onClick = { viewModel.resetBle() },
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Icon(
+                                        Icons.Default.BluetoothSearching,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text("Reset BLE Connection")
+                                }
+                                Text(
+                                    text = "Reconnect to MySondyGO device",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                    2 -> {
+                        // Balloon settings - Station, burst, ascent, descent
+                        val burstAltitudeError = burstAltitude.isNotBlank() &&
+                            (burstAltitude.toDoubleOrNull() == null || burstAltitude.toDoubleOrNull()!! <= 0)
+                        val ascentRateError = ascentRate.isNotBlank() &&
+                            (ascentRate.toDoubleOrNull() == null || ascentRate.toDoubleOrNull()!! <= 0)
+                        val descentRateError = descentRate.isNotBlank() &&
+                            (descentRate.toDoubleOrNull() == null || descentRate.toDoubleOrNull()!! <= 0)
+
                         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             OutlinedTextField(
                                 value = stationId,
@@ -455,6 +671,10 @@ private fun UnifiedSettingsDialog(
                                 label = { Text("Burst Altitude (m)") },
                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                                 singleLine = true,
+                                isError = burstAltitudeError,
+                                supportingText = if (burstAltitudeError) {
+                                    { Text("Enter a positive number") }
+                                } else null,
                                 modifier = Modifier.fillMaxWidth()
                             )
                             OutlinedTextField(
@@ -463,6 +683,10 @@ private fun UnifiedSettingsDialog(
                                 label = { Text("Ascent Rate (m/s)") },
                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                                 singleLine = true,
+                                isError = ascentRateError,
+                                supportingText = if (ascentRateError) {
+                                    { Text("Enter a positive number") }
+                                } else null,
                                 modifier = Modifier.fillMaxWidth()
                             )
                             OutlinedTextField(
@@ -471,113 +695,347 @@ private fun UnifiedSettingsDialog(
                                 label = { Text("Descent Rate (m/s)") },
                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                                 singleLine = true,
+                                isError = descentRateError,
+                                supportingText = if (descentRateError) {
+                                    { Text("Enter a positive number") }
+                                } else null,
                                 modifier = Modifier.fillMaxWidth()
-                            )
-
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Text("Navigation App", style = MaterialTheme.typography.labelMedium)
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                Button(
-                                    onClick = { navigationProvider = NavigationProvider.GOOGLE_MAPS },
-                                    colors = ButtonDefaults.buttonColors(
-                                        containerColor = if (navigationProvider == NavigationProvider.GOOGLE_MAPS)
-                                            MaterialTheme.colorScheme.primary
-                                        else MaterialTheme.colorScheme.surfaceVariant
-                                    ),
-                                    modifier = Modifier.weight(1f)
-                                ) {
-                                    Text("Google Maps")
-                                }
-                                Button(
-                                    onClick = { navigationProvider = NavigationProvider.OSM },
-                                    colors = ButtonDefaults.buttonColors(
-                                        containerColor = if (navigationProvider == NavigationProvider.OSM)
-                                            MaterialTheme.colorScheme.primary
-                                        else MaterialTheme.colorScheme.surfaceVariant
-                                    ),
-                                    modifier = Modifier.weight(1f)
-                                ) {
-                                    Text("OSM")
-                                }
-                            }
-                            Text(
-                                text = if (navigationProvider == NavigationProvider.OSM)
-                                    "Uses OsmAnd, Organic Maps, or browser"
-                                else "Uses Google Maps app",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-
-                            Spacer(modifier = Modifier.height(16.dp))
-                            Text("Map Display", style = MaterialTheme.typography.labelMedium)
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                Button(
-                                    onClick = { mapProvider = MapProvider.GOOGLE_MAPS },
-                                    colors = ButtonDefaults.buttonColors(
-                                        containerColor = if (mapProvider == MapProvider.GOOGLE_MAPS)
-                                            MaterialTheme.colorScheme.primary
-                                        else MaterialTheme.colorScheme.surfaceVariant
-                                    ),
-                                    modifier = Modifier.weight(1f)
-                                ) {
-                                    Text("Google")
-                                }
-                                Button(
-                                    onClick = { mapProvider = MapProvider.OSM },
-                                    colors = ButtonDefaults.buttonColors(
-                                        containerColor = if (mapProvider == MapProvider.OSM)
-                                            MaterialTheme.colorScheme.primary
-                                        else MaterialTheme.colorScheme.surfaceVariant
-                                    ),
-                                    modifier = Modifier.weight(1f)
-                                ) {
-                                    Text("OSM")
-                                }
-                            }
-                            Text(
-                                text = if (mapProvider == MapProvider.OSM)
-                                    "OpenStreetMap (no API key needed)"
-                                else "Google Maps (requires API key)",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                     }
-                    1 -> {
-                        // Device settings - directly embedded
-                        DeviceSettingsContent(viewModel = viewModel)
-                    }
+                3 -> {
+                    // Device settings - Tune + Advanced (without Sonde tab)
+                    DeviceSettingsContentWithoutSonde(viewModel = viewModel)
                 }
-            }
-        },
-        confirmButton = {
-            if (selectedMainTab == 0) {
-                TextButton(onClick = {
-                    val newSettings = userSettings.copy(
-                        stationId = stationId,
-                        burstAltitude = burstAltitude.toDoubleOrNull() ?: userSettings.burstAltitude,
-                        ascentRate = ascentRate.toDoubleOrNull() ?: userSettings.ascentRate,
-                        descentRate = descentRate.toDoubleOrNull() ?: userSettings.descentRate,
-                        navigationProvider = navigationProvider,
-                        mapProvider = mapProvider
-                    )
-                    onSaveUserSettings(newSettings)
-                    onDismiss()
-                }) {
-                    Text("Save")
-                }
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Close")
             }
         }
+    }
+}
+
+@Composable
+private fun FrequencySettingsTab(viewModel: MapViewModel) {
+    val radioData by viewModel.radioData.collectAsState(initial = null)
+    val connectionState by viewModel.bleConnectionState.collectAsState()
+
+    if (connectionState == com.balloonhunter.app.domain.models.BLEConnectionState.NOT_CONNECTED) {
+        Text(
+            "MySondyGO not connected",
+            color = MaterialTheme.colorScheme.error,
+            style = MaterialTheme.typography.bodyLarge
+        )
+        return
+    }
+
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        val sondeTypes = listOf("RS41", "M20", "M10", "PILOT", "DFM")
+
+        var selectedType by remember { mutableStateOf(radioData?.probeType ?: "RS41") }
+        var freqDigits by remember { mutableStateOf(frequencyToDigits(radioData?.frequency ?: 403.50)) }
+
+        // Update when radioData first arrives
+        LaunchedEffect(radioData) {
+            radioData?.let {
+                if (selectedType == "RS41" && it.probeType != "RS41") {
+                    selectedType = it.probeType
+                }
+                val newDigits = frequencyToDigits(it.frequency)
+                if (freqDigits == frequencyToDigits(403.50) && it.frequency != 403.50) {
+                    freqDigits = newDigits
+                }
+            }
+        }
+
+        Text("Sonde Type", style = MaterialTheme.typography.labelMedium)
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            sondeTypes.forEach { type ->
+                androidx.compose.material3.FilterChip(
+                    selected = selectedType == type,
+                    onClick = { selectedType = type },
+                    label = { Text(type, style = MaterialTheme.typography.labelSmall) },
+                    modifier = Modifier.weight(1f)
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Text("Frequency (MHz)", style = MaterialTheme.typography.labelMedium)
+
+        // Frequency picker - 5 digit wheels
+        Row(
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            for (i in 0 until 5) {
+                if (i == 3) {
+                    Text(".", style = MaterialTheme.typography.headlineSmall)
+                }
+                FrequencyDigitPicker(
+                    value = freqDigits[i],
+                    onValueChange = { newDigit ->
+                        if (isValidFrequencyDigit(newDigit, i, freqDigits)) {
+                            freqDigits = freqDigits.toMutableList().also { it[i] = newDigit }
+                        }
+                    }
+                )
+            }
+            Text(" MHz", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(start = 8.dp))
+        }
+
+        Button(
+            onClick = {
+                viewModel.setFrequency(digitsToFrequency(freqDigits), selectedType)
+            },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("Apply Frequency")
+        }
+    }
+}
+
+@Composable
+private fun FrequencyDigitPicker(
+    value: Int,
+    onValueChange: (Int) -> Unit
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        IconButton(
+            onClick = {
+                val newVal = if (value >= 9) 0 else value + 1
+                onValueChange(newVal)
+            }
+        ) {
+            Icon(Icons.Default.KeyboardArrowUp, contentDescription = "Increase digit")
+        }
+
+        Text(
+            text = value.toString(),
+            style = MaterialTheme.typography.headlineSmall
+        )
+
+        IconButton(
+            onClick = {
+                val newVal = if (value <= 0) 9 else value - 1
+                onValueChange(newVal)
+            }
+        ) {
+            Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Decrease digit")
+        }
+    }
+}
+
+private fun frequencyToDigits(frequency: Double): List<Int> {
+    val freq = (frequency * 100).toInt()
+    return listOf(
+        (freq / 10000) % 10,
+        (freq / 1000) % 10,
+        (freq / 100) % 10,
+        (freq / 10) % 10,
+        freq % 10
     )
+}
+
+private fun digitsToFrequency(digits: List<Int>): Double {
+    val whole = digits[0] * 100 + digits[1] * 10 + digits[2]
+    val decimal = digits[3] * 10 + digits[4]
+    return whole + decimal / 100.0
+}
+
+private fun isValidFrequencyDigit(digit: Int, position: Int, allDigits: List<Int>): Boolean {
+    return when (position) {
+        0 -> digit == 4
+        1 -> digit == 0
+        2 -> digit in 0..6
+        3 -> if (allDigits[2] == 6) digit == 0 else true
+        4 -> if (allDigits[2] == 6 && allDigits[3] == 0) digit == 0 else true
+        else -> true
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun DeviceSettingsContentWithoutSonde(viewModel: MapViewModel) {
+    var showAdvancedSettings by remember { mutableStateOf(false) }
+    val connectionState by viewModel.bleConnectionState.collectAsState()
+
+    var initialDeviceSettings by remember { mutableStateOf<com.balloonhunter.app.domain.models.SettingsData?>(null) }
+    var initialRadioData by remember { mutableStateOf<com.balloonhunter.app.domain.models.RadioChannelData?>(null) }
+    var initialDataCaptured by remember { mutableStateOf(false) }
+    var afcData by remember { mutableStateOf<com.balloonhunter.app.data.ble.AfcData?>(null) }
+    var isLoading by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        viewModel.deviceSettings.collect { settings ->
+            if (!initialDataCaptured) {
+                initialDeviceSettings = settings
+            }
+            isLoading = false
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        viewModel.radioData.collect { radio ->
+            if (!initialDataCaptured) {
+                initialRadioData = radio
+                initialDataCaptured = true
+            }
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        viewModel.afcData.collect { afc ->
+            afcData = afc
+        }
+    }
+
+    LaunchedEffect(connectionState) {
+        if (connectionState != com.balloonhunter.app.domain.models.BLEConnectionState.NOT_CONNECTED) {
+            isLoading = true
+            viewModel.requestDeviceSettings()
+        }
+    }
+
+    Column(modifier = Modifier.fillMaxWidth()) {
+        if (connectionState == com.balloonhunter.app.domain.models.BLEConnectionState.NOT_CONNECTED) {
+            Text(
+                "MySondyGO not connected",
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodyLarge
+            )
+        } else {
+            // AFC Tune section (simplified)
+            TuneSection(initialDeviceSettings, afcData, viewModel)
+
+            Spacer(modifier = Modifier.height(16.dp))
+            HorizontalDivider()
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Advanced settings - collapsible
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("Advanced Settings", style = MaterialTheme.typography.titleSmall)
+                IconButton(onClick = { showAdvancedSettings = !showAdvancedSettings }) {
+                    Icon(
+                        if (showAdvancedSettings) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                        contentDescription = if (showAdvancedSettings) "Collapse" else "Expand"
+                    )
+                }
+            }
+
+            if (showAdvancedSettings) {
+                Text(
+                    "Use the full Device Settings screen for advanced configuration.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun TuneSection(
+    initialSettings: com.balloonhunter.app.domain.models.SettingsData?,
+    afcData: com.balloonhunter.app.data.ble.AfcData?,
+    viewModel: MapViewModel
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Text("AFC Tune", style = MaterialTheme.typography.labelMedium)
+
+        // Live AFC values
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text("Current:", style = MaterialTheme.typography.bodySmall)
+            Text(
+                "${afcData?.currentFrequency ?: 0}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.primary
+            )
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text("Smoothed:", style = MaterialTheme.typography.bodySmall)
+            Text(
+                "${afcData?.smoothedFrequency ?: 0}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.tertiary
+            )
+        }
+
+        val initialCorrection = initialSettings?.frequencyCorrection ?: 0
+        var freqCorrection by remember { mutableStateOf(initialCorrection.toString()) }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            OutlinedTextField(
+                value = freqCorrection,
+                onValueChange = { freqCorrection = it },
+                label = { Text("Offset") },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                modifier = Modifier.weight(1f),
+                singleLine = true
+            )
+            Button(
+                onClick = {
+                    afcData?.smoothedFrequency?.let {
+                        freqCorrection = it.toString()
+                    }
+                },
+                enabled = afcData != null
+            ) {
+                Text("Transfer")
+            }
+        }
+
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            OutlinedButton(
+                onClick = {
+                    freqCorrection = "0"
+                    viewModel.setFrequencyCorrection(0)
+                },
+                modifier = Modifier.weight(1f),
+                colors = ButtonDefaults.outlinedButtonColors(
+                    contentColor = MaterialTheme.colorScheme.error
+                )
+            ) {
+                Text("Reset")
+            }
+            Button(
+                onClick = {
+                    freqCorrection.toIntOrNull()?.let {
+                        viewModel.setFrequencyCorrection(it)
+                    }
+                },
+                modifier = Modifier.weight(1f)
+            ) {
+                Text("Save")
+            }
+        }
+    }
 }

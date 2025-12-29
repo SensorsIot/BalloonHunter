@@ -101,9 +101,21 @@ app/src/main/java/com/balloonhunter/app/
 | Feature | Description |
 |---------|-------------|
 | 🗺️ Google Maps | Native SDK with satellite toggle |
-| 🧭 Google Navigation | One-tap turn-by-turn directions |
-| 🎨 Material 3 | Modern Android design system |
+| 🗺️ OpenStreetMap | Alternative map provider (no API key needed) |
+| 🧭 Navigation | Google Maps, OsmAnd, or Organic Maps integration |
+| 🎨 Material 3 | SegmentedButtons, ModalBottomSheet, Card components |
 | 📡 Foreground Service | Continuous BLE connection |
+
+### Material 3 Design System
+
+The app follows Material 3 guidelines throughout:
+- `ModalBottomSheet` for settings (4-tab organization)
+- `SegmentedButton` for exclusive single-choice selections
+- `Card` with dynamic `BorderStroke` for status indication
+- Semantic colors via `MaterialTheme.colorScheme`
+- Input validation with `isError` and `supportingText`
+- 48dp minimum touch targets for accessibility
+- 4dp baseline grid spacing
 
 ## 📄 Documentation
 

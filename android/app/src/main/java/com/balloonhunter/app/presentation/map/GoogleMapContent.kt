@@ -27,6 +27,14 @@ import com.google.maps.android.compose.Polyline
 
 fun GeoPoint.toLatLng() = LatLng(latitude, longitude)
 
+// Map visualization colors - domain-specific for consistent recognition
+private object MapColors {
+    val track = Color.Red
+    val prediction = Color(0xFF00AAFF) // Cyan-blue
+    val route = Color.Green
+    val landingHistory = Color(0xFF9C27B0) // Purple
+}
+
 @Composable
 fun GoogleMapContent(
     modifier: Modifier = Modifier,
@@ -57,20 +65,20 @@ fun GoogleMapContent(
             tiltGesturesEnabled = !headingMode
         )
     ) {
-        // Track polyline (red)
+        // Track polyline
         if (track.isNotEmpty()) {
             Polyline(
                 points = track.map { it.point.toLatLng() },
-                color = Color.Red,
+                color = MapColors.track,
                 width = 6f
             )
         }
 
-        // Prediction path polyline (cyan-blue)
+        // Prediction path polyline
         prediction?.path?.let { path ->
             Polyline(
                 points = path.map { it.toLatLng() },
-                color = Color(0xFF00AAFF),
+                color = MapColors.prediction,
                 width = 8f
             )
         }
@@ -86,22 +94,22 @@ fun GoogleMapContent(
             }
         }
 
-        // Route polyline (green) - hidden if user within 100m of balloon
+        // Route polyline - hidden if user within 100m of balloon
         if (routeVisible) {
             route?.let { routeData ->
                 Polyline(
                     points = routeData.coordinates.map { it.toLatLng() },
-                    color = Color.Green,
+                    color = MapColors.route,
                     width = 5f
                 )
             }
         }
 
-        // Landing history overlay - purple polyline + dots
+        // Landing history overlay - polyline + dots
         if (landingHistory.size >= 2) {
             Polyline(
                 points = landingHistory.map { it.point.toLatLng() },
-                color = Color(0xFF9C27B0),
+                color = MapColors.landingHistory,
                 width = 3f
             )
         }
@@ -109,8 +117,8 @@ fun GoogleMapContent(
             Circle(
                 center = historyPoint.point.toLatLng(),
                 radius = 20.0,
-                fillColor = Color(0xFF9C27B0).copy(alpha = 0.7f),
-                strokeColor = Color(0xFF9C27B0),
+                fillColor = MapColors.landingHistory.copy(alpha = 0.7f),
+                strokeColor = MapColors.landingHistory,
                 strokeWidth = 2f
             )
         }

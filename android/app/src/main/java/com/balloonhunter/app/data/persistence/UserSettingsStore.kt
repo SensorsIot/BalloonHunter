@@ -6,6 +6,8 @@ import androidx.datastore.preferences.core.doublePreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.preferencesDataStoreFile
+import com.balloonhunter.app.domain.models.MapProvider
+import com.balloonhunter.app.domain.models.NavigationProvider
 import com.balloonhunter.app.domain.models.UserSettings
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharingStarted
@@ -24,7 +26,8 @@ class UserSettingsStore(context: Context, scope: CoroutineScope) {
         val ascentRate = doublePreferencesKey("ascent_rate")
         val descentRate = doublePreferencesKey("descent_rate")
         val stationId = stringPreferencesKey("station_id")
-        // transportMode removed - now ephemeral (not persisted)
+        val navigationProvider = stringPreferencesKey("navigation_provider")
+        val mapProvider = stringPreferencesKey("map_provider")
     }
 
     private val settingsFlow: Flow<UserSettings> = dataStore.data.map { prefs ->
@@ -32,7 +35,13 @@ class UserSettingsStore(context: Context, scope: CoroutineScope) {
             burstAltitude = prefs[Keys.burstAltitude] ?: 30000.0,
             ascentRate = prefs[Keys.ascentRate] ?: 5.0,
             descentRate = prefs[Keys.descentRate] ?: 7.0,
-            stationId = prefs[Keys.stationId] ?: "06610"
+            stationId = prefs[Keys.stationId] ?: "06610",
+            navigationProvider = prefs[Keys.navigationProvider]?.let {
+                try { NavigationProvider.valueOf(it) } catch (e: Exception) { NavigationProvider.OSMAND }
+            } ?: NavigationProvider.OSMAND,
+            mapProvider = prefs[Keys.mapProvider]?.let {
+                try { MapProvider.valueOf(it) } catch (e: Exception) { MapProvider.OSM }
+            } ?: MapProvider.OSM
         )
     }
 
@@ -43,7 +52,9 @@ class UserSettingsStore(context: Context, scope: CoroutineScope) {
             burstAltitude = 30000.0,
             ascentRate = 5.0,
             descentRate = 7.0,
-            stationId = "06610"
+            stationId = "06610",
+            navigationProvider = NavigationProvider.OSMAND,
+            mapProvider = MapProvider.OSM
         )
     )
 
@@ -53,6 +64,8 @@ class UserSettingsStore(context: Context, scope: CoroutineScope) {
             prefs[Keys.ascentRate] = settings.ascentRate
             prefs[Keys.descentRate] = settings.descentRate
             prefs[Keys.stationId] = settings.stationId
+            prefs[Keys.navigationProvider] = settings.navigationProvider.name
+            prefs[Keys.mapProvider] = settings.mapProvider.name
         }
     }
 }

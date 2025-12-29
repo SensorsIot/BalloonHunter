@@ -1,6 +1,5 @@
 package com.balloonhunter.app.domain.services
 
-import com.balloonhunter.app.data.persistence.TrackRepository
 import com.balloonhunter.app.domain.models.BalloonMotionMetrics
 import com.balloonhunter.app.domain.models.BalloonTrackPoint
 import com.balloonhunter.app.domain.models.DataState
@@ -16,10 +15,13 @@ import kotlin.math.max
 import kotlin.math.min
 
 private const val TAG = "debugAPRS"
+private const val TAG_FILTER = "TrackFilter"
 
-class BalloonTrackService(
-    private val trackRepository: TrackRepository
-) {
+/**
+ * Track service - memory only, no database persistence.
+ * Track data is fetched from SondeHub API on startup/sonde change.
+ */
+class BalloonTrackService {
     private var notificationSink: TrackNotificationSink? = null
 
     fun setNotificationSink(sink: TrackNotificationSink) {
@@ -45,13 +47,21 @@ class BalloonTrackService(
 
     private val descentRateHistory = ArrayDeque<Double>()
 
-    suspend fun loadPersisted(points: List<BalloonTrackPoint>) {
-        _track.value = points
-    }
+    fun recordPoint(position: PositionData, state: DataState) {
+        // When landed, set speeds to zero
+        if (state == DataState.APRS_LANDED || state == DataState.LIVE_BLE_LANDED) {
+            _motionMetrics.value = BalloonMotionMetrics(
+                rawHorizontalSpeedMS = 0.0,
+                rawVerticalSpeedMS = 0.0,
+                smoothedHorizontalSpeedMS = 0.0,
+                smoothedVerticalSpeedMS = 0.0,
+                adjustedDescentRateMS = 0.0
+            )
+            return
+        }
 
-    suspend fun recordPoint(position: PositionData, state: DataState) {
         if (state == DataState.STARTUP || state == DataState.WAITING_FOR_APRS ||
-            state == DataState.NO_TELEMETRY || state == DataState.APRS_LANDED
+            state == DataState.NO_TELEMETRY
         ) {
             return
         }
@@ -86,9 +96,9 @@ class BalloonTrackService(
             horizontalSpeed = horizontalSpeed
         )
 
-        val updated = existing + point
+        val sorted = (existing + point).sortedBy { it.timestamp }
+        val updated = filterImpossibleJumps(sorted)
         _track.value = updated
-        trackRepository.insert(point)
 
         updateMotionMetrics(horizontalSpeed, verticalSpeed, timestamp)
         updateAdjustedDescentRate(updated)
@@ -96,7 +106,7 @@ class BalloonTrackService(
     }
 
     fun clearTrack() {
-        Log.d(TAG, "clearTrack: clearing ${_track.value.size} points")
+        Log.d(TAG, "clearTrack: clearing ${_track.value.size} points from memory")
         _track.value = emptyList()
         _trackBasedLandingDetected.value = false
     }
@@ -112,8 +122,9 @@ class BalloonTrackService(
         }
         // Replace track entirely with gap fill data (don't merge with potentially stale persisted data)
         val deduped = points.associateBy { it.timestamp.epochSecond }
-        _track.value = deduped.values.sortedBy { it.timestamp }
-        Log.d(TAG, "insertGapFill: track now has ${_track.value.size} points")
+        val sorted = deduped.values.sortedBy { it.timestamp }
+        _track.value = filterImpossibleJumps(sorted.toList())
+        Log.d(TAG, "insertGapFill: track now has ${_track.value.size} points (filtered from ${sorted.size})")
     }
 
     private fun updateMotionMetrics(rawHorizontal: Double, rawVertical: Double, timestamp: Instant) {
@@ -158,7 +169,7 @@ class BalloonTrackService(
         _adjustedDescentRate.value = avg
     }
 
-    private suspend fun detectTrackBasedLanding(points: List<BalloonTrackPoint>) {
+    private fun detectTrackBasedLanding(points: List<BalloonTrackPoint>) {
         if (_trackBasedLandingDetected.value) return
         if (points.size < 10) return
         val burstIndex = points.indices.maxByOrNull { points[it].altitude } ?: return
@@ -193,11 +204,10 @@ class BalloonTrackService(
         }
     }
 
-    private suspend fun truncateTrackAt(point: BalloonTrackPoint) {
+    private fun truncateTrackAt(point: BalloonTrackPoint) {
         val truncated = _track.value.takeWhile { it.timestamp <= point.timestamp }
         _track.value = truncated
         _trackBasedLandingDetected.value = true
-        trackRepository.replaceTrack(truncated)
     }
 
     private fun averageIntervalSeconds(points: List<BalloonTrackPoint>): Double {
@@ -207,6 +217,54 @@ class BalloonTrackService(
             total += Duration.between(points[i - 1].timestamp, points[i].timestamp).seconds
         }
         return total / (points.size - 1).toDouble().coerceAtLeast(1.0)
+    }
+
+    /**
+     * Filter out points that would require impossible speeds.
+     * Balloon max realistic speed: ~100 m/s horizontal (extreme jet stream).
+     * Vertical: 50 m/s below 10km, 100 m/s above (post-burst free-fall can be extreme).
+     *
+     * Debug: Use logcat filter "TrackFilter" to see rejected points.
+     */
+    private fun filterImpossibleJumps(points: List<BalloonTrackPoint>): List<BalloonTrackPoint> {
+        if (points.size < 2) return points
+
+        val maxHorizontalSpeed = 100.0 // m/s (~360 km/h - extreme but possible in jet stream)
+
+        val result = mutableListOf(points.first())
+        var rejectedCount = 0
+
+        for (i in 1 until points.size) {
+            val prev = result.last()
+            val curr = points[i]
+
+            val dt = Duration.between(prev.timestamp, curr.timestamp).seconds.toDouble().coerceAtLeast(1.0)
+            val distance = GeoUtils.haversineMeters(prev.point, curr.point)
+            val horizontalSpeed = distance / dt
+            val verticalSpeed = abs(curr.altitude - prev.altitude) / dt
+
+            // At high altitude (>10km), allow faster vertical speeds (post-burst free-fall)
+            val maxAlt = max(prev.altitude, curr.altitude)
+            val maxVerticalSpeed = if (maxAlt > 10000) 100.0 else 50.0
+
+            if (horizontalSpeed <= maxHorizontalSpeed && verticalSpeed <= maxVerticalSpeed) {
+                result.add(curr)
+            } else {
+                rejectedCount++
+                Log.w(TAG_FILTER, "REJECTED point #$i: " +
+                    "from(${prev.latitude},${prev.longitude},alt=${prev.altitude.toInt()}m) " +
+                    "to(${curr.latitude},${curr.longitude},alt=${curr.altitude.toInt()}m) " +
+                    "dist=${distance.toInt()}m dt=${dt.toInt()}s " +
+                    "hSpeed=${horizontalSpeed.toInt()}m/s vSpeed=${verticalSpeed.toInt()}m/s " +
+                    "time=${curr.timestamp}")
+            }
+        }
+
+        if (rejectedCount > 0) {
+            Log.w(TAG_FILTER, "SUMMARY: Rejected $rejectedCount of ${points.size} points, kept ${result.size}")
+        }
+
+        return result
     }
 }
 

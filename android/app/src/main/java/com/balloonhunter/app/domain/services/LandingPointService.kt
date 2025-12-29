@@ -27,9 +27,10 @@ class LandingPointService(
         _history.value = points
     }
 
-    fun clear() {
+    suspend fun clear() {
         _currentLanding.value = null
         _history.value = emptyList()
+        repository.clear()
     }
 
     suspend fun updateLandingPoint(

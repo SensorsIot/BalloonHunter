@@ -4,8 +4,6 @@ import com.balloonhunter.app.data.LocationService
 import com.balloonhunter.app.data.aprs.AprsService
 import com.balloonhunter.app.data.ble.BleService
 import com.balloonhunter.app.data.persistence.LandingHistoryRepository
-import com.balloonhunter.app.data.persistence.TrackRepository
-import com.balloonhunter.app.domain.models.BalloonTrackPoint
 import com.balloonhunter.app.domain.models.LandingPredictionPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -32,7 +30,6 @@ class StartupOrchestrator(
     private val bleService: BleService,
     private val aprsService: AprsService,
     private val locationService: LocationService,
-    private val trackRepository: TrackRepository,
     private val landingHistoryRepository: LandingHistoryRepository
 ) {
     companion object {
@@ -43,9 +40,6 @@ class StartupOrchestrator(
 
     private val _isStartupComplete = MutableStateFlow(false)
     val isStartupComplete: StateFlow<Boolean> = _isStartupComplete.asStateFlow()
-
-    private val _persistedTrack = MutableStateFlow<List<BalloonTrackPoint>>(emptyList())
-    val persistedTrack: StateFlow<List<BalloonTrackPoint>> = _persistedTrack.asStateFlow()
 
     private val _persistedLandingHistory = MutableStateFlow<List<LandingPredictionPoint>>(emptyList())
     val persistedLandingHistory: StateFlow<List<LandingPredictionPoint>> = _persistedLandingHistory.asStateFlow()
@@ -61,11 +55,9 @@ class StartupOrchestrator(
      * @param onStartupComplete Callback when startup is complete (timeout or conditions met)
      */
     fun start(onStartupComplete: () -> Unit) {
-        // Load persisted data in background
+        // Load persisted landing history in background (track is fetched from API)
         scope.launch(Dispatchers.Default) {
-            val track = trackRepository.loadTrack()
             val landingHistory = landingHistoryRepository.loadLandingHistory()
-            _persistedTrack.value = track
             _persistedLandingHistory.value = landingHistory
         }
 

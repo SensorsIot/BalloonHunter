@@ -142,7 +142,7 @@ fun DeviceSettingsContent(viewModel: MapViewModel) {
                             Tab(
                                 selected = advancedTab == index,
                                 onClick = { advancedTab = index },
-                                text = { Text(title, maxLines = 1, fontSize = 12.sp) }
+                                text = { Text(title, maxLines = 1, style = MaterialTheme.typography.labelMedium) }
                             )
                         }
                     }
@@ -199,17 +199,15 @@ private fun SondeTab(initialRadioData: RadioChannelData?, viewModel: MapViewMode
         var freqDigits by remember { mutableStateOf(frequencyToDigits(initialRadioData?.frequency ?: 403.50)) }
 
         Text("Sonde Type", style = MaterialTheme.typography.bodyMedium)
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            sondeTypes.forEach { type ->
-                FilterChip(
+        SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+            sondeTypes.forEachIndexed { index, type ->
+                SegmentedButton(
                     selected = selectedType == type,
                     onClick = { selectedType = type },
-                    label = { Text(type, fontSize = 12.sp) },
-                    modifier = Modifier.weight(1f)
-                )
+                    shape = SegmentedButtonDefaults.itemShape(index = index, count = sondeTypes.size)
+                ) {
+                    Text(type, style = MaterialTheme.typography.labelSmall)
+                }
             }
         }
 
@@ -225,7 +223,7 @@ private fun SondeTab(initialRadioData: RadioChannelData?, viewModel: MapViewMode
         ) {
             for (i in 0 until 5) {
                 if (i == 3) {
-                    Text(".", fontSize = 32.sp, modifier = Modifier.padding(horizontal = 2.dp))
+                    Text(".", style = MaterialTheme.typography.headlineSmall)
                 }
                 FrequencyDigitPicker(
                     value = freqDigits[i],
@@ -238,7 +236,7 @@ private fun SondeTab(initialRadioData: RadioChannelData?, viewModel: MapViewMode
                     allDigits = freqDigits
                 )
             }
-            Text(" MHz", fontSize = 16.sp, modifier = Modifier.padding(start = 8.dp))
+            Text(" MHz", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(start = 8.dp))
         }
 
         val currentFreq = digitsToFrequency(freqDigits)
@@ -276,26 +274,23 @@ private fun FrequencyDigitPicker(
             onClick = {
                 val newVal = if (value >= 9) 0 else value + 1
                 onValueChange(newVal)
-            },
-            modifier = Modifier.size(32.dp)
+            }
         ) {
-            Icon(Icons.Default.KeyboardArrowUp, contentDescription = "Increase")
+            Icon(Icons.Default.KeyboardArrowUp, contentDescription = "Increase digit")
         }
 
         Text(
             text = value.toString(),
-            fontSize = 28.sp,
-            modifier = Modifier.padding(horizontal = 4.dp)
+            style = MaterialTheme.typography.headlineSmall
         )
 
         IconButton(
             onClick = {
                 val newVal = if (value <= 0) 9 else value - 1
                 onValueChange(newVal)
-            },
-            modifier = Modifier.size(32.dp)
+            }
         ) {
-            Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Decrease")
+            Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Decrease digit")
         }
     }
 }
@@ -383,7 +378,7 @@ private fun TuneTab(initialSettings: SettingsData?, afcData: AfcData?, viewModel
                 Text("Current Offset", style = MaterialTheme.typography.labelMedium)
                 Text(
                     "$initialCorrection",
-                    fontSize = 24.sp,
+                    style = MaterialTheme.typography.headlineSmall,
                     modifier = Modifier.fillMaxWidth(),
                     textAlign = TextAlign.Center
                 )
@@ -415,12 +410,15 @@ private fun TuneTab(initialSettings: SettingsData?, afcData: AfcData?, viewModel
                 Text("Transfer")
             }
 
-            Button(
+            OutlinedButton(
                 onClick = {
                     freqCorrection = "0"
                     viewModel.setFrequencyCorrection(0)
                 },
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.weight(1f),
+                colors = ButtonDefaults.outlinedButtonColors(
+                    contentColor = MaterialTheme.colorScheme.error
+                )
             ) {
                 Text("Reset")
             }
@@ -537,23 +535,23 @@ private fun BatteryTab(initialSettings: SettingsData?, viewModel: MapViewModel) 
             modifier = Modifier.fillMaxWidth()
         )
 
-        Text("Discharge Type")
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FilterChip(
+        Text("Discharge Type", style = MaterialTheme.typography.bodyMedium)
+        SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+            SegmentedButton(
                 selected = batType == 0,
                 onClick = { batType = 0 },
-                label = { Text("Linear") }
-            )
-            FilterChip(
+                shape = SegmentedButtonDefaults.itemShape(index = 0, count = 3)
+            ) { Text("Linear") }
+            SegmentedButton(
                 selected = batType == 1,
                 onClick = { batType = 1 },
-                label = { Text("Sigmoidal") }
-            )
-            FilterChip(
+                shape = SegmentedButtonDefaults.itemShape(index = 1, count = 3)
+            ) { Text("Sigmoidal") }
+            SegmentedButton(
                 selected = batType == 2,
                 onClick = { batType = 2 },
-                label = { Text("Asigmoidal") }
-            )
+                shape = SegmentedButtonDefaults.itemShape(index = 2, count = 3)
+            ) { Text("Asigmoidal") }
         }
 
         Button(
@@ -675,32 +673,34 @@ private fun OtherTab(initialSettings: SettingsData?, initialRadioData: RadioChan
         var lcdType by remember { mutableIntStateOf(initialSettings?.lcdType ?: 0) }
         var nameType by remember { mutableIntStateOf(initialSettings?.nameType ?: 0) }
 
-        Text("LCD Driver")
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FilterChip(
+        Text("LCD Driver", style = MaterialTheme.typography.bodyMedium)
+        SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+            SegmentedButton(
                 selected = lcdType == 0,
                 onClick = { lcdType = 0 },
-                label = { Text("SSD1306") }
-            )
-            FilterChip(
+                shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2)
+            ) { Text("SSD1306") }
+            SegmentedButton(
                 selected = lcdType == 1,
                 onClick = { lcdType = 1 },
-                label = { Text("SH1106") }
-            )
+                shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2)
+            ) { Text("SH1106") }
         }
 
-        Text("Name Display")
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FilterChip(
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Text("Name Display", style = MaterialTheme.typography.bodyMedium)
+        SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+            SegmentedButton(
                 selected = nameType == 0,
                 onClick = { nameType = 0 },
-                label = { Text("Serial") }
-            )
-            FilterChip(
+                shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2)
+            ) { Text("Serial") }
+            SegmentedButton(
                 selected = nameType == 1,
                 onClick = { nameType = 1 },
-                label = { Text("APRS Name") }
-            )
+                shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2)
+            ) { Text("APRS Name") }
         }
 
         Button(
