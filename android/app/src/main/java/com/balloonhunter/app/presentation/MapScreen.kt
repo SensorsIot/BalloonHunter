@@ -177,9 +177,27 @@ fun MapScreen(viewModel: MapViewModel = hiltViewModel()) {
             },
             onNavigate = {
                 landing?.let {
-                    val uri = Uri.parse("google.navigation:q=${it.latitude},${it.longitude}&mode=${if (transportMode == TransportationMode.BIKE) "b" else "d"}")
-                    val intent = Intent(Intent.ACTION_VIEW, uri)
-                    context.startActivity(intent)
+                    val mode = if (transportMode == TransportationMode.BIKE) "b" else "d"
+                    val gmmIntentUri = Uri.parse("google.navigation:q=${it.latitude},${it.longitude}&mode=$mode")
+                    val mapIntent = Intent(Intent.ACTION_VIEW, gmmIntentUri)
+                    mapIntent.setPackage("com.google.android.apps.maps")
+
+                    // Try Google Maps first, fallback to any available maps app
+                    try {
+                        if (mapIntent.resolveActivity(context.packageManager) != null) {
+                            context.startActivity(mapIntent)
+                        } else {
+                            // Fallback to geo URI that any maps app can handle
+                            val fallbackUri = Uri.parse("geo:${it.latitude},${it.longitude}?q=${it.latitude},${it.longitude}(Landing)")
+                            val fallbackIntent = Intent(Intent.ACTION_VIEW, fallbackUri)
+                            context.startActivity(fallbackIntent)
+                        }
+                    } catch (e: Exception) {
+                        // Last resort: open in browser
+                        val browserUri = Uri.parse("https://www.google.com/maps/dir/?api=1&destination=${it.latitude},${it.longitude}&travelmode=${if (mode == "b") "bicycling" else "driving"}")
+                        val browserIntent = Intent(Intent.ACTION_VIEW, browserUri)
+                        context.startActivity(browserIntent)
+                    }
                 }
             },
             navigationEnabled = landing != null,
