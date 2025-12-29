@@ -78,16 +78,19 @@ class MapViewModel @Inject constructor(
     // Transport mode is ephemeral - exposed from coordinator
     val transportMode = coordinator.transportMode
 
-    // Map annotations - derived from service data
-    // Use nested combines since Kotlin's combine only supports up to 5 flows directly
+    // Map annotations - single source of truth for all map overlays
+    // Combines all data sources and applies visibility logic
     val annotations: StateFlow<List<MapAnnotationItem>> = combine(
         combine(position, balloonPhase, track) { pos, phase, trackPoints ->
             Triple(pos, phase, trackPoints)
         },
-        combine(prediction, currentLanding, route) { pred, landing, routeData ->
-            Triple(pred, landing, routeData)
+        combine(prediction, currentLanding, landingHistory) { pred, landing, history ->
+            Triple(pred, landing, history)
+        },
+        combine(route, routeVisible) { routeData, visible ->
+            Pair(routeData, visible)
         }
-    ) { (pos, phase, trackPoints), (pred, landing, routeData) ->
+    ) { (pos, phase, trackPoints), (pred, landing, history), (routeData, routeIsVisible) ->
         buildList {
             // Track polyline
             if (trackPoints.isNotEmpty()) {
@@ -101,11 +104,28 @@ class MapViewModel @Inject constructor(
                 }
             }
 
-            // Route polyline
-            routeData?.let { r ->
-                if (r.coordinates.isNotEmpty()) {
-                    add(MapAnnotationItem.RoutePolyline(r.coordinates))
+            // Burst marker - only visible while ascending
+            if (phase == com.balloonhunter.app.domain.models.BalloonPhase.ASCENDING) {
+                pred?.burstPoint?.let { burst ->
+                    add(MapAnnotationItem.BurstMarker(burst))
                 }
+            }
+
+            // Route polyline - hidden if user within 100m of balloon
+            if (routeIsVisible) {
+                routeData?.let { r ->
+                    if (r.coordinates.isNotEmpty()) {
+                        add(MapAnnotationItem.RoutePolyline(r.coordinates))
+                    }
+                }
+            }
+
+            // Landing history polyline and dots
+            if (history.size >= 2) {
+                add(MapAnnotationItem.LandingHistoryPolyline(history.map { it.point }))
+            }
+            history.forEach { historyPoint ->
+                add(MapAnnotationItem.LandingHistoryDot(historyPoint.point))
             }
 
             // Landing marker

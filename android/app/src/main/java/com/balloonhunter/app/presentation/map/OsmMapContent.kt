@@ -17,12 +17,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 import com.balloonhunter.app.domain.models.BalloonPhase
-import com.balloonhunter.app.domain.models.BalloonTrackPoint
-import com.balloonhunter.app.domain.models.GeoPoint
-import com.balloonhunter.app.domain.models.LandingPredictionPoint
-import com.balloonhunter.app.domain.models.PositionData
-import com.balloonhunter.app.domain.models.PredictionData
-import com.balloonhunter.app.domain.models.RouteData
+import com.balloonhunter.app.domain.models.MapAnnotationItem
 import org.osmdroid.config.Configuration
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.BoundingBox
@@ -40,10 +35,13 @@ private object OsmMapColors {
     val prediction = AndroidColor.parseColor("#00AAFF") // Cyan-blue
     val route = AndroidColor.GREEN
     val landingHistory = AndroidColor.parseColor("#9C27B0") // Purple
+    val burst = AndroidColor.parseColor("#FF9800") // Orange
 }
 
-private fun GeoPoint.toOsmGeoPoint() = OsmGeoPoint(latitude, longitude)
-
+/**
+ * OpenStreetMap content driven by MapAnnotationItem list.
+ * All overlay logic is handled by the ViewModel - this composable only renders.
+ */
 @Composable
 fun OsmMapContent(
     modifier: Modifier = Modifier,
@@ -55,16 +53,8 @@ fun OsmMapContent(
     compassHeading: Float,
     userLat: Double?,
     userLon: Double?,
-    track: List<BalloonTrackPoint>,
-    prediction: PredictionData?,
-    balloonPhase: BalloonPhase,
-    balloonPosition: PositionData?,
-    landing: LandingPredictionPoint?,
-    landingHistory: List<LandingPredictionPoint>,
-    route: RouteData?,
-    routeVisible: Boolean,
-    fitAllTrigger: Int = 0,
-    onMapMoved: (lat: Double, lon: Double, zoom: Double) -> Unit
+    annotations: List<MapAnnotationItem>,
+    fitAllTrigger: Int = 0
 ) {
     val context = LocalContext.current
 
@@ -97,35 +87,28 @@ fun OsmMapContent(
         }
     }
 
-    // Handle fit all trigger - zoom to show all overlays
+    // Handle fit all trigger - zoom to show all overlays from annotations
     LaunchedEffect(fitAllTrigger) {
         if (fitAllTrigger == 0) return@LaunchedEffect
 
         Log.d(TAG, "Fit all triggered")
 
-        // Collect all points
+        // Collect all points from annotations
         val allPoints = mutableListOf<OsmGeoPoint>()
-
-        // Track points
-        track.forEach { allPoints.add(it.point.toOsmGeoPoint()) }
-
-        // Prediction path
-        prediction?.path?.forEach { allPoints.add(it.toOsmGeoPoint()) }
-
-        // Burst point
-        prediction?.burstPoint?.let { allPoints.add(it.toOsmGeoPoint()) }
-
-        // Landing
-        landing?.let { allPoints.add(it.point.toOsmGeoPoint()) }
-
-        // Landing history
-        landingHistory.forEach { allPoints.add(it.point.toOsmGeoPoint()) }
-
-        // Balloon position
-        balloonPosition?.let { allPoints.add(it.point.toOsmGeoPoint()) }
+        annotations.forEach { item ->
+            when (item) {
+                is MapAnnotationItem.TrackPolyline -> item.points.forEach { allPoints.add(it.toOsmGeoPoint()) }
+                is MapAnnotationItem.PredictionPolyline -> item.points.forEach { allPoints.add(it.toOsmGeoPoint()) }
+                is MapAnnotationItem.RoutePolyline -> item.points.forEach { allPoints.add(it.toOsmGeoPoint()) }
+                is MapAnnotationItem.LandingHistoryPolyline -> item.points.forEach { allPoints.add(it.toOsmGeoPoint()) }
+                is MapAnnotationItem.BalloonMarker -> allPoints.add(item.position.toOsmGeoPoint())
+                is MapAnnotationItem.LandingMarker -> allPoints.add(item.position.toOsmGeoPoint())
+                is MapAnnotationItem.BurstMarker -> allPoints.add(item.position.toOsmGeoPoint())
+                is MapAnnotationItem.LandingHistoryDot -> allPoints.add(item.position.toOsmGeoPoint())
+            }
+        }
 
         if (allPoints.size >= 2) {
-            // Calculate bounding box
             var minLat = Double.MAX_VALUE
             var maxLat = -Double.MAX_VALUE
             var minLon = Double.MAX_VALUE
@@ -138,7 +121,6 @@ fun OsmMapContent(
                 maxLon = maxOf(maxLon, point.longitude)
             }
 
-            // Add padding (about 10%)
             val latPadding = (maxLat - minLat) * 0.1
             val lonPadding = (maxLon - minLon) * 0.1
 
@@ -160,18 +142,13 @@ fun OsmMapContent(
     // Handle heading mode - rotate map and center on user
     LaunchedEffect(headingMode, compassHeading, userLat, userLon) {
         if (!headingMode || userLat == null || userLon == null) {
-            // Reset rotation when exiting heading mode
             mapView.mapOrientation = 0f
             return@LaunchedEffect
         }
 
-        // Rotate map to match compass (OSM uses negative rotation)
         mapView.mapOrientation = -compassHeading
-
-        // Center on user location
         mapView.controller.setCenter(OsmGeoPoint(userLat, userLon))
 
-        // Ensure minimum zoom for heading mode
         if (mapView.zoomLevelDouble < 15.0) {
             mapView.controller.setZoom(15.0)
         }
@@ -179,122 +156,112 @@ fun OsmMapContent(
         mapView.invalidate()
     }
 
-    // Create a data key to detect actual changes
-    val dataKey = remember(
-        track.size,
-        track.lastOrNull()?.point,
-        prediction?.path?.size,
-        balloonPosition?.point,
-        balloonPhase,
-        landing?.point,
-        landingHistory.size,
-        routeVisible,
-        route?.coordinates?.size,
-        route?.transportType,
-        route?.coordinates?.firstOrNull(),
-        satelliteMode
-    ) {
-        "${track.size}-${track.lastOrNull()?.point}-${prediction?.path?.size}-${balloonPosition?.point}-$balloonPhase-${landing?.point}-${landingHistory.size}-$routeVisible-${route?.coordinates?.size}-${route?.transportType}-${route?.coordinates?.firstOrNull()}-$satelliteMode"
+    // Create a data key from annotations to detect changes
+    val dataKey = remember(annotations, satelliteMode) {
+        "${annotations.hashCode()}-$satelliteMode"
     }
 
-    // Track the last key we processed
     var lastProcessedKey by remember { mutableStateOf("") }
 
-    // Only update overlays when data actually changes
+    // Render overlays from annotations
     LaunchedEffect(dataKey) {
         if (dataKey == lastProcessedKey) return@LaunchedEffect
         lastProcessedKey = dataKey
 
-        Log.d(TAG, "Data changed, updating overlays")
+        Log.d(TAG, "Annotations changed, updating overlays")
 
         mapView.overlays.clear()
+        mapView.setTileSource(if (satelliteMode) TileSourceFactory.OpenTopo else TileSourceFactory.MAPNIK)
 
-        // Set tile source
-        mapView.setTileSource(
-            if (satelliteMode) TileSourceFactory.OpenTopo else TileSourceFactory.MAPNIK
-        )
+        var balloonPosition: OsmGeoPoint? = null
 
-        // Track polyline - data arrives pre-sorted from BalloonTrackService
-        if (track.isNotEmpty()) {
-            val trackLine = Polyline().apply {
-                outlinePaint.color = OsmMapColors.track
-                outlinePaint.strokeWidth = 6f
-                setPoints(track.map { it.point.toOsmGeoPoint() })
-            }
-            mapView.overlays.add(trackLine)
-        }
-
-        // Prediction path
-        prediction?.path?.takeIf { it.isNotEmpty() }?.let { path ->
-            val predictionLine = Polyline().apply {
-                outlinePaint.color = OsmMapColors.prediction
-                outlinePaint.strokeWidth = 8f
-                setPoints(path.map { it.toOsmGeoPoint() })
-            }
-            mapView.overlays.add(predictionLine)
-        }
-
-        // Route
-        if (routeVisible) {
-            route?.coordinates?.takeIf { it.isNotEmpty() }?.let { coords ->
-                val routeLine = Polyline().apply {
-                    outlinePaint.color = OsmMapColors.route
-                    outlinePaint.strokeWidth = 5f
-                    setPoints(coords.map { it.toOsmGeoPoint() })
+        annotations.forEach { item ->
+            when (item) {
+                is MapAnnotationItem.TrackPolyline -> {
+                    val line = Polyline().apply {
+                        outlinePaint.color = OsmMapColors.track
+                        outlinePaint.strokeWidth = 6f
+                        setPoints(item.points.map { it.toOsmGeoPoint() })
+                    }
+                    mapView.overlays.add(line)
                 }
-                mapView.overlays.add(routeLine)
-            }
-        }
 
-        // Landing history polyline
-        if (landingHistory.size >= 2) {
-            val historyLine = Polyline().apply {
-                outlinePaint.color = OsmMapColors.landingHistory
-                outlinePaint.strokeWidth = 3f
-                setPoints(landingHistory.map { it.point.toOsmGeoPoint() })
-            }
-            mapView.overlays.add(historyLine)
-        }
-
-        // Burst marker
-        if (balloonPhase == BalloonPhase.ASCENDING) {
-            prediction?.burstPoint?.let { burst ->
-                val marker = Marker(mapView).apply {
-                    position = burst.toOsmGeoPoint()
-                    setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
-                    title = "Burst"
+                is MapAnnotationItem.PredictionPolyline -> {
+                    val line = Polyline().apply {
+                        outlinePaint.color = OsmMapColors.prediction
+                        outlinePaint.strokeWidth = 8f
+                        setPoints(item.points.map { it.toOsmGeoPoint() })
+                    }
+                    mapView.overlays.add(line)
                 }
-                mapView.overlays.add(marker)
-            }
-        }
 
-        // Landing marker
-        landing?.let { land ->
-            val marker = Marker(mapView).apply {
-                position = land.point.toOsmGeoPoint()
-                setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
-                title = "Landing"
-            }
-            mapView.overlays.add(marker)
-        }
+                is MapAnnotationItem.RoutePolyline -> {
+                    val line = Polyline().apply {
+                        outlinePaint.color = OsmMapColors.route
+                        outlinePaint.strokeWidth = 5f
+                        setPoints(item.points.map { it.toOsmGeoPoint() })
+                    }
+                    mapView.overlays.add(line)
+                }
 
-        // Balloon marker
-        balloonPosition?.let { pos ->
-            val marker = Marker(mapView).apply {
-                position = pos.point.toOsmGeoPoint()
-                setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
-                title = pos.sondeName.ifBlank { "Balloon" }
-                snippet = when (balloonPhase) {
-                    BalloonPhase.ASCENDING -> "Ascending"
-                    BalloonPhase.DESCENDING_ABOVE_10K -> ">10km"
-                    BalloonPhase.DESCENDING_BELOW_10K -> "<10km"
-                    BalloonPhase.LANDED -> "Landed"
-                    BalloonPhase.UNKNOWN -> "Unknown"
+                is MapAnnotationItem.LandingHistoryPolyline -> {
+                    val line = Polyline().apply {
+                        outlinePaint.color = OsmMapColors.landingHistory
+                        outlinePaint.strokeWidth = 3f
+                        setPoints(item.points.map { it.toOsmGeoPoint() })
+                    }
+                    mapView.overlays.add(line)
+                }
+
+                is MapAnnotationItem.LandingHistoryDot -> {
+                    // OSM doesn't have circles like Google Maps, use small marker
+                    val marker = Marker(mapView).apply {
+                        position = item.position.toOsmGeoPoint()
+                        setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                        alpha = 0.7f
+                    }
+                    mapView.overlays.add(marker)
+                }
+
+                is MapAnnotationItem.BurstMarker -> {
+                    val marker = Marker(mapView).apply {
+                        position = item.position.toOsmGeoPoint()
+                        setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                        title = "Burst Point"
+                    }
+                    mapView.overlays.add(marker)
+                }
+
+                is MapAnnotationItem.LandingMarker -> {
+                    val marker = Marker(mapView).apply {
+                        position = item.position.toOsmGeoPoint()
+                        setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                        title = "Landing"
+                    }
+                    mapView.overlays.add(marker)
+                }
+
+                is MapAnnotationItem.BalloonMarker -> {
+                    val marker = Marker(mapView).apply {
+                        position = item.position.toOsmGeoPoint()
+                        setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                        title = item.title
+                        snippet = when (item.phase) {
+                            BalloonPhase.ASCENDING -> "Ascending"
+                            BalloonPhase.DESCENDING_ABOVE_10K -> ">10km"
+                            BalloonPhase.DESCENDING_BELOW_10K -> "<10km"
+                            BalloonPhase.LANDED -> "Landed"
+                            BalloonPhase.UNKNOWN -> "Unknown"
+                        }
+                    }
+                    mapView.overlays.add(marker)
+                    balloonPosition = item.position.toOsmGeoPoint()
                 }
             }
-            mapView.overlays.add(marker)
-            mapView.controller.setCenter(pos.point.toOsmGeoPoint())
         }
+
+        // Center on balloon if present
+        balloonPosition?.let { mapView.controller.setCenter(it) }
 
         mapView.invalidate()
         Log.d(TAG, "Overlays: ${mapView.overlays.size}")

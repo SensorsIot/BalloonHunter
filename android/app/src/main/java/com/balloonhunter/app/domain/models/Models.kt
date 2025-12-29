@@ -154,7 +154,7 @@ data class RouteData(
     val transportType: TransportationMode
 )
 
-// Map annotation models for MapViewModel
+// Map annotation models for MapViewModel - single source of truth for all overlays
 sealed class MapAnnotationItem {
     data class BalloonMarker(
         val position: GeoPoint,
@@ -163,6 +163,10 @@ sealed class MapAnnotationItem {
     ) : MapAnnotationItem()
 
     data class LandingMarker(
+        val position: GeoPoint
+    ) : MapAnnotationItem()
+
+    data class BurstMarker(
         val position: GeoPoint
     ) : MapAnnotationItem()
 
@@ -176,6 +180,14 @@ sealed class MapAnnotationItem {
 
     data class RoutePolyline(
         val points: List<GeoPoint>
+    ) : MapAnnotationItem()
+
+    data class LandingHistoryPolyline(
+        val points: List<GeoPoint>
+    ) : MapAnnotationItem()
+
+    data class LandingHistoryDot(
+        val position: GeoPoint
     ) : MapAnnotationItem()
 }
 

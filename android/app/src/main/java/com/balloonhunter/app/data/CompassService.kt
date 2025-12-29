@@ -30,13 +30,14 @@ class CompassService(context: Context) : SensorEventListener {
     private var isListening = false
     private val rotationMatrix = FloatArray(9)
     private val orientation = FloatArray(3)
+    private var lastHeading = 0f
 
     fun startListening() {
         if (isListening || rotationSensor == null) return
         sensorManager.registerListener(
             this,
             rotationSensor,
-            SensorManager.SENSOR_DELAY_UI
+            SensorManager.SENSOR_DELAY_GAME // Faster updates (~20ms) for responsive compass
         )
         isListening = true
     }
@@ -65,7 +66,20 @@ class CompassService(context: Context) : SensorEventListener {
             azimuthDegrees += 360f
         }
 
-        _heading.value = azimuthDegrees
+        // Apply low-pass filter for smooth rotation without jitter
+        // Handle wraparound at 0/360 boundary
+        var delta = azimuthDegrees - lastHeading
+        if (delta > 180f) delta -= 360f
+        if (delta < -180f) delta += 360f
+
+        // Smoothing factor: 0.3 = responsive yet smooth (lower = smoother but laggier)
+        val smoothedHeading = lastHeading + delta * 0.3f
+
+        // Normalize smoothed heading to 0-360
+        val normalizedHeading = ((smoothedHeading % 360f) + 360f) % 360f
+        lastHeading = normalizedHeading
+
+        _heading.value = normalizedHeading
     }
 
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {

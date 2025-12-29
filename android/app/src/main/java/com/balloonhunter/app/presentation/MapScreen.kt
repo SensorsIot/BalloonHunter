@@ -108,11 +108,7 @@ import com.google.android.gms.maps.model.BitmapDescriptorFactory
 @Composable
 fun MapScreen(viewModel: MapViewModel = hiltViewModel()) {
     val balloonPosition by viewModel.position.collectAsState()
-    val balloonPhase by viewModel.balloonPhase.collectAsState()
-    val track by viewModel.track.collectAsState()
-    val prediction by viewModel.prediction.collectAsState()
     val landing by viewModel.currentLanding.collectAsState()
-    val route by viewModel.route.collectAsState()
     val headingMode by viewModel.headingMode.collectAsState()
     val satelliteMode by viewModel.satelliteMode.collectAsState()
     val showAll by viewModel.showAll.collectAsState()
@@ -121,7 +117,6 @@ fun MapScreen(viewModel: MapViewModel = hiltViewModel()) {
     val annotations by viewModel.annotations.collectAsState()
     val cameraUpdate by viewModel.cameraUpdate.collectAsState()
     val frequencyMismatch by viewModel.frequencyMismatch.collectAsState()
-    val routeVisible by viewModel.routeVisible.collectAsState()
     val userLocation by viewModel.userLocation.collectAsState()
     val compassHeading by viewModel.compassHeading.collectAsState()
 
@@ -207,6 +202,7 @@ fun MapScreen(viewModel: MapViewModel = hiltViewModel()) {
     }
 
     // Heading mode: rotate map to match compass and center on user location
+    // Use move() for immediate rotation without animation delay
     LaunchedEffect(headingMode, compassHeading, userLocation, userSettings.mapProvider) {
         if (!headingMode || userLocation == null) return@LaunchedEffect
 
@@ -218,7 +214,8 @@ fun MapScreen(viewModel: MapViewModel = hiltViewModel()) {
                 .bearing(compassHeading)
                 .tilt(45f) // Add slight tilt for better forward view
                 .build()
-            cameraPositionState.animate(CameraUpdateFactory.newCameraPosition(newPos), 300)
+            // Use move() for immediate response without animation delay
+            cameraPositionState.move(CameraUpdateFactory.newCameraPosition(newPos))
         }
     }
 
@@ -230,16 +227,18 @@ fun MapScreen(viewModel: MapViewModel = hiltViewModel()) {
             transportMode = transportMode,
             headingMode = headingMode,
             isMuted = isMuted,
-            satelliteMode = satelliteMode,
             mapProvider = userSettings.mapProvider,
             onHeadingToggle = { viewModel.toggleHeading() },
-            onShowAll = { viewModel.toggleShowAll() },
+            onShowAll = {
+                // Exit heading mode first (like iOS), then show all
+                if (headingMode) viewModel.toggleHeading()
+                viewModel.toggleShowAll()
+            },
             onTransportMode = { viewModel.setTransportMode(it) },
             onMuteToggle = {
                 isMuted = !isMuted
                 viewModel.setMute(isMuted)
             },
-            onSatelliteToggle = { viewModel.toggleSatellite() },
             onNavigate = {
                 landing?.let { landingPoint ->
                     val lat = landingPoint.latitude
@@ -356,8 +355,6 @@ fun MapScreen(viewModel: MapViewModel = hiltViewModel()) {
             )
         }
 
-        val landingHistoryPoints by viewModel.landingHistory.collectAsState()
-
         Box(modifier = Modifier.weight(0.7f).fillMaxWidth()) {
             when (userSettings.mapProvider) {
                 MapProvider.GOOGLE_MAPS -> {
@@ -367,14 +364,7 @@ fun MapScreen(viewModel: MapViewModel = hiltViewModel()) {
                         satelliteMode = satelliteMode,
                         headingMode = headingMode,
                         locationEnabled = permissionsState.allPermissionsGranted,
-                        track = track,
-                        prediction = prediction,
-                        balloonPhase = balloonPhase,
-                        balloonPosition = balloonPosition,
-                        landing = landing,
-                        landingHistory = landingHistoryPoints,
-                        route = route,
-                        routeVisible = routeVisible
+                        annotations = annotations
                     )
                 }
                 MapProvider.OSM -> {
@@ -388,16 +378,30 @@ fun MapScreen(viewModel: MapViewModel = hiltViewModel()) {
                         compassHeading = compassHeading,
                         userLat = userLocation?.latitude,
                         userLon = userLocation?.longitude,
-                        track = track,
-                        prediction = prediction,
-                        balloonPhase = balloonPhase,
-                        balloonPosition = balloonPosition,
-                        landing = landing,
-                        landingHistory = landingHistoryPoints,
-                        route = route,
-                        routeVisible = routeVisible,
-                        fitAllTrigger = osmFitAllTrigger,
-                        onMapMoved = { _, _, _ -> }
+                        annotations = annotations,
+                        fitAllTrigger = osmFitAllTrigger
+                    )
+                }
+            }
+
+            // Map type toggle button - positioned top-right inside map (like iOS)
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = 8.dp, end = 8.dp)
+            ) {
+                IconButton(
+                    onClick = { viewModel.toggleSatellite() },
+                    modifier = Modifier
+                        .background(
+                            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.9f),
+                            shape = MaterialTheme.shapes.small
+                        )
+                ) {
+                    Icon(
+                        if (satelliteMode) Icons.Default.Map else Icons.Default.Layers,
+                        contentDescription = if (satelliteMode) "Standard map" else "Satellite map",
+                        tint = if (satelliteMode) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
                     )
                 }
             }
@@ -412,13 +416,11 @@ private fun TopControls(
     transportMode: TransportationMode,
     headingMode: Boolean,
     isMuted: Boolean,
-    satelliteMode: Boolean,
     mapProvider: MapProvider,
     onHeadingToggle: () -> Unit,
     onShowAll: () -> Unit,
     onTransportMode: (TransportationMode) -> Unit,
     onMuteToggle: () -> Unit,
-    onSatelliteToggle: () -> Unit,
     onNavigate: () -> Unit,
     navigationEnabled: Boolean,
     onSettings: () -> Unit
@@ -442,15 +444,6 @@ private fun TopControls(
                 if (isMuted) Icons.Default.VolumeOff else Icons.Default.VolumeUp,
                 contentDescription = if (isMuted) "Unmute" else "Mute",
                 tint = if (isMuted) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
-            )
-        }
-
-        // Map type toggle - standard/satellite
-        IconButton(onClick = onSatelliteToggle) {
-            Icon(
-                if (satelliteMode) Icons.Default.Map else Icons.Default.Layers,
-                contentDescription = if (satelliteMode) "Standard map" else "Satellite map",
-                tint = if (satelliteMode) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
             )
         }
 
