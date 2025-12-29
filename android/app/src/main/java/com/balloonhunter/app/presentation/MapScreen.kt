@@ -58,6 +58,7 @@ import com.balloonhunter.app.domain.models.MapAnnotationItem
 import com.balloonhunter.app.domain.models.RadioChannelData
 import com.balloonhunter.app.domain.models.TransportationMode
 import com.balloonhunter.app.domain.models.UserSettings
+import com.balloonhunter.app.domain.models.NavigationProvider
 import com.balloonhunter.app.presentation.state.MapViewModel
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.rememberMultiplePermissionsState
@@ -176,27 +177,61 @@ fun MapScreen(viewModel: MapViewModel = hiltViewModel()) {
                 viewModel.setMute(isMuted)
             },
             onNavigate = {
-                landing?.let {
-                    val mode = if (transportMode == TransportationMode.BIKE) "b" else "d"
-                    val gmmIntentUri = Uri.parse("google.navigation:q=${it.latitude},${it.longitude}&mode=$mode")
-                    val mapIntent = Intent(Intent.ACTION_VIEW, gmmIntentUri)
-                    mapIntent.setPackage("com.google.android.apps.maps")
+                landing?.let { landingPoint ->
+                    val lat = landingPoint.latitude
+                    val lon = landingPoint.longitude
+                    val isBike = transportMode == TransportationMode.BIKE
 
-                    // Try Google Maps first, fallback to any available maps app
-                    try {
-                        if (mapIntent.resolveActivity(context.packageManager) != null) {
-                            context.startActivity(mapIntent)
-                        } else {
-                            // Fallback to geo URI that any maps app can handle
-                            val fallbackUri = Uri.parse("geo:${it.latitude},${it.longitude}?q=${it.latitude},${it.longitude}(Landing)")
-                            val fallbackIntent = Intent(Intent.ACTION_VIEW, fallbackUri)
-                            context.startActivity(fallbackIntent)
+                    when (userSettings.navigationProvider) {
+                        NavigationProvider.GOOGLE_MAPS -> {
+                            val mode = if (isBike) "b" else "d"
+                            val gmmIntentUri = Uri.parse("google.navigation:q=$lat,$lon&mode=$mode")
+                            val mapIntent = Intent(Intent.ACTION_VIEW, gmmIntentUri)
+                            mapIntent.setPackage("com.google.android.apps.maps")
+
+                            try {
+                                if (mapIntent.resolveActivity(context.packageManager) != null) {
+                                    context.startActivity(mapIntent)
+                                } else {
+                                    val fallbackUri = Uri.parse("geo:$lat,$lon?q=$lat,$lon(Landing)")
+                                    context.startActivity(Intent(Intent.ACTION_VIEW, fallbackUri))
+                                }
+                            } catch (e: Exception) {
+                                val browserUri = Uri.parse("https://www.google.com/maps/dir/?api=1&destination=$lat,$lon&travelmode=${if (isBike) "bicycling" else "driving"}")
+                                context.startActivity(Intent(Intent.ACTION_VIEW, browserUri))
+                            }
                         }
-                    } catch (e: Exception) {
-                        // Last resort: open in browser
-                        val browserUri = Uri.parse("https://www.google.com/maps/dir/?api=1&destination=${it.latitude},${it.longitude}&travelmode=${if (mode == "b") "bicycling" else "driving"}")
-                        val browserIntent = Intent(Intent.ACTION_VIEW, browserUri)
-                        context.startActivity(browserIntent)
+                        NavigationProvider.OSM -> {
+                            // Try OsmAnd, then Organic Maps, then geo URI, then browser
+                            val osmandUri = Uri.parse("osmand.navigation:q=$lat,$lon")
+                            val osmandIntent = Intent(Intent.ACTION_VIEW, osmandUri)
+                            val organicUri = Uri.parse("om://route?daddr=$lat,$lon")
+                            val organicIntent = Intent(Intent.ACTION_VIEW, organicUri)
+
+                            try {
+                                when {
+                                    osmandIntent.resolveActivity(context.packageManager) != null -> {
+                                        context.startActivity(osmandIntent)
+                                    }
+                                    organicIntent.resolveActivity(context.packageManager) != null -> {
+                                        context.startActivity(organicIntent)
+                                    }
+                                    else -> {
+                                        val geoUri = Uri.parse("geo:$lat,$lon?q=$lat,$lon(Landing)")
+                                        val geoIntent = Intent(Intent.ACTION_VIEW, geoUri)
+                                        if (geoIntent.resolveActivity(context.packageManager) != null) {
+                                            context.startActivity(geoIntent)
+                                        } else {
+                                            val browserUri = Uri.parse("https://www.openstreetmap.org/directions?from=&to=$lat,$lon&engine=fossgis_osrm_${if (isBike) "bike" else "car"}")
+                                            context.startActivity(Intent(Intent.ACTION_VIEW, browserUri))
+                                        }
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                val browserUri = Uri.parse("https://www.openstreetmap.org/directions?from=&to=$lat,$lon")
+                                context.startActivity(Intent(Intent.ACTION_VIEW, browserUri))
+                            }
+                        }
                     }
                 }
             },
@@ -424,6 +459,7 @@ private fun UnifiedSettingsDialog(
     var burstAltitude by remember(userSettings) { mutableStateOf(userSettings.burstAltitude.toString()) }
     var ascentRate by remember(userSettings) { mutableStateOf(userSettings.ascentRate.toString()) }
     var descentRate by remember(userSettings) { mutableStateOf(userSettings.descentRate.toString()) }
+    var navigationProvider by remember(userSettings) { mutableStateOf(userSettings.navigationProvider) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -480,6 +516,43 @@ private fun UnifiedSettingsDialog(
                                 singleLine = true,
                                 modifier = Modifier.fillMaxWidth()
                             )
+
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text("Navigation App", style = MaterialTheme.typography.labelMedium)
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Button(
+                                    onClick = { navigationProvider = NavigationProvider.GOOGLE_MAPS },
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = if (navigationProvider == NavigationProvider.GOOGLE_MAPS)
+                                            MaterialTheme.colorScheme.primary
+                                        else MaterialTheme.colorScheme.surfaceVariant
+                                    ),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Text("Google Maps")
+                                }
+                                Button(
+                                    onClick = { navigationProvider = NavigationProvider.OSM },
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = if (navigationProvider == NavigationProvider.OSM)
+                                            MaterialTheme.colorScheme.primary
+                                        else MaterialTheme.colorScheme.surfaceVariant
+                                    ),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Text("OSM")
+                                }
+                            }
+                            Text(
+                                text = if (navigationProvider == NavigationProvider.OSM)
+                                    "Uses OsmAnd, Organic Maps, or browser"
+                                else "Uses Google Maps app",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
                     }
                     1 -> {
@@ -496,7 +569,8 @@ private fun UnifiedSettingsDialog(
                         stationId = stationId,
                         burstAltitude = burstAltitude.toDoubleOrNull() ?: userSettings.burstAltitude,
                         ascentRate = ascentRate.toDoubleOrNull() ?: userSettings.ascentRate,
-                        descentRate = descentRate.toDoubleOrNull() ?: userSettings.descentRate
+                        descentRate = descentRate.toDoubleOrNull() ?: userSettings.descentRate,
+                        navigationProvider = navigationProvider
                     )
                     onSaveUserSettings(newSettings)
                     onDismiss()
