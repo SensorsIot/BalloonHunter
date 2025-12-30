@@ -133,10 +133,11 @@ fun MapScreen(viewModel: MapViewModel = hiltViewModel()) {
     var showSettingsDialog by remember { mutableStateOf(false) }
 
     val context = LocalContext.current
+    // Default to Switzerland (46.8°N, 8.2°E) with zoom 7 to show whole country
     val cameraPositionState = rememberCameraPositionState {
         position = balloonPosition?.let {
-            CameraPosition.fromLatLngZoom(it.point.toLatLng(), 8f)
-        } ?: CameraPosition.fromLatLngZoom(LatLng(0.0, 0.0), 2f)
+            CameraPosition.fromLatLngZoom(it.point.toLatLng(), 10f)
+        } ?: CameraPosition.fromLatLngZoom(LatLng(46.8, 8.2), 7f)
     }
 
     val permissionsState = rememberMultiplePermissionsState(
@@ -395,9 +396,9 @@ fun MapScreen(viewModel: MapViewModel = hiltViewModel()) {
                 MapProvider.OSM -> {
                     OsmMapContent(
                         modifier = Modifier.fillMaxSize(),
-                        centerLat = balloonPosition?.latitude ?: 47.0,
-                        centerLon = balloonPosition?.longitude ?: 8.0,
-                        zoom = 10.0,
+                        centerLat = balloonPosition?.latitude ?: 46.8,
+                        centerLon = balloonPosition?.longitude ?: 8.2,
+                        zoom = if (balloonPosition != null) 10.0 else 7.0,
                         satelliteMode = satelliteMode,
                         headingMode = headingMode,
                         compassHeading = compassHeading,
