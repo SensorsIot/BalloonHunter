@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -55,34 +56,95 @@ class MapViewModel @Inject constructor(
     private val _showAll = MutableStateFlow(false)
     val showAll: StateFlow<Boolean> = _showAll.asStateFlow()
 
-    // Startup fit-all: triggers when track/route data becomes available
-    private var hasPerformedInitialFit = false
-    private var hasPerformedRouteFit = false
+    // Sonde selection dialog state
+    private val _showSondeSelectionDialog = MutableStateFlow(true) // Show at startup
+    val showSondeSelectionDialog: StateFlow<Boolean> = _showSondeSelectionDialog.asStateFlow()
+
+    private val _detectedSondeName = MutableStateFlow("")
+    val detectedSondeName: StateFlow<String> = _detectedSondeName.asStateFlow()
+
+    private val _selectedSondeName = MutableStateFlow("")
+    val selectedSondeName: StateFlow<String> = _selectedSondeName.asStateFlow()
+
+    private val _sondeSelectionCountdown = MutableStateFlow(10)
+    val sondeSelectionCountdown: StateFlow<Int> = _sondeSelectionCountdown.asStateFlow()
+
+    private var countdownJob: Job? = null
+    private var userIsEditingSonde = false
+
+    // Loading state - shown after sonde selection until data arrives
+    private val _isWaitingForData = MutableStateFlow(false)
+    val isWaitingForData: StateFlow<Boolean> = _isWaitingForData.asStateFlow()
+
+    // Startup fit-all: triggers once when BOTH track AND route are available
+    private var hasPerformedStartupFit = false
 
     init {
-        // Watch for initial data (track or position) to trigger first fit-all
+        // Watch for first position to get detected sonde name
         viewModelScope.launch {
-            combine(track, position) { trackPoints, pos ->
-                Pair(trackPoints, pos)
-            }.collect { (trackPoints, pos) ->
-                if (!hasPerformedInitialFit && (trackPoints.isNotEmpty() || pos != null)) {
-                    hasPerformedInitialFit = true
-                    kotlinx.coroutines.delay(500)
-                    requestFitAll()
+            position.collect { pos ->
+                if (pos != null && _detectedSondeName.value.isEmpty()) {
+                    _detectedSondeName.value = pos.sondeName
+                    _selectedSondeName.value = pos.sondeName
+                    startCountdown()
                 }
             }
         }
 
-        // Watch for route to trigger second fit-all (shows full picture with route)
+        // Single fit-all after BOTH track AND route are loaded
         viewModelScope.launch {
-            route.collect { routeData ->
-                if (!hasPerformedRouteFit && routeData != null && routeData.coordinates.isNotEmpty()) {
-                    hasPerformedRouteFit = true
+            combine(track, route) { trackPoints, routeData ->
+                Pair(trackPoints, routeData)
+            }.collect { (trackPoints, routeData) ->
+                if (!hasPerformedStartupFit &&
+                    trackPoints.isNotEmpty() &&
+                    routeData != null && routeData.coordinates.isNotEmpty()) {
+                    hasPerformedStartupFit = true
+                    _isWaitingForData.value = false
                     kotlinx.coroutines.delay(300)
                     requestFitAll()
                 }
             }
         }
+    }
+
+    private fun startCountdown() {
+        countdownJob?.cancel()
+        countdownJob = viewModelScope.launch {
+            for (i in 10 downTo 1) {
+                if (userIsEditingSonde) {
+                    _sondeSelectionCountdown.value = 0
+                    return@launch
+                }
+                _sondeSelectionCountdown.value = i
+                kotlinx.coroutines.delay(1000)
+            }
+            // Auto-confirm when countdown reaches 0
+            confirmSondeSelection()
+        }
+    }
+
+    fun updateSelectedSondeName(name: String) {
+        userIsEditingSonde = true
+        _sondeSelectionCountdown.value = 0
+        countdownJob?.cancel()
+        _selectedSondeName.value = name
+    }
+
+    fun confirmSondeSelection() {
+        countdownJob?.cancel()
+        _showSondeSelectionDialog.value = false
+        _isWaitingForData.value = true
+        // If user changed the sonde name, update the station/sonde tracking
+        if (_selectedSondeName.value.isNotBlank() && _selectedSondeName.value != _detectedSondeName.value) {
+            coordinator.setSondeName(_selectedSondeName.value)
+        }
+    }
+
+    fun skipSondeSelection() {
+        countdownJob?.cancel()
+        _showSondeSelectionDialog.value = false
+        _isWaitingForData.value = true
     }
 
     // Transport mode is ephemeral - exposed from coordinator

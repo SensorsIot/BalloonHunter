@@ -105,6 +105,8 @@ app/src/main/java/com/balloonhunter/app/
 | 🧭 Navigation | Google Maps, OsmAnd, or Organic Maps integration |
 | 🎨 Material 3 | SegmentedButtons, ModalBottomSheet, Card components |
 | 📡 Foreground Service | Continuous BLE connection |
+| 🎯 Sonde Selection | Startup dialog to confirm/change tracked sonde |
+| ⏳ Smart Loading | Loading indicator with fit-all after track+route ready |
 
 ### Material 3 Design System
 

@@ -122,6 +122,15 @@ fun MapScreen(viewModel: MapViewModel = hiltViewModel()) {
     val userLocation by viewModel.userLocation.collectAsState()
     val compassHeading by viewModel.compassHeading.collectAsState()
 
+    // Sonde selection dialog state
+    val showSondeSelectionDialog by viewModel.showSondeSelectionDialog.collectAsState()
+    val detectedSondeName by viewModel.detectedSondeName.collectAsState()
+    val selectedSondeName by viewModel.selectedSondeName.collectAsState()
+    val sondeSelectionCountdown by viewModel.sondeSelectionCountdown.collectAsState()
+
+    // Loading state
+    val isWaitingForData by viewModel.isWaitingForData.collectAsState()
+
     // Track mute state from radio data
     var isMuted by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
@@ -379,6 +388,92 @@ fun MapScreen(viewModel: MapViewModel = hiltViewModel()) {
                     }
                 }
             )
+        }
+
+        // Sonde Selection Dialog (shown at startup)
+        if (showSondeSelectionDialog && detectedSondeName.isNotBlank()) {
+            AlertDialog(
+                onDismissRequest = { /* Cannot dismiss */ },
+                title = {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(
+                            Icons.Default.Settings,
+                            contentDescription = null,
+                            modifier = Modifier.size(48.dp),
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text("Select Sonde")
+                    }
+                },
+                text = {
+                    Column(
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            text = "Auto-detected from Payerne station",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        OutlinedTextField(
+                            value = selectedSondeName,
+                            onValueChange = { viewModel.updateSelectedSondeName(it) },
+                            label = { Text("Sonde Serial") },
+                            placeholder = { Text("e.g., V3240531") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true
+                        )
+                        if (sondeSelectionCountdown > 0) {
+                            Text(
+                                text = "Auto-continuing in ${sondeSelectionCountdown}s...",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.tertiary
+                            )
+                        } else {
+                            Text(
+                                text = "Enter sonde name or tap Use",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                },
+                confirmButton = {
+                    Button(onClick = { viewModel.confirmSondeSelection() }) {
+                        Text("Use")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { viewModel.skipSondeSelection() }) {
+                        Text("Skip")
+                    }
+                }
+            )
+        }
+
+        // Loading indicator while waiting for SondeHub data
+        if (isWaitingForData) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    androidx.compose.material3.CircularProgressIndicator(
+                        modifier = Modifier.size(24.dp),
+                        strokeWidth = 2.dp
+                    )
+                    Text(
+                        text = "Waiting for SondeHub data...",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+            }
         }
 
         Box(modifier = Modifier.weight(0.7f).fillMaxWidth()) {

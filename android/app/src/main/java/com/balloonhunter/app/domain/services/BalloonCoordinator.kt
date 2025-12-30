@@ -359,6 +359,14 @@ class BalloonCoordinator(
     }
 
     /**
+     * Manually set the sonde name - used when user changes sonde in selection dialog.
+     * Triggers clearing of old data and fetching of new sonde's track.
+     */
+    fun setSondeName(newSondeName: String) {
+        handleSondeChange(newSondeName)
+    }
+
+    /**
      * Handle sonde name change - clear old data and fetch new sonde's track (like iOS clearAllSondeData)
      */
     private fun handleSondeChange(newSondeName: String) {

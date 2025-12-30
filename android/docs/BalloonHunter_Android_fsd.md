@@ -1300,6 +1300,26 @@ The coordinator runs `performCompleteStartupSequence()` in 5 streamlined steps, 
 - **Fault tolerance**: Handles BLE disconnects, network failures, device unavailability, and corrupted persistence
 - **Consistent ~4-second startup**: Fast persistence load (~50ms) + optimized service startup
 
+### Sonde Selection Dialog
+
+When the app starts and first telemetry is received from SondeHub, a sonde selection dialog is shown:
+
+1. **Auto-detection**: The dialog displays the auto-detected sonde serial from Payerne station
+2. **Editable field**: User can modify the sonde serial if needed (e.g., to track a different sonde)
+3. **Countdown timer**: 10-second auto-continue countdown (pauses when user starts editing)
+4. **Actions**:
+   - **Use**: Confirm the displayed/edited sonde name and proceed
+   - **Skip**: Proceed without changing the sonde
+5. **Sonde change handling**: If user changes the sonde name, all existing track data is cleared and new data is fetched for the selected sonde
+
+### Loading Indicator
+
+After sonde selection is confirmed/skipped, a "Waiting for SondeHub data..." loading indicator is shown:
+
+- Displays until BOTH track data AND route data are loaded
+- Single fit-all zoom is triggered only after all data is ready
+- Ensures the user sees the complete picture (track + route) in one smooth zoom
+
 ## Tracking View
 
 No calculations or business logic in views. Search for an appropriate service to place and publish them.
