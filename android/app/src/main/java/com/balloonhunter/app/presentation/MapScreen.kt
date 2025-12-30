@@ -205,25 +205,16 @@ fun MapScreen(viewModel: MapViewModel = hiltViewModel()) {
 
     // Save zoom level before entering heading mode to restore when exiting
     var savedZoomBeforeHeading by remember { mutableStateOf(10f) }
+    var wasInHeadingMode by remember { mutableStateOf(false) }
 
-    // Heading mode: rotate map to match compass and center on user location
-    // Use move() for immediate rotation without animation delay
-    LaunchedEffect(headingMode, compassHeading, userLocation, userSettings.mapProvider) {
-        val loc = userLocation ?: return@LaunchedEffect
-
-        // Only for Google Maps - OSM handles this differently
-        if (userSettings.mapProvider == MapProvider.GOOGLE_MAPS) {
-            if (headingMode) {
-                // In heading mode: rotate map, center on user, preserve zoom
-                val newPos = CameraPosition.builder()
-                    .target(LatLng(loc.latitude, loc.longitude))
-                    .zoom(cameraPositionState.position.zoom)
-                    .bearing(compassHeading)
-                    .tilt(45f)
-                    .build()
-                cameraPositionState.move(CameraUpdateFactory.newCameraPosition(newPos))
-            } else {
-                // Exiting heading mode: reset rotation and tilt immediately
+    // Handle heading mode transitions (save zoom on enter, reset on exit)
+    LaunchedEffect(headingMode) {
+        if (headingMode && !wasInHeadingMode) {
+            // Entering heading mode: save current zoom
+            savedZoomBeforeHeading = cameraPositionState.position.zoom
+        } else if (!headingMode && wasInHeadingMode) {
+            // Exiting heading mode: reset rotation/tilt and restore zoom (once)
+            if (userSettings.mapProvider == MapProvider.GOOGLE_MAPS) {
                 val resetPos = CameraPosition.builder()
                     .target(cameraPositionState.position.target)
                     .zoom(savedZoomBeforeHeading)
@@ -233,12 +224,23 @@ fun MapScreen(viewModel: MapViewModel = hiltViewModel()) {
                 cameraPositionState.move(CameraUpdateFactory.newCameraPosition(resetPos))
             }
         }
+        wasInHeadingMode = headingMode
     }
 
-    // Save zoom when entering heading mode
-    LaunchedEffect(headingMode) {
-        if (headingMode) {
-            savedZoomBeforeHeading = cameraPositionState.position.zoom
+    // Heading mode: continuously rotate map to match compass and center on user
+    LaunchedEffect(headingMode, compassHeading, userLocation, userSettings.mapProvider) {
+        if (!headingMode) return@LaunchedEffect
+        val loc = userLocation ?: return@LaunchedEffect
+
+        // Only for Google Maps - OSM handles this differently
+        if (userSettings.mapProvider == MapProvider.GOOGLE_MAPS) {
+            val newPos = CameraPosition.builder()
+                .target(LatLng(loc.latitude, loc.longitude))
+                .zoom(cameraPositionState.position.zoom)
+                .bearing(compassHeading)
+                .tilt(45f)
+                .build()
+            cameraPositionState.move(CameraUpdateFactory.newCameraPosition(newPos))
         }
     }
 
