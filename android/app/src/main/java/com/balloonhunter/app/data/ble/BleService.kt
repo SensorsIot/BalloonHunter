@@ -184,14 +184,6 @@ class BleService(
         sendSettings(mapOf("blu" to if (enabled) 1 else 0))
     }
 
-    fun setSerialBaudRate(rate: Int) {
-        sendSettings(mapOf("baud" to rate))
-    }
-
-    fun setSerialPort(port: Int) {
-        sendSettings(mapOf("com" to port))
-    }
-
     fun setNameType(type: Int) {
         sendSettings(mapOf("aprsName" to type))
     }

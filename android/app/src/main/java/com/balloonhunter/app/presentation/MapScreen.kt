@@ -25,8 +25,6 @@ import androidx.compose.material.icons.filled.Directions
 import androidx.compose.material.icons.filled.DirectionsCar
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
-import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.MyLocation
@@ -83,6 +81,10 @@ import com.balloonhunter.app.domain.models.TransportationMode
 import com.balloonhunter.app.domain.models.UserSettings
 import com.balloonhunter.app.domain.models.NavigationProvider
 import com.balloonhunter.app.domain.models.MapProvider
+import com.balloonhunter.app.presentation.components.FrequencyDigitPicker
+import com.balloonhunter.app.presentation.components.digitsToFrequency
+import com.balloonhunter.app.presentation.components.frequencyToDigits
+import com.balloonhunter.app.presentation.components.isValidFrequencyDigit
 import com.balloonhunter.app.presentation.map.GoogleMapContent
 import com.balloonhunter.app.presentation.map.OsmMapContent
 import com.balloonhunter.app.presentation.map.toLatLng
@@ -827,67 +829,6 @@ private fun FrequencySettingsTab(viewModel: MapViewModel) {
         ) {
             Text("Apply Frequency")
         }
-    }
-}
-
-@Composable
-private fun FrequencyDigitPicker(
-    value: Int,
-    onValueChange: (Int) -> Unit
-) {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        IconButton(
-            onClick = {
-                val newVal = if (value >= 9) 0 else value + 1
-                onValueChange(newVal)
-            }
-        ) {
-            Icon(Icons.Default.KeyboardArrowUp, contentDescription = "Increase digit")
-        }
-
-        Text(
-            text = value.toString(),
-            style = MaterialTheme.typography.headlineSmall
-        )
-
-        IconButton(
-            onClick = {
-                val newVal = if (value <= 0) 9 else value - 1
-                onValueChange(newVal)
-            }
-        ) {
-            Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Decrease digit")
-        }
-    }
-}
-
-private fun frequencyToDigits(frequency: Double): List<Int> {
-    val freq = (frequency * 100).toInt()
-    return listOf(
-        (freq / 10000) % 10,
-        (freq / 1000) % 10,
-        (freq / 100) % 10,
-        (freq / 10) % 10,
-        freq % 10
-    )
-}
-
-private fun digitsToFrequency(digits: List<Int>): Double {
-    val whole = digits[0] * 100 + digits[1] * 10 + digits[2]
-    val decimal = digits[3] * 10 + digits[4]
-    return whole + decimal / 100.0
-}
-
-private fun isValidFrequencyDigit(digit: Int, position: Int, allDigits: List<Int>): Boolean {
-    return when (position) {
-        0 -> digit == 4
-        1 -> digit == 0
-        2 -> digit in 0..6
-        3 -> if (allDigits[2] == 6) digit == 0 else true
-        4 -> if (allDigits[2] == 6 && allDigits[3] == 0) digit == 0 else true
-        else -> true
     }
 }
 

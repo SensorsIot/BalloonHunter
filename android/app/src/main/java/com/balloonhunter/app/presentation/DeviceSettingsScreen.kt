@@ -18,6 +18,10 @@ import com.balloonhunter.app.data.ble.AfcData
 import com.balloonhunter.app.domain.models.BLEConnectionState
 import com.balloonhunter.app.domain.models.RadioChannelData
 import com.balloonhunter.app.domain.models.SettingsData
+import com.balloonhunter.app.presentation.components.FrequencyDigitPicker
+import com.balloonhunter.app.presentation.components.digitsToFrequency
+import com.balloonhunter.app.presentation.components.frequencyToDigits
+import com.balloonhunter.app.presentation.components.isValidFrequencyDigit
 import com.balloonhunter.app.presentation.state.MapViewModel
 
 /**
@@ -231,9 +235,7 @@ private fun SondeTab(initialRadioData: RadioChannelData?, viewModel: MapViewMode
                         if (isValidFrequencyDigit(newDigit, i, freqDigits)) {
                             freqDigits = freqDigits.toMutableList().also { it[i] = newDigit }
                         }
-                    },
-                    position = i,
-                    allDigits = freqDigits
+                    }
                 )
             }
             Text(" MHz", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(start = 8.dp))
@@ -257,72 +259,6 @@ private fun SondeTab(initialRadioData: RadioChannelData?, viewModel: MapViewMode
         ) {
             Text("Apply Frequency")
         }
-    }
-}
-
-@Composable
-private fun FrequencyDigitPicker(
-    value: Int,
-    onValueChange: (Int) -> Unit,
-    position: Int,
-    allDigits: List<Int>
-) {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        IconButton(
-            onClick = {
-                val newVal = if (value >= 9) 0 else value + 1
-                onValueChange(newVal)
-            }
-        ) {
-            Icon(Icons.Default.KeyboardArrowUp, contentDescription = "Increase digit")
-        }
-
-        Text(
-            text = value.toString(),
-            style = MaterialTheme.typography.headlineSmall
-        )
-
-        IconButton(
-            onClick = {
-                val newVal = if (value <= 0) 9 else value - 1
-                onValueChange(newVal)
-            }
-        ) {
-            Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Decrease digit")
-        }
-    }
-}
-
-private fun frequencyToDigits(frequency: Double): List<Int> {
-    // Convert 403.50 to [4, 0, 3, 5, 0]
-    val freq = (frequency * 100).toInt() // 40350
-    return listOf(
-        (freq / 10000) % 10,  // 4
-        (freq / 1000) % 10,   // 0
-        (freq / 100) % 10,    // 3
-        (freq / 10) % 10,     // 5
-        freq % 10             // 0
-    )
-}
-
-private fun digitsToFrequency(digits: List<Int>): Double {
-    // Convert [4, 0, 3, 5, 0] to 403.50
-    val whole = digits[0] * 100 + digits[1] * 10 + digits[2]
-    val decimal = digits[3] * 10 + digits[4]
-    return whole + decimal / 100.0
-}
-
-private fun isValidFrequencyDigit(digit: Int, position: Int, allDigits: List<Int>): Boolean {
-    // Frequency range: 400.00 - 406.00 MHz
-    return when (position) {
-        0 -> digit == 4  // Must be 4xx
-        1 -> digit == 0  // Must be 40x
-        2 -> digit in 0..6  // 400-406
-        3 -> if (allDigits[2] == 6) digit == 0 else true  // If 406.xx, first decimal must be 0
-        4 -> if (allDigits[2] == 6 && allDigits[3] == 0) digit == 0 else true  // If 406.0x, second decimal must be 0
-        else -> true
     }
 }
 

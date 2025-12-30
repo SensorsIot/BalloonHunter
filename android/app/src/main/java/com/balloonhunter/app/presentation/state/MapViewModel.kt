@@ -240,8 +240,6 @@ class MapViewModel @Inject constructor(
     fun setFrequency(frequency: Double, probeType: String) = coordinator.setFrequency(frequency, probeType)
     fun setFrequencyCorrection(correction: Int) = coordinator.setFrequencyCorrection(correction)
 
-    fun updateLandingPoint(point: GeoPoint) = Unit
-
     // Frequency mismatch detection
     val frequencyMismatch = coordinator.frequencyMismatch
     fun acceptFrequencyMismatch() = coordinator.acceptFrequencyMismatch()
