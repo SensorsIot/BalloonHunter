@@ -139,20 +139,29 @@ fun OsmMapContent(
         }
     }
 
+    // Save zoom level before entering heading mode to restore when exiting
+    var savedZoomBeforeHeading by remember { mutableStateOf(10.0) }
+
+    // Save zoom when entering heading mode
+    LaunchedEffect(headingMode) {
+        if (headingMode) {
+            savedZoomBeforeHeading = mapView.zoomLevelDouble
+        }
+    }
+
     // Handle heading mode - rotate map and center on user
     LaunchedEffect(headingMode, compassHeading, userLat, userLon) {
-        if (!headingMode || userLat == null || userLon == null) {
+        if (userLat == null || userLon == null) return@LaunchedEffect
+
+        if (headingMode) {
+            // In heading mode: rotate map, center on user, preserve zoom
+            mapView.mapOrientation = -compassHeading
+            mapView.controller.setCenter(OsmGeoPoint(userLat, userLon))
+        } else {
+            // Exiting heading mode: reset rotation, restore zoom
             mapView.mapOrientation = 0f
-            return@LaunchedEffect
+            mapView.controller.setZoom(savedZoomBeforeHeading)
         }
-
-        mapView.mapOrientation = -compassHeading
-        mapView.controller.setCenter(OsmGeoPoint(userLat, userLon))
-
-        if (mapView.zoomLevelDouble < 15.0) {
-            mapView.controller.setZoom(15.0)
-        }
-
         mapView.invalidate()
     }
 

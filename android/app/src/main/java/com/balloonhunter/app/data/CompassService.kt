@@ -72,8 +72,8 @@ class CompassService(context: Context) : SensorEventListener {
         if (delta > 180f) delta -= 360f
         if (delta < -180f) delta += 360f
 
-        // Smoothing factor: 0.3 = responsive yet smooth (lower = smoother but laggier)
-        val smoothedHeading = lastHeading + delta * 0.3f
+        // Smoothing factor: 0.6 = fast and responsive (higher = faster but more jittery)
+        val smoothedHeading = lastHeading + delta * 0.6f
 
         // Normalize smoothed heading to 0-360
         val normalizedHeading = ((smoothedHeading % 360f) + 360f) % 360f
