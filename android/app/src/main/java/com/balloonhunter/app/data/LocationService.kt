@@ -32,6 +32,12 @@ class LocationService(context: Context) {
         startUpdates(5000, Priority.PRIORITY_BALANCED_POWER_ACCURACY)
     }
 
+    @SuppressLint("MissingPermission")
+    fun startPrecisionUpdates() {
+        // Used for heading/compass mode - more frequent, higher accuracy updates
+        startUpdates(1500, Priority.PRIORITY_HIGH_ACCURACY)
+    }
+
     fun stopUpdates() {
         callback?.let { fusedClient.removeLocationUpdates(it) }
         callback = null

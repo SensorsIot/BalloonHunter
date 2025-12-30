@@ -252,6 +252,21 @@ class BalloonCoordinator(
         bleService.resetConnection()
     }
 
+    /**
+     * Enable precision location updates for heading/compass mode.
+     * Uses more battery but provides more accurate and frequent updates.
+     */
+    fun enablePrecisionLocation() {
+        locationService.startPrecisionUpdates()
+    }
+
+    /**
+     * Disable precision location updates, return to background mode.
+     */
+    fun disablePrecisionLocation() {
+        locationService.startBackgroundUpdates()
+    }
+
     fun updateTransportMode(mode: TransportationMode) {
         _transportMode.value = mode
         // Recalculate route with new mode

@@ -154,6 +154,9 @@ class MapViewModel @Inject constructor(
 
     override fun onCleared() {
         compassService.stopListening()
+        if (_headingMode.value) {
+            coordinator.disablePrecisionLocation()
+        }
         coordinator.stop()
         super.onCleared()
     }
@@ -162,8 +165,10 @@ class MapViewModel @Inject constructor(
         _headingMode.value = !_headingMode.value
         if (_headingMode.value) {
             compassService.startListening()
+            coordinator.enablePrecisionLocation()
         } else {
             compassService.stopListening()
+            coordinator.disablePrecisionLocation()
         }
     }
 
