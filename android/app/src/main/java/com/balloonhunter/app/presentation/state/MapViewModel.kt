@@ -55,20 +55,30 @@ class MapViewModel @Inject constructor(
     private val _showAll = MutableStateFlow(false)
     val showAll: StateFlow<Boolean> = _showAll.asStateFlow()
 
-    // Startup fit-all: triggers once when data becomes available
-    private var hasPerformedStartupFit = false
+    // Startup fit-all: triggers when track/route data becomes available
+    private var hasPerformedInitialFit = false
+    private var hasPerformedRouteFit = false
 
     init {
-        // Watch for data to trigger startup fit-all
+        // Watch for initial data (track or position) to trigger first fit-all
         viewModelScope.launch {
-            combine(track, position, userLocation) { trackPoints, pos, userLoc ->
-                Triple(trackPoints, pos, userLoc)
-            }.collect { (trackPoints, pos, userLoc) ->
-                // Trigger fit-all once we have any data (track, position, or user location)
-                if (!hasPerformedStartupFit && (trackPoints.isNotEmpty() || pos != null || userLoc != null)) {
-                    hasPerformedStartupFit = true
-                    // Small delay to ensure map is ready
+            combine(track, position) { trackPoints, pos ->
+                Pair(trackPoints, pos)
+            }.collect { (trackPoints, pos) ->
+                if (!hasPerformedInitialFit && (trackPoints.isNotEmpty() || pos != null)) {
+                    hasPerformedInitialFit = true
                     kotlinx.coroutines.delay(500)
+                    requestFitAll()
+                }
+            }
+        }
+
+        // Watch for route to trigger second fit-all (shows full picture with route)
+        viewModelScope.launch {
+            route.collect { routeData ->
+                if (!hasPerformedRouteFit && routeData != null && routeData.coordinates.isNotEmpty()) {
+                    hasPerformedRouteFit = true
+                    kotlinx.coroutines.delay(300)
                     requestFitAll()
                 }
             }
