@@ -97,8 +97,9 @@ struct DataPanelView: View {
                             .frame(width: table2ColumnWidth, alignment: .leading)
                         Text("Landing: \(predictedLandingTimeString)")
                             .frame(width: table2ColumnWidth, alignment: .leading)
-                        Text("Arrival: \(arrivalTimeString)")
+                        Text("Depart: \(departureString)")
                             .frame(width: table2ColumnWidth, alignment: .leading)
+                            .foregroundColor(departureColor)
                     }
                     // Row 4: Adjusted descent rate (per FSD requirement) - spans all 3 columns
                     GridRow {
@@ -228,15 +229,25 @@ struct DataPanelView: View {
         return predictionService.predictedLandingTimeString
     }
     
-    private var arrivalTimeString: String {
-        if showingPlaceholders {
-            return "--:--"
-        }
-        if let routeData = routeCalculationService.currentRoute {
-            let arrivalTime = Date().addingTimeInterval(routeData.expectedTravelTime)
-            return Self.timeFormatter.string(from: arrivalTime)
-        }
-        return "--:--"
+    /// Time remaining before the hunter must set off to meet the landing.
+    ///
+    /// Replaces the old `Arrival:` figure, which answered a different question -
+    /// when you would arrive if you left this instant. Goes negative once the
+    /// balloon will be down before you could get there; the negative number is
+    /// shown as-is, with no warning attached. See *FSD -> Hunt Phases -> Phase 2*.
+    private var departureString: String {
+        if showingPlaceholders { return "--:--" }
+        guard let plan = serviceCoordinator.departurePlan else { return "--:--" }
+
+        let total = Int(plan.timeUntilDeparture.rounded())
+        let sign = total < 0 ? "-" : ""
+        let m = abs(total) / 60
+        return String(format: "%@%02d:%02d", sign, m / 60, m % 60)
+    }
+
+    /// Red once the landing can no longer be met.
+    private var departureColor: Color {
+        (serviceCoordinator.departurePlan?.isTooLate ?? false) ? .red : .primary
     }
     
     private var distanceString: String {

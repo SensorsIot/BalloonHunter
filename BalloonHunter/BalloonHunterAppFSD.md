@@ -1836,27 +1836,28 @@ Table 2: 3 columns
 | :------------- | :--------------- | :----------- |
 | Frequency      | Signal Strength  | Battery %    |
 | Vertical speed | Horizontal speed | Distance     |
-| Flight time    | Landing time     | Arrival time |
+| Flight time    | Landing time     | Departure time |
 | Adjusted Descent Rate    | Burst killer expiry time| |
 
-**Not yet implemented — Phase 2 requires a departure time.** `Arrival:` answers
-when the hunter would arrive *if they left this instant*, which is not the
-question being asked while stationary. What Phase 2 needs is:
+**`Depart:` replaces the old `Arrival:` figure.** Arrival answered when the hunter
+would get there *if they left this instant*, which is not the question being asked
+while stationary. What Phase 2 needs is:
 
 ```
 depart at  =  predicted landing time  -  route travel time
 ```
 
-Both inputs are already computed and simply never subtracted. The value is live,
-carries no margin, and goes negative when the landing cannot be met — in which
-case the negative number is shown and nothing else. See *Hunt Phases -> Phase 2*.
+Shown as time remaining before setting off, in `HH:MM`. It carries no margin and
+goes negative once the landing cannot be met, at which point the negative figure
+is shown in red with nothing else attached. `ServiceCoordinator.departurePlan`
+supplies it from `DepartureTime`. See *Hunt Phases -> Phase 2*.
 
 Text in Columns: left aligned  
 • "V: ... m/s" for vertical speed  
 • "H: ... km/h" for horizontal speed  
 • " dB" for RSSI  
 • " Batt%" for battery percentage  
-• "Arrival: ..." for arrival time  
+• "Depart: ..." for time remaining before setting off (negative when the landing cannot be met)  
 • "Flight: ..." for flight time  
 • "Landing: ..." for landing time  
 • "Dist: ... km" for distance

@@ -363,6 +363,20 @@ final class ServiceCoordinator: ObservableObject {
         appLog("ServiceCoordinator: === Now tracking '\(name)' ===", category: .general, level: .info)
     }
 
+    // MARK: - Phase 2: When To Leave
+
+    /// When to set off in order to meet the landing.
+    ///
+    /// Both halves move - the landing time as the flight develops, the driving
+    /// time as the route is recalculated - so this is read fresh each time rather
+    /// than stored. See *FSD -> Hunt Phases -> Phase 2*.
+    var departurePlan: DepartureTime.Plan? {
+        DepartureTime().plan(
+            landingTime: predictionService.latestPrediction?.landingTime,
+            drivingTime: routeCalculationService.currentRoute?.expectedTravelTime
+        )
+    }
+
     // MARK: - UI Support Methods
 
 
