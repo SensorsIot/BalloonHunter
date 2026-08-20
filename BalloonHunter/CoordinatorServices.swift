@@ -141,12 +141,18 @@ extension ServiceCoordinator {
         // Get available sondes from APRS service (sorted by datetime, most recent first)
         let sondes = balloonPositionService.aprsService.availableSondes
 
-        // Check if any sonde is flying (altitude > 500m)
-        let flyingSonde = sondes.first { $0.isFlying }
+        // Auto-select only a sonde we can positively confirm is airborne.
+        // A sonde reporting no vertical speed is undetermined, never "landed",
+        // so it falls through to the popup rather than being guessed at.
+        let flyingSonde = sondes.first { $0.isFlying == true }
+        let undetermined = sondes.filter { $0.isFlying == nil }
+        if !undetermined.isEmpty {
+            appLog("STARTUP: Step 4b - \(undetermined.count) sonde(s) report no vertical speed, cannot auto-select: \(undetermined.map { $0.serial }.joined(separator: ", "))", category: .general, level: .info)
+        }
 
         if let flyingSonde = flyingSonde {
             // Flying sonde found - auto-select it, skip popup
-            appLog("STARTUP: Step 4b - Flying sonde detected: '\(flyingSonde.serial)' at \(Int(flyingSonde.alt))m - auto-selecting", category: .general, level: .info)
+            appLog("STARTUP: Step 4b - Flying sonde detected: '\(flyingSonde.serial)' at \(Int(flyingSonde.alt))m, vel_v=\(flyingSonde.vel_v.map { String(format: "%.1f", $0) } ?? "n/a")m/s - auto-selecting", category: .general, level: .info)
 
             await MainActor.run {
                 selectedSondeSerial = flyingSonde.serial

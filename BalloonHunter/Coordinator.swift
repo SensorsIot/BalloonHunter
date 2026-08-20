@@ -28,6 +28,7 @@ final class ServiceCoordinator: ObservableObject {
     // Sonde selection popup state
     @Published var showSondeSelectionPopup: Bool = false
     @Published var availableSondesForSelection: [SondeHubSondeData] = []
+    @Published var isRefreshingSondeList: Bool = false
     @Published var selectedSondeSerial: String? = nil
     @Published var sondeSelectionCountdown: Int = 5
     private var sondeSelectionContinuation: CheckedContinuation<Void, Never>?
@@ -452,7 +453,24 @@ final class ServiceCoordinator: ObservableObject {
         userStartedEditing = false
 
         showSondeSelectionPopup = true
-        appLog("ServiceCoordinator: Showing sonde selection for manual change (\(availableSondesForSelection.count) sondes available)", category: .general, level: .info)
+        appLog("ServiceCoordinator: Showing sonde selection for manual change (\(availableSondesForSelection.count) cached)", category: .general, level: .info)
+
+        // Show the cached list at once, then refresh from SondeHub so the picker
+        // reflects the last 24 h as of now rather than as of app launch.
+        isRefreshingSondeList = true
+        Task { [weak self] in
+            guard let self else { return }
+            await self.balloonPositionService.aprsService.refreshAvailableSondes()
+            self.availableSondesForSelection = self.balloonPositionService.aprsService.availableSondes
+            self.isRefreshingSondeList = false
+
+            // Keep the highlighted row valid if the refresh dropped it.
+            if let selected = self.selectedSondeSerial,
+               !self.availableSondesForSelection.contains(where: { $0.serial == selected }) {
+                self.selectedSondeSerial = self.availableSondesForSelection.first?.serial
+            }
+            appLog("ServiceCoordinator: Sonde list refreshed (\(self.availableSondesForSelection.count) available)", category: .general, level: .info)
+        }
     }
 
     /// Switch to a sonde detected by BLE (may not be in APRS)

@@ -374,12 +374,15 @@ final class BalloonPositionService: ObservableObject {
 
             // Key decision factors
             let startupStatus = isStartupComplete ? "✅" : "⏳"
-            let debounceStatus = timeInState >= 30.0 ? "✅30s" : "⏳\(String(format: "%.1f", timeInState))s"
             // Compute staleness directly from BLE service
             let isStale = bleService.lastMessageTimestamp.map { Date().timeIntervalSince($0) > 3.0 } ?? true
             let staleStatus = isStale ? "⚠️stale" : "✅fresh"
 
-            appLog("🔄 DataState: \(currentState) → \(newState) | BLE:\(inputs.bleConnectionState) APRS:\(inputs.aprsDataAvailable) Phase:\(inputs.balloonPhase) | Device:\(deviceInfo) Msg:\(msgAge) Sonde:\(sondeInfo) Alt:\(altInfo) | Startup:\(startupStatus) Debounce:\(debounceStatus) Data:\(staleStatus) AnyData:\(inputs.bleConnectionState.hasTelemetry || inputs.aprsDataAvailable)", category: .service, level: .info)
+            // Held: how long the machine sat in the state it is leaving. Reported
+            // for diagnosis only - no transition is gated on it.
+            let held = String(format: "%.1fs", timeInState)
+
+            appLog("🔄 DataState: \(currentState) → \(newState) | BLE:\(inputs.bleConnectionState) APRS:\(inputs.aprsDataAvailable) Phase:\(inputs.balloonPhase) | Device:\(deviceInfo) Msg:\(msgAge) Sonde:\(sondeInfo) Alt:\(altInfo) | Startup:\(startupStatus) Held:\(held) Data:\(staleStatus) AnyData:\(inputs.bleConnectionState.hasTelemetry || inputs.aprsDataAvailable)", category: .service, level: .info)
             transition(to: newState)
         }
 
@@ -399,10 +402,10 @@ final class BalloonPositionService: ObservableObject {
             return evaluateWaitingForAPRSTransitions(inputs: inputs, timeInState: timeInCurrentState)
 
         case .aprsFlying:
-            return evaluateAPRSFlyingTransitions(inputs: inputs, timeInState: timeInCurrentState)
+            return evaluateAPRSFlyingTransitions(inputs: inputs)
 
         case .aprsLanded:
-            return evaluateAPRSLandedTransitions(inputs: inputs, timeInState: timeInCurrentState)
+            return evaluateAPRSLandedTransitions(inputs: inputs)
 
         case .noTelemetry:
             return evaluateNoTelemetryTransitions(inputs: inputs)
@@ -624,8 +627,9 @@ final class BalloonPositionService: ObservableObject {
         return .waitingForAPRS
     }
 
-    private func evaluateAPRSFlyingTransitions(inputs: TelemetryInputs, timeInState: TimeInterval) -> DataState {
-        // No debounce - immediate transition when BLE recovers
+    private func evaluateAPRSFlyingTransitions(inputs: TelemetryInputs) -> DataState {
+        // Transitions are immediate; the 30 s BLE staleness threshold supplies
+        // the only delay this state machine needs.
         if inputs.bleConnectionState.hasTelemetry {
             return .liveBLEFlying
         }
@@ -638,8 +642,9 @@ final class BalloonPositionService: ObservableObject {
         return .aprsFlying
     }
 
-    private func evaluateAPRSLandedTransitions(inputs: TelemetryInputs, timeInState: TimeInterval) -> DataState {
-        // No debounce - immediate transition when BLE recovers
+    private func evaluateAPRSLandedTransitions(inputs: TelemetryInputs) -> DataState {
+        // Transitions are immediate; the 30 s BLE staleness threshold supplies
+        // the only delay this state machine needs.
         if inputs.bleConnectionState.hasTelemetry {
             return inputs.balloonPhase == .landed ? .liveBLELanded : .liveBLEFlying
         }

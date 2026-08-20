@@ -28,9 +28,17 @@ struct SondeHubSondeData: Codable {
         return tx_frequency ?? frequency ?? 0.0
     }
 
-    // Check if sonde is currently flying (above 500m altitude)
-    var isFlying: Bool {
-        return alt > 500
+    /// Whether the sonde is airborne, judged from vertical speed.
+    ///
+    /// Altitude cannot answer this on its own: Payerne sits at 490 m, so a sonde
+    /// resting in the hills reads higher than one still descending over the lake.
+    ///
+    /// `nil` means undetermined — iMet sondes report no vertical speed. Callers
+    /// must not read that as "landed"; there is no safe way to guess, so the
+    /// sonde falls through to the selection popup instead.
+    var isFlying: Bool? {
+        guard let verticalSpeed = vel_v else { return nil }
+        return abs(verticalSpeed) > 1.0
     }
 }
 
@@ -269,6 +277,37 @@ final class APRSDataService: ObservableObject {
         }
     }
 
+    /// Re-fetch the station's sonde list for the selection popup.
+    ///
+    /// Regular polling cannot do this. Once a sonde is chosen,
+    /// `overrideSondeSerial` diverts `fetchLatestTelemetry()` to the per-sonde
+    /// endpoint, so the station list would otherwise stay frozen at whatever it
+    /// held when the app started.
+    ///
+    /// Touches only `availableSondes`; the active sonde's telemetry is untouched.
+    func refreshAvailableSondes() async {
+        do {
+            let siteResponse = try await fetchSiteData()
+            availableSondes = recentSondes(from: Array(siteResponse.values))
+            appLog("APRSDataService: Refreshed sonde list - \(availableSondes.count) in last 24h: \(availableSondes.map { $0.serial }.joined(separator: ", "))", category: .service, level: .info)
+        } catch {
+            // Keep the previous list; a stale list beats an empty picker.
+            appLog("APRSDataService: Sonde list refresh failed, keeping \(availableSondes.count) cached: \(error)", category: .service, level: .error)
+        }
+    }
+
+    /// Station sondes worth offering: ground tests removed, last 24 h only,
+    /// newest first.
+    private func recentSondes(from sondes: [SondeHubSondeData]) -> [SondeHubSondeData] {
+        let cutoff = Date().addingTimeInterval(-24 * 60 * 60)
+        return filterGroundTestSondes(from: sondes)
+            .filter { (parseISO8601Date($0.datetime) ?? .distantPast) > cutoff }
+            .sorted {
+                (parseISO8601Date($0.datetime) ?? .distantPast)
+                    > (parseISO8601Date($1.datetime) ?? .distantPast)
+            }
+    }
+
     private func fetchLatestTelemetry() async {
         // Reduced logging frequency for APRS fetches
 
@@ -282,23 +321,7 @@ final class APRSDataService: ObservableObject {
 
             // Otherwise, use station-based fetch (default behavior)
             let siteResponse = try await fetchSiteData()
-
-            // Filter out ground-based test sondes before selecting
-            let flyingSondes = filterGroundTestSondes(from: Array(siteResponse.values))
-
-            // Filter to sondes from the last 24 hours only
-            let twentyFourHoursAgo = Date().addingTimeInterval(-24 * 60 * 60)
-            let recentSondes = flyingSondes.filter { sonde in
-                guard let sondeDate = parseISO8601Date(sonde.datetime) else { return false }
-                return sondeDate > twentyFourHoursAgo
-            }
-
-            // Sort by datetime (most recent first) and store for selection popup
-            let sortedSondes = recentSondes.sorted { sonde1, sonde2 in
-                let date1 = parseISO8601Date(sonde1.datetime) ?? Date.distantPast
-                let date2 = parseISO8601Date(sonde2.datetime) ?? Date.distantPast
-                return date1 > date2
-            }
+            let sortedSondes = recentSondes(from: Array(siteResponse.values))
             availableSondes = sortedSondes
 
             if sortedSondes.count > 1 {

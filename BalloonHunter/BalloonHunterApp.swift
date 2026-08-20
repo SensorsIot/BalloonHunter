@@ -164,6 +164,7 @@ struct BalloonHunterApp: App {
                     availableSondes: serviceCoordinator.availableSondesForSelection,
                     selectedSondeSerial: $serviceCoordinator.selectedSondeSerial,
                     countdown: serviceCoordinator.sondeSelectionCountdown,
+                    isRefreshing: serviceCoordinator.isRefreshingSondeList,
                     onConfirm: { serviceCoordinator.confirmSondeSelection() },
                     onSkip: { serviceCoordinator.skipSondeSelection() },
                     onStartEditing: { serviceCoordinator.userDidStartEditingSondeName() }
@@ -278,6 +279,7 @@ struct SondeSelectionSheet: View {
     let availableSondes: [SondeHubSondeData]
     @Binding var selectedSondeSerial: String?
     let countdown: Int
+    var isRefreshing: Bool = false
     let onConfirm: () -> Void
     let onSkip: () -> Void
     let onStartEditing: () -> Void
@@ -298,9 +300,18 @@ struct SondeSelectionSheet: View {
                         .font(.title2)
                         .fontWeight(.bold)
 
-                    Text("\(availableSondes.count) sonde\(availableSondes.count == 1 ? "" : "s") available (last 24h)")
+                    if isRefreshing {
+                        HStack(spacing: 6) {
+                            ProgressView().scaleEffect(0.7)
+                            Text("Updating from SondeHub…")
+                        }
                         .font(.subheadline)
                         .foregroundColor(.secondary)
+                    } else {
+                        Text("\(availableSondes.count) sonde\(availableSondes.count == 1 ? "" : "s") available (last 24h)")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                    }
                 }
                 .padding(.top, 16)
 
