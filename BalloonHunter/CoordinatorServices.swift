@@ -80,7 +80,7 @@ extension ServiceCoordinator {
         appLog("STARTUP: Step 1 - Loading persisted data from disk", category: .general, level: .info)
 
         let sondeName = persistenceService.loadSondeName()
-        let track = persistenceService.loadBalloonTrack() ?? []
+        let track = persistenceService.loadBalloonTrack(expecting: sondeName) ?? []
         // Don't load old landing points - they should only exist for current session
         let landingPoints: [LandingPredictionPoint] = []
 

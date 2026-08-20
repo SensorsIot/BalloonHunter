@@ -1192,7 +1192,7 @@ final class BalloonTrackService: ObservableObject {
     }
     
     private func saveCurrentTrack() {
-        persistenceService.saveBalloonTrack(currentBalloonTrack)
+        persistenceService.saveBalloonTrack(currentBalloonTrack, sondeName: currentBalloonName)
         // Also save sonde name to keep consistency
         if let balloonName = currentBalloonName {
             persistenceService.saveSondeName(balloonName)
@@ -1599,7 +1599,7 @@ final class BalloonTrackService: ObservableObject {
         )
 
         // Clear all track data from disk
-        persistenceService.saveBalloonTrack([])
+        persistenceService.saveBalloonTrack([], sondeName: currentBalloonName)
         persistenceService.saveSondeName("")
 
         trackUpdated.send()
