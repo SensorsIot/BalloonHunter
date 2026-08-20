@@ -1523,6 +1523,40 @@ Two jobs, and the app currently performs neither:
 
 **Route recalculation is gated on travel time changing, not on how far the landing point moved.** In alpine terrain 500 m of coordinate movement can put the landing in a different valley and change the drive completely, while 5 km along the same motorway changes nothing.
 
+### Phase 3 - On the Road
+
+The hunter is driving. Two screens: **Apple Maps on CarPlay does the navigating**, the iPhone shows the hunt. The app is not a navigation app and should not try to be one while someone is driving.
+
+**Requirement: the Apple Maps destination must follow the landing point.** A destination handed over at 25 km altitude is obsolete within minutes, and the hunter - watching the road - has no way to notice.
+
+**Trigger:** a material change in the *driving route*, not in the coordinate. In alpine terrain 500 m can put the landing in a different valley; 5 km along the same motorway changes nothing.
+
+**Platform constraints** (verified against Apple documentation, so they are not re-litigated):
+
+- There is **no API to update a running Apple Maps navigation session**. Not MapKit, not the Maps URL scheme, not App Intents, not CarPlay. Relaunching directions is the only mechanism that exists.
+- `MKMapItem.openInMaps(launchOptions:)` is documented as blocking: *"the system suspends interaction with your app until the Maps app finishes launching."* Each update therefore takes the iPhone screen.
+- The scene-aware overload `openInMaps(launchOptions:from:completionHandler:)` accepts a `UIScene`, and Apple DTS directs developers to pass the **CarPlay** scene so Maps opens on the head unit instead of the phone. This is the mechanism that would let updates reach CarPlay without stealing the hunt display - but an app only has a CarPlay scene if it holds a CarPlay entitlement, which this app does not.
+- Whether Apple Maps prompts before replacing an active route is **undocumented and unverified**. It needs testing on real hardware; nothing should be designed around an assumed prompt.
+
+### Descent Rate and Parachute Behaviour
+
+**Why the 10 000 m threshold exists.** Above it, the simulation is adequate and differences do not matter. Below it, the balloon begins to drift and the descent rate governs where it lands.
+
+**Requirement: abnormal parachute behaviour must be detected as early as possible.** Two failure modes, opposite in sign:
+
+- **Slow descent** - the sonde stays aloft far longer than modelled and drifts well beyond the prediction. Observed on W4214915 (31 July 2026): ~2.3 m/s near the ground against an assumed 5.0, giving 22 extra minutes below 10 km alone and a landing roughly 50 km from the first prediction.
+- **Partially opened parachute** - fast descent and a hard landing. This is the case that causes harm and is the more important of the two to catch.
+
+**`descent_rate` is a sea-level terminal velocity, not the current rate.** Tawhiri models atmospheric density itself: probing the API from 3-30 km at fixed rates gives a flight time of 0.44-0.84 of the naive `altitude / rate`, and the implied scale height settles at **~15 500 m** above 12 km. Terminal velocity scales as `1 / sqrt(density)`, so a measured rate converts with:
+
+```
+descent_rate_to_send  =  v_measured * exp(-altitude / 15500)
+```
+
+Sending the raw instantaneous rate is a category error: at 20 km a sonde falls at ~14 m/s, and Tawhiri would scale *that* up again for altitude. It also explains the observed behaviour where successive landing predictions march in a straight line - the raw rate falls roughly 13x during a descent, so each prediction assumes more time aloft than the last and pushes the landing further downwind.
+
+**Open, and deliberately not specified yet:** how early the two failure modes can be told apart. Measured on one slow flight against one normal control, the corrected estimates were indistinguishable 5-10 minutes after burst (3.46 vs 3.68) and only separated after roughly 20-25 minutes. Two flights and one control cannot support a threshold. A prospective data collection across Payerne flights is planned to settle it.
+
 ### Data Ageing Across Phases
 
 **Each datum belongs to its source and survives until that source updates it.** Losing one channel never invalidates another:
