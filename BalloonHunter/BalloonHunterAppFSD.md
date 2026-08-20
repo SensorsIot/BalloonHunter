@@ -1547,7 +1547,28 @@ The hunter is driving. Two screens: **Apple Maps on CarPlay does the navigating*
 - **Slow descent** - the sonde stays aloft far longer than modelled and drifts well beyond the prediction. Observed on W4214915 (31 July 2026): ~2.3 m/s near the ground against an assumed 5.0, giving 22 extra minutes below 10 km alone and a landing roughly 50 km from the first prediction.
 - **Partially opened parachute** - fast descent and a hard landing. This is the case that causes harm and is the more important of the two to catch.
 
-**`descent_rate` is a sea-level terminal velocity, not the current rate.** Tawhiri models atmospheric density itself: probing the API from 3-30 km at fixed rates gives a flight time of 0.44-0.84 of the naive `altitude / rate`, and the implied scale height settles at **~15 500 m** above 12 km. Terminal velocity scales as `1 / sqrt(density)`, so a measured rate converts with:
+**Correction method: compare against Tawhiri's own trajectory.** Every prediction
+returns predicted altitude against time, so the reference for "how fast should it
+be falling" already exists and does not need reproducing. Measured across the
+**entire fall since burst** rather than between consecutive samples, so the drop
+integrates and the estimate sharpens as the descent proceeds:
+
+```
+ratio           =  actual drop since burst  /  predicted drop over the same span
+corrected rate  =  rate last sent  x  ratio
+```
+
+A ratio below 1 means the sonde is falling short of the prediction and the rate
+must come down. The correction refuses to answer below a minimum accumulated drop
+(timing jitter dominates a small fall), steps rather than leaps when the ratio is
+extreme (which means the reference no longer describes this flight), and rejects
+a result outside the plausible range rather than sending a near-zero rate that
+would make predicted time aloft diverge.
+
+`DescentRateModel` carries this as a pure value type and is unit-tested,
+including that repeated application converges rather than oscillates.
+
+**Why the raw rate cannot be sent: `descent_rate` is a sea-level terminal velocity, not the current rate.** Tawhiri models atmospheric density itself: probing the API from 3-30 km at fixed rates gives a flight time of 0.44-0.84 of the naive `altitude / rate`, and the implied scale height settles at **~15 500 m** above 12 km. Terminal velocity scales as `1 / sqrt(density)`, so a measured rate converts with:
 
 ```
 descent_rate_to_send  =  v_measured * exp(-altitude / 15500)
