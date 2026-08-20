@@ -56,6 +56,7 @@ final class ServiceCoordinator: ObservableObject {
 
     // Frequency sync proposal forwarded from APRS service
     @Published var frequencySyncProposal: FrequencySyncProposal? = nil
+    private var frequencySyncCompletedForSonde: String? = nil  // Track which sonde we've synced to
 
     // 60-second prediction timer (as referenced in comments)
     private var predictionTimer: Timer? = nil
@@ -119,6 +120,11 @@ final class ServiceCoordinator: ObservableObject {
         // Delegate to BLE service for frequency sync
         bleCommunicationService.acceptFrequencySync(frequency: proposal.frequency, probeType: proposal.probeType, source: "ServiceCoordinator-UserAccepted")
 
+        // Mark sync as completed for current sonde
+        if let currentSonde = balloonPositionService.currentBalloonName {
+            frequencySyncCompletedForSonde = currentSonde
+        }
+
         // Clear the proposal
         frequencySyncProposal = nil
 
@@ -132,6 +138,11 @@ final class ServiceCoordinator: ObservableObject {
         // Delegate to BLE service for rejection handling
         bleCommunicationService.rejectFrequencySync(frequency: proposal.frequency, probeType: proposal.probeType)
 
+        // Mark sync as completed (rejected) for current sonde to prevent re-prompting
+        if let currentSonde = balloonPositionService.currentBalloonName {
+            frequencySyncCompletedForSonde = currentSonde
+        }
+
         // Clear the proposal
         frequencySyncProposal = nil
 
@@ -140,6 +151,17 @@ final class ServiceCoordinator: ObservableObject {
 
     /// Evaluate frequency sync when APRS data is received and RadioSondyGo is connected
     private func evaluateFrequencySync(with radioData: RadioChannelData) {
+
+        // Skip if proposal already pending
+        guard frequencySyncProposal == nil else {
+            return
+        }
+
+        // Skip if already synced to this sonde
+        let currentSonde = radioData.sondeName
+        if frequencySyncCompletedForSonde == currentSonde {
+            return
+        }
 
         // Only evaluate frequency sync when BLE is ready for commands
         guard bleCommunicationService.connectionState.canReceiveCommands else {
@@ -388,6 +410,9 @@ final class ServiceCoordinator: ObservableObject {
         if selectedSerial != currentSonde {
             // User selected a different sonde - clear all old data and set override
             appLog("ServiceCoordinator: User selected different sonde: '\(selectedSerial)' (was: '\(currentSonde)') - clearing old data", category: .general, level: .info)
+
+            // Reset frequency sync flag for new sonde
+            frequencySyncCompletedForSonde = nil
 
             // Clear all persisted and in-memory data for the old sonde
             clearAllSondeData()

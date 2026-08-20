@@ -63,8 +63,15 @@ struct DataPanelView: View {
                     GridRow {
                         Text("\(frequencyString)")
                             .frame(width: table2ColumnWidth, alignment: .leading)
-                        Text("\(signalStrengthString) dBm")
-                            .frame(width: table2ColumnWidth, alignment: .leading)
+                        Group {
+                            if hasSignal {
+                                Text("\(signalStrengthString) dBm")
+                            } else {
+                                Text("no signal")
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                        .frame(width: table2ColumnWidth, alignment: .leading)
                         HStack(spacing: 2) {
                             Image(systemName: batteryIconName)
                                 .foregroundColor(batteryColor)
@@ -366,13 +373,25 @@ struct DataPanelView: View {
         }
     }
 
+    private var hasSignal: Bool {
+        if showingPlaceholders { return false }
+        guard let radioChannel = balloonPositionService.currentRadioChannel else { return false }
+        // No signal if using APRS (no BLE receiver connected to balloon)
+        if radioChannel.telemetrySource == .aprs { return false }
+        // No signal if sonde name is empty (not decoding any balloon)
+        if radioChannel.sondeName.isEmpty { return false }
+        return true
+    }
+
     private var signalStrengthString: String {
         if showingPlaceholders {
             return "0"
         }
-        if let val = balloonPositionService.currentRadioChannel?.signalStrength {
-            // signalStrength is RSSI in dBm (typically negative values like -50 to -120)
-            return String(format: "%d", val)
+        guard let radioChannel = balloonPositionService.currentRadioChannel else { return "0" }
+        // Only show signal strength from BLE source with valid sonde
+        if radioChannel.telemetrySource == .aprs { return "0" }
+        if !radioChannel.sondeName.isEmpty {
+            return String(format: "%d", radioChannel.signalStrength)
         }
         return "0"
     }
