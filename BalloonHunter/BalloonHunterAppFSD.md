@@ -1578,6 +1578,39 @@ Sending the raw instantaneous rate is a category error: at 20 km a sonde falls a
 
 **Open, and deliberately not specified yet:** how early the two failure modes can be told apart. Measured on one slow flight against one normal control, the corrected estimates were indistinguishable 5-10 minutes after burst (3.46 vs 3.68) and only separated after roughly 20-25 minutes. Two flights and one control cannot support a threshold. A prospective data collection across Payerne flights is planned to settle it.
 
+### Phase 4 - On Foot
+
+The hunter is out of the car, walking, with the receiver in one hand and the
+phone in the other. The sonde **is still transmitting** when they arrive.
+
+**Direction finding is the iPhone's GPS and compass, not the radio.** The sonde
+reports its own GPS position, so there is nothing to direction-find: the bearing
+and range are a calculation between two known points. RSSI is not used for this.
+
+**The map is required.** Heading mode rotates it to the hunter's heading, so
+turning until the balloon marker sits at the top *is* the bearing, and the
+distance overlay is the range. Satellite view matters here for reading the tree
+line or field boundary the sonde came down behind. Heading mode stays on its
+button - it is not enabled automatically.
+
+**APRS must not be used in this phase.** SondeHub's last frame is where the sonde
+stopped being *heard*, not where it landed, and treating it as a position is
+actively misleading at close range. On W4214915 the final SondeHub frame was at
+1 173 m altitude, still descending. Only two sources count here:
+
+| source | supplies |
+|---|---|
+| BLE | the sonde's own GPS position |
+| iPhone | the hunter's position and heading |
+
+**Defect: the distance readout disappears when telemetry drops.**
+`DistanceOverlayView` is gated on the state being `liveBLELanded` or `aprsLanded`.
+A momentary BLE loss - trees, a body over the antenna, a ridge - drops the state
+to `waitingForAPRS` and hides the metres, at the moment the hunter is closest and
+most likely to lose signal. The number itself remains valid, being computed from
+the locked landing point and the phone's own GPS. It should be shown whenever a
+BLE-derived position and a GPS fix both exist, per *Data Ageing Across Phases*.
+
 ### Data Ageing Across Phases
 
 **Each datum belongs to its source and survives until that source updates it.** Losing one channel never invalidates another:
