@@ -80,15 +80,39 @@ extension ServiceCoordinator {
         appLog("STARTUP: Step 1 - Loading persisted data from disk", category: .general, level: .info)
 
         let sondeName = persistenceService.loadSondeName()
-        let track = persistenceService.loadBalloonTrack() ?? []
+        var track = persistenceService.loadBalloonTrack(expecting: sondeName) ?? []
         // Don't load old landing points - they should only exist for current session
         let landingPoints: [LandingPredictionPoint] = []
 
-        // Validate consistency (sondeName must match track)
-        if let sondeName = sondeName, !track.isEmpty {
-            appLog("STARTUP: Step 1 - Loaded sonde '\(sondeName)' with \(track.count) track points", category: .general, level: .info)
-        } else if !track.isEmpty {
-            appLog("STARTUP: Step 1 - WARNING: Track data exists but no sonde name", category: .general, level: .error)
+        // Is what was stored still the hunt in progress?
+        //
+        // The serial decides identity; elapsed time only decides whether a hunt
+        // nothing is arriving for is still worth drawing. Six hours covers a real
+        // recovery: the climb, the fall, the drive and the walk.
+        // See FSD Hunt Phases -> Hunt Identity.
+        let huntState = HuntState()
+        let storedHunt = (sondeName != nil && !track.isEmpty)
+            ? HuntState.StoredHunt(serial: sondeName!, lastDataAt: track.last!.timestamp)
+            : nil
+        let decision = huntState.decide(stored: storedHunt, hunting: sondeName)
+
+        switch decision {
+        case .resumeHunt:
+            appLog("STARTUP: Step 1 - Resuming hunt for '\(sondeName!)' with \(track.count) track points", category: .general, level: .info)
+        case .tooOldToShow:
+            let hours = Date().timeIntervalSince(track.last!.timestamp) / 3600
+            appLog(String(format: "STARTUP: Step 1 - Last data for '%@' is %.1f h old, beyond the %.0f h a hunt lasts. Not drawing it; waiting for data.",
+                          sondeName!, hours, huntState.staleAfter / 3600),
+                   category: .general, level: .info)
+            track = []
+        case .startNewHunt:
+            appLog("STARTUP: Step 1 - Stored track belongs to another sonde - discarding", category: .general, level: .info)
+            track = []
+        case .nothingStored:
+            if !track.isEmpty {
+                appLog("STARTUP: Step 1 - WARNING: Track data exists but no sonde name", category: .general, level: .error)
+                track = []
+            }
         }
 
         // Step 2: Service Initialization (already done in init) + Request location
@@ -112,6 +136,8 @@ extension ServiceCoordinator {
         // Inject sonde name into BalloonPositionService for change detection
         if let sondeName = sondeName {
             balloonPositionService.currentBalloonName = sondeName
+            // Filter the receiver from the first packet, before selection runs.
+            bleCommunicationService.huntedSondeName = sondeName
         }
 
         // Inject landing points into LandingPointTrackingService
@@ -133,27 +159,73 @@ extension ServiceCoordinator {
         // Wait for definitive answers from both services (with timeout)
         await waitForServiceAnswers(maxWaitTime: maxStartupTime - Date().timeIntervalSince(startTime))
 
-        // Step 4b: Show sonde selection popup if sondes are available
+        // Step 4b: Check for flying sondes - auto-select if found, otherwise show selection
         await MainActor.run {
             startupProgress = "Step 4: Select Sonde"
         }
 
         // Get available sondes from APRS service (sorted by datetime, most recent first)
         let sondes = balloonPositionService.aprsService.availableSondes
-        let mostRecentSerial = sondes.first?.serial
 
-        await MainActor.run {
-            availableSondesForSelection = sondes
-            selectedSondeSerial = mostRecentSerial
-            // Only show popup if there are sondes available
-            if !sondes.isEmpty {
+        // Auto-select only a sonde we can positively confirm is airborne.
+        // A sonde reporting no vertical speed is undetermined, never "landed",
+        // so it falls through to the popup rather than being guessed at.
+        let flyingSonde = sondes.first { $0.isFlying == true }
+        let undetermined = sondes.filter { $0.isFlying == nil }
+        if !undetermined.isEmpty {
+            appLog("STARTUP: Step 4b - \(undetermined.count) sonde(s) report no vertical speed, cannot auto-select: \(undetermined.map { $0.serial }.joined(separator: ", "))", category: .general, level: .info)
+        }
+
+        if let flyingSonde = flyingSonde {
+            // Flying sonde found - auto-select it, skip popup
+            appLog("STARTUP: Step 4b - Flying sonde detected: '\(flyingSonde.serial)' at \(Int(flyingSonde.alt))m, vel_v=\(flyingSonde.vel_v.map { String(format: "%.1f", $0) } ?? "n/a")m/s - auto-selecting", category: .general, level: .info)
+
+            await MainActor.run {
+                selectedSondeSerial = flyingSonde.serial
+                availableSondesForSelection = sondes
+            }
+
+            // Directly confirm the flying sonde selection
+            confirmSondeSelection()
+
+        } else {
+            // No flying sonde - show selection popup
+            appLog("STARTUP: Step 4b - No flying sonde, showing selection popup (\(sondes.count) available)", category: .general, level: .info)
+
+            await MainActor.run {
+                availableSondesForSelection = sondes
+                selectedSondeSerial = sondes.first?.serial
                 showSondeSelectionPopup = true
             }
-        }
-        appLog("STARTUP: Step 4b - \(sondes.count) sondes available, showing selection popup", category: .general, level: .info)
 
-        // Wait for user to confirm or skip (with 5-second auto-confirm)
-        await waitForSondeSelection()
+            // Wait for user to confirm or skip (with 5-second auto-confirm)
+            await waitForSondeSelection()
+        }
+
+        // Step 4c: Check frequency sync if BLE is connected
+        if bleCommunicationService.connectionState.canReceiveCommands,
+           let aprsRadio = balloonPositionService.aprsService.latestRadioChannel {
+            appLog("STARTUP: Step 4c - BLE connected, checking frequency sync", category: .general, level: .info)
+            checkStartupFrequencySync(aprsRadio: aprsRadio)
+        } else {
+            appLog("STARTUP: Step 4c - BLE not ready, skipping frequency sync", category: .general, level: .info)
+        }
+
+        // Step 4d: Fill whatever the local track is missing, from SondeHub.
+        //
+        // SondeHub holds the flight; balloontrack.json is only as complete as
+        // this device happened to be listening. Anything the app missed - before
+        // it was started, while it was closed, or while the receiver was on
+        // another sonde - exists there and nowhere else.
+        //
+        // Unconditional on purpose. Gating this on an empty track meant a hunt
+        // that had recorded a couple of minutes was treated as complete, and the
+        // rest of the flight stayed missing. The merge only writes into seconds
+        // the track has no point for, so live BLE data is never displaced.
+        if let hunted = balloonPositionService.currentBalloonName {
+            appLog("STARTUP: Step 4d - Filling track gaps for '\(hunted)' from SondeHub (have \(balloonTrackService.currentBalloonTrack.count) points)", category: .general, level: .info)
+            balloonTrackService.fillTrackGapsFromAPRS(sondeName: hunted)
+        }
 
         // Step 5: State Machine Handoff & UI Transition
         await MainActor.run {

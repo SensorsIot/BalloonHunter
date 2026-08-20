@@ -423,6 +423,87 @@ final class PredictionService: ObservableObject {
 
 
 
+    // MARK: - Descent Rate Correction
+
+    /// The first descent prediction of this flight, kept as the yardstick every
+    /// later one is measured against.
+    ///
+    /// Holding the *first* reference rather than the most recent means the
+    /// correction is computed over the entire fall in one step, from a fixed
+    /// starting point, instead of compounding a chain of adjustments — so it
+    /// sharpens as the descent proceeds rather than drifting.
+    private struct DescentReference {
+        let altitudeAtPrediction: Double
+        let rateUsed: Double
+        /// Predicted altitude against time, from the descent stage.
+        let trajectory: [(time: Date, altitude: Double)]
+
+        /// Altitude the prediction expected at `time`, interpolated.
+        func predictedAltitude(at time: Date) -> Double? {
+            guard let first = trajectory.first, let last = trajectory.last else { return nil }
+            if time <= first.time { return first.altitude }
+            if time >= last.time { return last.altitude }
+            for i in 1..<trajectory.count where trajectory[i].time >= time {
+                let a = trajectory[i - 1], b = trajectory[i]
+                let span = b.time.timeIntervalSince(a.time)
+                guard span > 0 else { return a.altitude }
+                let f = time.timeIntervalSince(a.time) / span
+                return a.altitude + (b.altitude - a.altitude) * f
+            }
+            return last.altitude
+        }
+    }
+
+    private var descentReference: DescentReference?
+    private let descentRateModel = DescentRateModel()
+
+    /// Drop the reference when the flight it describes is over.
+    func resetDescentReference() {
+        if descentReference != nil {
+            appLog("PredictionService: Descent reference cleared", category: .service, level: .info)
+        }
+        descentReference = nil
+    }
+
+    /// Correct `baseRate` against how far the sonde has actually fallen.
+    ///
+    /// Returns `baseRate` unchanged until there is a reference and enough
+    /// accumulated fall to draw a conclusion from.
+    private func correctedDescentRate(baseRate: Double, position: PositionData) -> Double {
+        guard let ref = descentReference,
+              let expected = ref.predictedAltitude(at: Date()) else { return baseRate }
+
+        let actualDrop = ref.altitudeAtPrediction - position.altitude
+        let predictedDrop = ref.altitudeAtPrediction - expected
+
+        let comparison = DescentRateModel.FallComparison(
+            actualDrop: actualDrop,
+            predictedDrop: predictedDrop,
+            rateUsed: ref.rateUsed
+        )
+
+        guard let corrected = descentRateModel.correctedRate(from: comparison) else { return baseRate }
+
+        let deviation = descentRateModel.deviationPercent(from: comparison) ?? 0
+        appLog(String(format: "PredictionService: Descent correction — fell %.0f m where %.0f m was predicted (%+.0f%%), rate %.2f → %.2f m/s",
+                      actualDrop, predictedDrop, deviation, ref.rateUsed, corrected),
+               category: .service, level: .info)
+        return corrected
+    }
+
+    /// Capture the reference from a descent prediction, once per flight.
+    private func captureDescentReference(trajectory: [(Date, Double)], altitude: Double, rateUsed: Double) {
+        guard descentReference == nil, !trajectory.isEmpty else { return }
+        descentReference = DescentReference(
+            altitudeAtPrediction: altitude,
+            rateUsed: rateUsed,
+            trajectory: trajectory.map { (time: $0.0, altitude: $0.1) }
+        )
+        appLog(String(format: "PredictionService: Descent reference captured at %.0f m using %.2f m/s (%d trajectory points)",
+                      altitude, rateUsed, trajectory.count),
+               category: .service, level: .info)
+    }
+
     /// Three-channel architecture: Calculate effective descent rate from PositionData
     private func calculateEffectiveDescentRate(position: PositionData) -> Double {
         guard let serviceCoordinator = serviceCoordinator else {
@@ -490,7 +571,10 @@ final class PredictionService: ObservableObject {
     func fetchPrediction(position: PositionData, userSettings: UserSettings, measuredDescentRate: Double, cacheKey: String, balloonDescends: Bool = false) async throws -> PredictionData {
         // Suppress verbose start-of-fetch log
         
-        let request = try buildPredictionRequest(position: position, userSettings: userSettings, descentRate: abs(measuredDescentRate), balloonDescends: balloonDescends)
+        // Measure the assumed rate against how far the sonde has actually
+        // fallen. Returns the input unchanged until there is enough fall to judge.
+        let rateToSend = correctedDescentRate(baseRate: abs(measuredDescentRate), position: position)
+        let request = try buildPredictionRequest(position: position, userSettings: userSettings, descentRate: rateToSend, balloonDescends: balloonDescends)
         
         do {
             // Perform request and log response details for debugging
@@ -521,6 +605,17 @@ final class PredictionService: ObservableObject {
             
             // Convert to our internal PredictionData format
             let predictionData = try convertSondehubToPredictionData(sondehubResponse)
+
+            // First descent prediction of the flight becomes the yardstick every
+            // later one is measured against.
+            if balloonDescends,
+               let descentStage = sondehubResponse.prediction.first(where: { $0.stage.lowercased() == "descent" }) {
+                let points: [(Date, Double)] = descentStage.trajectory.compactMap { t in
+                    guard let d = isoWithFrac.date(from: t.datetime) ?? isoNoFrac.date(from: t.datetime) else { return nil }
+                    return (d, t.altitude)
+                }
+                captureDescentReference(trajectory: points, altitude: position.altitude, rateUsed: rateToSend)
+            }
             
             let landingPoint = predictionData.landingPoint
             let burstPoint = predictionData.burstPoint
@@ -728,6 +823,7 @@ final class PredictionService: ObservableObject {
     // MARK: - Sonde Change
 
     func clearAllData() {
+        resetDescentReference()
         // Cancel any in-flight prediction task
         currentPredictionTask?.cancel()
         currentPredictionTask = nil

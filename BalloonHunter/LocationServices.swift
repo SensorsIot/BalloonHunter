@@ -331,11 +331,12 @@ final class CurrentLocationService: NSObject, ObservableObject, CLLocationManage
             return
         }
 
-        let userCoord = CLLocationCoordinate2D(latitude: userLocation.latitude, longitude: userLocation.longitude)
-        let distance = CLLocation(latitude: userCoord.latitude, longitude: userCoord.longitude)
-            .distance(from: CLLocation(latitude: balloonPosition.latitude, longitude: balloonPosition.longitude))
-
-        distanceToBalloon = distance
+        // Depends on two GPS fixes, never on the radio being up at this instant,
+        // so a dropout while walking does not blank the figure.
+        distanceToBalloon = closeRange.distanceToSonde(
+            sonde: .init(coordinate: balloonPosition, source: balloonPositionSource),
+            hunter: CLLocationCoordinate2D(latitude: userLocation.latitude, longitude: userLocation.longitude)
+        )
     }
 
     private func updateProximityStatus() {
@@ -352,8 +353,15 @@ final class CurrentLocationService: NSObject, ObservableObject, CLLocationManage
         isWithin200mOfBalloon = distance < 200
     }
 
-    func updateBalloonDisplayPosition(_ position: CLLocationCoordinate2D?) {
+    /// The provenance of the last balloon position, so the close-range distance
+    /// can refuse one that came from the network. See FSD Hunt Phases -> Phase 4.
+    private var balloonPositionSource: CloseRangeGuidance.PositionSource = .receiver
+    private let closeRange = CloseRangeGuidance()
+
+    func updateBalloonDisplayPosition(_ position: CLLocationCoordinate2D?,
+                                      source: CloseRangeGuidance.PositionSource = .receiver) {
         currentBalloonDisplayPosition = position
+        balloonPositionSource = source
         updateDistanceToBalloon()
         updateProximityStatus()
     }

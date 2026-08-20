@@ -28,6 +28,7 @@ final class ServiceCoordinator: ObservableObject {
     // Sonde selection popup state
     @Published var showSondeSelectionPopup: Bool = false
     @Published var availableSondesForSelection: [SondeHubSondeData] = []
+    @Published var isRefreshingSondeList: Bool = false
     @Published var selectedSondeSerial: String? = nil
     @Published var sondeSelectionCountdown: Int = 5
     private var sondeSelectionContinuation: CheckedContinuation<Void, Never>?
@@ -56,7 +57,7 @@ final class ServiceCoordinator: ObservableObject {
 
     // Frequency sync proposal forwarded from APRS service
     @Published var frequencySyncProposal: FrequencySyncProposal? = nil
-    private var frequencySyncCompletedForSonde: String? = nil  // Track which sonde we've synced to
+    private var startupFrequencySyncDone: Bool = false  // Only sync once per startup/sonde change
 
     // 60-second prediction timer (as referenced in comments)
     private var predictionTimer: Timer? = nil
@@ -120,15 +121,13 @@ final class ServiceCoordinator: ObservableObject {
         // Delegate to BLE service for frequency sync
         bleCommunicationService.acceptFrequencySync(frequency: proposal.frequency, probeType: proposal.probeType, source: "ServiceCoordinator-UserAccepted")
 
-        // Mark sync as completed for current sonde
-        if let currentSonde = balloonPositionService.currentBalloonName {
-            frequencySyncCompletedForSonde = currentSonde
-        }
+        // Mark startup sync as complete - won't prompt again until sonde change
+        startupFrequencySyncDone = true
 
         // Clear the proposal
         frequencySyncProposal = nil
 
-        appLog("ServiceCoordinator: Frequency sync proposal accepted and executed", category: .service, level: .info)
+        appLog("ServiceCoordinator: Frequency sync accepted - startup sync complete", category: .service, level: .info)
     }
 
     /// Reject the frequency sync proposal
@@ -138,63 +137,39 @@ final class ServiceCoordinator: ObservableObject {
         // Delegate to BLE service for rejection handling
         bleCommunicationService.rejectFrequencySync(frequency: proposal.frequency, probeType: proposal.probeType)
 
-        // Mark sync as completed (rejected) for current sonde to prevent re-prompting
-        if let currentSonde = balloonPositionService.currentBalloonName {
-            frequencySyncCompletedForSonde = currentSonde
-        }
+        // Mark startup sync as complete - won't prompt again until sonde change
+        startupFrequencySyncDone = true
 
         // Clear the proposal
         frequencySyncProposal = nil
 
-        appLog("ServiceCoordinator: Frequency sync proposal rejected", category: .service, level: .info)
+        appLog("ServiceCoordinator: Frequency sync rejected - startup sync complete", category: .service, level: .info)
     }
 
-    /// Evaluate frequency sync when APRS data is received and RadioSondyGo is connected
-    private func evaluateFrequencySync(with radioData: RadioChannelData) {
+    /// Check frequency sync (called after sonde selection during startup or manual change)
+    func checkStartupFrequencySync(aprsRadio: RadioChannelData) {
+        // Skip if already done or proposal pending
+        guard !startupFrequencySyncDone else { return }
+        guard frequencySyncProposal == nil else { return }
 
-        // Skip if proposal already pending
-        guard frequencySyncProposal == nil else {
-            return
-        }
-
-        // Skip if already synced to this sonde
-        let currentSonde = radioData.sondeName
-        if frequencySyncCompletedForSonde == currentSonde {
-            return
-        }
-
-        // Only evaluate frequency sync when BLE is ready for commands
-        guard bleCommunicationService.connectionState.canReceiveCommands else {
-            appLog("ServiceCoordinator: BLE not ready for commands (state: \(bleCommunicationService.connectionState)) - skipping frequency sync evaluation", category: .service, level: .debug)
-            return
-        }
-
-        let aprsFreq = radioData.frequency
+        let aprsFreq = aprsRadio.frequency
         let bleFreq = bleCommunicationService.radioSettings.frequency
-        let freqDifference = abs(aprsFreq - bleFreq)
-        let freqMismatch = freqDifference > 0.01
+        let freqMismatch = abs(aprsFreq - bleFreq) > 0.01
 
-        let aprsProbeType = radioData.probeType.isEmpty ? "RS41" : radioData.probeType
+        let aprsProbeType = aprsRadio.probeType.isEmpty ? "RS41" : aprsRadio.probeType
         let bleProbeType = bleCommunicationService.radioSettings.probeType
         let probeTypeMismatch = aprsProbeType != bleProbeType
 
-        appLog("ServiceCoordinator: Frequency comparison - APRS: \(String(format: "%.2f", aprsFreq)) MHz, BLE: \(String(format: "%.2f", bleFreq)) MHz, difference: \(String(format: "%.2f", freqDifference)) MHz, mismatch: \(freqMismatch)", category: .service, level: .info)
-        appLog("ServiceCoordinator: Probe type comparison - APRS: '\(aprsProbeType)', BLE: '\(bleProbeType)', mismatch: \(probeTypeMismatch)", category: .service, level: .info)
+        // Mark sync as evaluated
+        startupFrequencySyncDone = true
 
         guard freqMismatch || probeTypeMismatch else {
-            appLog("ServiceCoordinator: APRS-BLE frequency/probe match, no sync needed", category: .service, level: .debug)
+            appLog("STARTUP: Frequency matches - APRS: \(String(format: "%.2f", aprsFreq)) MHz, BLE: \(String(format: "%.2f", bleFreq)) MHz", category: .service, level: .info)
             return
         }
 
-        appLog("ServiceCoordinator: APRS-BLE frequency sync needed - creating user proposal", category: .service, level: .info)
-        createFrequencySyncProposal(aprsFreq: aprsFreq, aprsProbeType: aprsProbeType, bleFreq: bleFreq, bleProbeType: bleProbeType)
-    }
-
-    private func createFrequencySyncProposal(aprsFreq: Double, aprsProbeType: String, bleFreq: Double, bleProbeType: String) {
-        // Create proposal for user confirmation
-        frequencySyncProposal = FrequencySyncProposal(frequency: aprsFreq, probeType: aprsProbeType)
-
-        appLog("ServiceCoordinator: Frequency sync proposal created - APRS: \(String(format: "%.2f", aprsFreq)) MHz \(aprsProbeType) vs BLE: \(String(format: "%.2f", bleFreq)) MHz \(bleProbeType)", category: .service, level: .info)
+        appLog("STARTUP: Frequency mismatch - APRS: \(String(format: "%.2f", aprsFreq)) MHz (\(aprsProbeType)), BLE: \(String(format: "%.2f", bleFreq)) MHz (\(bleProbeType))", category: .service, level: .info)
+        frequencySyncProposal = FrequencySyncProposal(frequency: aprsFreq, probeType: aprsProbeType, sondeName: aprsRadio.sondeName)
     }
 
     func initialize() {
@@ -225,13 +200,18 @@ final class ServiceCoordinator: ObservableObject {
     private func setupDirectSubscriptions() {
         // Position data subscription for potential future coordinator needs
         // Currently position data is accessed directly by consumers
+        // Frequency sync is handled explicitly during startup and sonde change (not via subscription)
 
-        // Frequency sync evaluation: Listen for APRS radio data changes
-        balloonPositionService.aprsService.$latestRadioChannel
-            .sink { [weak self] radioData in
-                if let radioData = radioData, radioData.telemetrySource == .aprs {
-                    self?.evaluateFrequencySync(with: radioData)
-                }
+        // Receiver retuned to a different sonde. Per FSD "Sonde Change Flow",
+        // every trace of the previous sonde is cleared before the new one is
+        // adopted - which is what startTrackingSonde does.
+        bleCommunicationService.$confirmedSondeChange
+            .compactMap { $0 }
+            .sink { [weak self] newSonde in
+                guard let self else { return }
+                appLog("🎈 ServiceCoordinator: Receiver retuned to '\(newSonde)' - clearing previous sonde", category: .service, level: .info)
+                self.bleCommunicationService.confirmedSondeChange = nil
+                self.startTrackingSonde(name: newSonde, checkFrequencySync: false)
             }
             .store(in: &cancellables)
 
@@ -327,6 +307,76 @@ final class ServiceCoordinator: ObservableObject {
         appLog("✅ ServiceCoordinator: All old sonde data cleared", category: .service, level: .info)
     }
 
+    // MARK: - Sonde Tracking (Single Entry Point)
+
+    /// Start tracking a sonde - called by all selection methods
+    /// This is the ONLY place where tracking setup happens
+    /// - Parameters:
+    ///   - name: Sonde serial number
+    ///   - checkFrequencySync: Whether to check frequency sync (false for BLE-detected sondes already tuned)
+    func startTrackingSonde(name: String, checkFrequencySync: Bool = true) {
+        let currentSonde = balloonPositionService.currentBalloonName ?? ""
+        guard name != currentSonde else {
+            appLog("ServiceCoordinator: Already tracking '\(name)'", category: .general, level: .info)
+            return
+        }
+
+        appLog("ServiceCoordinator: === Starting to track sonde '\(name)' (was: '\(currentSonde)') ===", category: .general, level: .info)
+
+        // 1. Clear all old sonde data
+        clearAllSondeData()
+
+        // 2. Set frequency sync flag
+        startupFrequencySyncDone = !checkFrequencySync
+
+        // 3. Set sonde name in services
+        balloonPositionService.currentBalloonName = name
+        balloonTrackService.injectPersistedData(sondeName: name, track: [])
+
+        // Tell the receiver which sonde this hunt follows, so telemetry for any
+        // other one is dropped before it enters the app.
+        bleCommunicationService.huntedSondeName = name
+
+        // 4. Set APRS override (works even if sonde not in APRS)
+        balloonPositionService.aprsService.overrideSondeSerial = name
+
+        // 5. Fetch APRS data, fill track, check frequency sync
+        Task { [weak self] in
+            await self?.balloonPositionService.aprsService.forceImmediateFetch()
+            self?.balloonTrackService.fillTrackGapsFromAPRS(sondeName: name)
+
+            // Check frequency sync if requested and BLE connected
+            if checkFrequencySync {
+                await MainActor.run {
+                    if let self = self,
+                       self.bleCommunicationService.connectionState.canReceiveCommands,
+                       let aprsRadio = self.balloonPositionService.aprsService.latestRadioChannel {
+                        self.checkStartupFrequencySync(aprsRadio: aprsRadio)
+                    }
+                }
+            }
+        }
+
+        // 6. Trigger state evaluation - enables predictions, routing, track recording
+        balloonPositionService.triggerStateEvaluation()
+
+        appLog("ServiceCoordinator: === Now tracking '\(name)' ===", category: .general, level: .info)
+    }
+
+    // MARK: - Phase 2: When To Leave
+
+    /// When to set off in order to meet the landing.
+    ///
+    /// Both halves move - the landing time as the flight develops, the driving
+    /// time as the route is recalculated - so this is read fresh each time rather
+    /// than stored. See *FSD -> Hunt Phases -> Phase 2*.
+    var departurePlan: DepartureTime.Plan? {
+        DepartureTime().plan(
+            landingTime: predictionService.latestPrediction?.landingTime,
+            drivingTime: routeCalculationService.currentRoute?.expectedTravelTime
+        )
+    }
+
     // MARK: - UI Support Methods
 
 
@@ -394,54 +444,21 @@ final class ServiceCoordinator: ObservableObject {
         sondeSelectionTimer?.invalidate()
         sondeSelectionTimer = nil
 
-        guard let selectedSerial = selectedSondeSerial?.trimmingCharacters(in: .whitespacesAndNewlines).uppercased(),
-              !selectedSerial.isEmpty else {
-            appLog("ServiceCoordinator: confirmSondeSelection - no sonde selected", category: .general, level: .info)
+        // Close popup and resume continuation
+        defer {
             showSondeSelectionPopup = false
             sondeSelectionContinuation?.resume()
             sondeSelectionContinuation = nil
+        }
+
+        guard let selectedSerial = selectedSondeSerial?.trimmingCharacters(in: .whitespacesAndNewlines).uppercased(),
+              !selectedSerial.isEmpty else {
+            appLog("ServiceCoordinator: confirmSondeSelection - no sonde selected", category: .general, level: .info)
             return
         }
 
-        let currentSonde = balloonPositionService.currentBalloonName ?? ""
-
-        appLog("ServiceCoordinator: confirmSondeSelection - selected='\(selectedSerial)', current='\(currentSonde)'", category: .general, level: .info)
-
-        if selectedSerial != currentSonde {
-            // User selected a different sonde - clear all old data and set override
-            appLog("ServiceCoordinator: User selected different sonde: '\(selectedSerial)' (was: '\(currentSonde)') - clearing old data", category: .general, level: .info)
-
-            // Reset frequency sync flag for new sonde
-            frequencySyncCompletedForSonde = nil
-
-            // Clear all persisted and in-memory data for the old sonde
-            clearAllSondeData()
-
-            // Set override in APRS service for the new sonde
-            balloonPositionService.aprsService.overrideSondeSerial = selectedSerial
-
-            // Update the current balloon name to the new sonde
-            balloonPositionService.currentBalloonName = selectedSerial
-            balloonTrackService.injectPersistedData(sondeName: selectedSerial, track: [])
-
-            // Trigger immediate fetch and track fill for the new sonde
-            Task {
-                await balloonPositionService.aprsService.forceImmediateFetch()
-                // Fetch historical track for the new sonde (triggers landing detection → route calculation)
-                balloonTrackService.fillTrackGapsFromAPRS(sondeName: selectedSerial)
-            }
-
-            // Trigger state machine re-evaluation to enter correct state for new sonde
-            balloonPositionService.triggerStateEvaluation()
-
-            appLog("ServiceCoordinator: Sonde override set to '\(selectedSerial)' - triggering fetch, track fill, and state evaluation", category: .general, level: .info)
-        } else {
-            appLog("ServiceCoordinator: User confirmed current sonde: '\(selectedSerial)'", category: .general, level: .info)
-        }
-
-        showSondeSelectionPopup = false
-        sondeSelectionContinuation?.resume()
-        sondeSelectionContinuation = nil
+        // Start tracking the selected sonde (handles all setup)
+        startTrackingSonde(name: selectedSerial, checkFrequencySync: true)
     }
 
     /// User skipped sonde selection (tapped "Skip")
@@ -467,6 +484,30 @@ final class ServiceCoordinator: ObservableObject {
         userStartedEditing = false
 
         showSondeSelectionPopup = true
-        appLog("ServiceCoordinator: Showing sonde selection for manual change (\(availableSondesForSelection.count) sondes available)", category: .general, level: .info)
+        appLog("ServiceCoordinator: Showing sonde selection for manual change (\(availableSondesForSelection.count) cached)", category: .general, level: .info)
+
+        // Show the cached list at once, then refresh from SondeHub so the picker
+        // reflects the last 24 h as of now rather than as of app launch.
+        isRefreshingSondeList = true
+        Task { [weak self] in
+            guard let self else { return }
+            await self.balloonPositionService.aprsService.refreshAvailableSondes()
+            self.availableSondesForSelection = self.balloonPositionService.aprsService.availableSondes
+            self.isRefreshingSondeList = false
+
+            // Keep the highlighted row valid if the refresh dropped it.
+            if let selected = self.selectedSondeSerial,
+               !self.availableSondesForSelection.contains(where: { $0.serial == selected }) {
+                self.selectedSondeSerial = self.availableSondesForSelection.first?.serial
+            }
+            appLog("ServiceCoordinator: Sonde list refreshed (\(self.availableSondesForSelection.count) available)", category: .general, level: .info)
+        }
+    }
+
+    /// Switch to a sonde detected by BLE (may not be in APRS)
+    /// Handles edge case where BLE receives a flying sonde not in SondeHub
+    func switchToBLESonde(_ sondeName: String) {
+        // No frequency sync needed - BLE is already tuned to this sonde
+        startTrackingSonde(name: sondeName, checkFrequencySync: false)
     }
 }

@@ -27,6 +27,38 @@ enum DataState: CustomStringConvertible, Equatable {
         }
     }
 
+    // MARK: - Mode Detection (Two Primary Modes)
+
+    /// Balloon is flying - predictions active, navigate to predicted landing
+    var isFlying: Bool {
+        switch self {
+        case .liveBLEFlying, .aprsFlying:
+            return true
+        case .startup, .liveBLELanded, .waitingForAPRS, .aprsLanded, .noTelemetry:
+            return false
+        }
+    }
+
+    /// Balloon has landed - no predictions, navigate to actual position
+    var isLanded: Bool {
+        switch self {
+        case .liveBLELanded, .aprsLanded:
+            return true
+        case .startup, .liveBLEFlying, .waitingForAPRS, .aprsFlying, .noTelemetry:
+            return false
+        }
+    }
+
+    /// Has active telemetry (BLE or APRS)
+    var hasActiveTelemetry: Bool {
+        switch self {
+        case .liveBLEFlying, .liveBLELanded, .aprsFlying, .aprsLanded:
+            return true
+        case .startup, .waitingForAPRS, .noTelemetry:
+            return false
+        }
+    }
+
     var requiresAPRSPolling: Bool {
         switch self {
         case .startup, .noTelemetry, .waitingForAPRS, .aprsFlying, .aprsLanded:
@@ -72,9 +104,13 @@ final class BalloonPositionService: ObservableObject {
     // Display position: shows landing point when landed, live position when flying
     @Published var balloonDisplayPosition: CLLocationCoordinate2D? = nil
 
+
     // Locked landing position - set when first detected as landed, only updated if balloon moves significantly
     private var lockedLandingPosition: CLLocationCoordinate2D? = nil
     private let landingPositionUpdateThreshold: CLLocationDistance = 50.0 // meters
+
+    /// Owns the three landing algorithms and their priority chain.
+    private let landingDetector = LandingDetector()
 
     // Cached prediction data for flying state landing point determination
 
@@ -84,8 +120,6 @@ final class BalloonPositionService: ObservableObject {
     private var isStartupComplete: Bool = false
 
     // Sonde change handling - stash new packet while clearing old sonde data
-    private var sondeChangePosition: PositionData?
-    private var sondeChangeSource: String?
 
     private let bleService: BLECommunicationService
     let aprsService: APRSDataService
@@ -240,44 +274,23 @@ final class BalloonPositionService: ObservableObject {
         // Log every position for tracking (debug level to reduce verbosity)
         appLog("BalloonPositionService: Processing \(source) position for \(position.sondeName) at [\(String(format: "%.5f", position.latitude)), \(String(format: "%.5f", position.longitude))] alt=\(Int(position.altitude))m", category: .service, level: .debug)
 
-        // Detect sonde change BEFORE updating anything (Per FSD: Sonde Change Flow)
+        // Which sonde is being hunted is decided by selection - at startup, or
+        // through the picker - and telemetry never redefines it.
+        //
+        // This used to treat any differing serial as a sonde change: it wiped
+        // every service via clearAllSondeData() and adopted the new serial. A
+        // receiver decodes a neighbouring sonde now and then, a bench unit or
+        // one on an adjacent frequency, and a single such packet was enough to
+        // destroy the tracked flight and adopt the intruder - leaving its
+        // position stitched into the track as a leg running off to wherever it
+        // sat. Selection now owns the identity, so a foreign serial is simply
+        // not this hunt's data.
         let incomingName = position.sondeName.trimmingCharacters(in: .whitespacesAndNewlines)
         if !incomingName.isEmpty, let currentName = currentBalloonName, currentName != incomingName {
-            appLog("🎈 BalloonPositionService: Sonde name change detected: \(currentName) → \(incomingName)", category: .service, level: .info)
-
-            // Sequential steps per FSD:
-            // 1. Detect - done above
-            // 2. Stash the new telemetry packet
-            sondeChangePosition = position
-            sondeChangeSource = source
-            appLog("BalloonPositionService: Stashed new sonde telemetry from \(source)", category: .service, level: .info)
-
-            // 3. Call coordinator.clearAllSondeData() - wait for completion
-            if let coordinator = serviceCoordinator {
-                coordinator.clearAllSondeData()
-            } else {
-                appLog("BalloonPositionService: WARNING - No ServiceCoordinator available for sonde change", category: .service, level: .error)
-            }
-
-            // 4. Update currentBalloonName to new sonde (prevents infinite loop)
-            currentBalloonName = incomingName
-
-            // 5. Trigger async APRS track fetch for new sonde (don't wait)
-            balloonTrackService?.fillTrackGapsFromAPRS(sondeName: incomingName)
-
-            // 6. Process stashed packet normally (publishes to subscribers)
-            if let stashedPosition = sondeChangePosition, let stashedSource = sondeChangeSource {
-                appLog("BalloonPositionService: Processing stashed telemetry for new sonde \(stashedPosition.sondeName)", category: .service, level: .info)
-
-                // Clear stash
-                sondeChangePosition = nil
-                sondeChangeSource = nil
-
-                // Process as if it just arrived (recursive call with fresh state)
-                handlePositionUpdate(stashedPosition, source: stashedSource)
-            }
-
-            // 7. Return - processing complete
+            appLog(String(format: "🚫 FOREIGN SONDE [%@]: '%@' at %.5f,%.5f alt=%.0fm ignored while hunting '%@'",
+                          source, incomingName, position.latitude, position.longitude,
+                          position.altitude, currentName),
+                   category: .service, level: .info)
             return
         }
 
@@ -342,12 +355,15 @@ final class BalloonPositionService: ObservableObject {
 
             // Key decision factors
             let startupStatus = isStartupComplete ? "✅" : "⏳"
-            let debounceStatus = timeInState >= 30.0 ? "✅30s" : "⏳\(String(format: "%.1f", timeInState))s"
             // Compute staleness directly from BLE service
             let isStale = bleService.lastMessageTimestamp.map { Date().timeIntervalSince($0) > 3.0 } ?? true
             let staleStatus = isStale ? "⚠️stale" : "✅fresh"
 
-            appLog("🔄 DataState: \(currentState) → \(newState) | BLE:\(inputs.bleConnectionState) APRS:\(inputs.aprsDataAvailable) Phase:\(inputs.balloonPhase) | Device:\(deviceInfo) Msg:\(msgAge) Sonde:\(sondeInfo) Alt:\(altInfo) | Startup:\(startupStatus) Debounce:\(debounceStatus) Data:\(staleStatus) AnyData:\(inputs.bleConnectionState.hasTelemetry || inputs.aprsDataAvailable)", category: .service, level: .info)
+            // Held: how long the machine sat in the state it is leaving. Reported
+            // for diagnosis only - no transition is gated on it.
+            let held = String(format: "%.1fs", timeInState)
+
+            appLog("🔄 DataState: \(currentState) → \(newState) | BLE:\(inputs.bleConnectionState) APRS:\(inputs.aprsDataAvailable) Phase:\(inputs.balloonPhase) | Device:\(deviceInfo) Msg:\(msgAge) Sonde:\(sondeInfo) Alt:\(altInfo) | Startup:\(startupStatus) Held:\(held) Data:\(staleStatus) AnyData:\(inputs.bleConnectionState.hasTelemetry || inputs.aprsDataAvailable)", category: .service, level: .info)
             transition(to: newState)
         }
 
@@ -367,10 +383,10 @@ final class BalloonPositionService: ObservableObject {
             return evaluateWaitingForAPRSTransitions(inputs: inputs, timeInState: timeInCurrentState)
 
         case .aprsFlying:
-            return evaluateAPRSFlyingTransitions(inputs: inputs, timeInState: timeInCurrentState)
+            return evaluateAPRSFlyingTransitions(inputs: inputs)
 
         case .aprsLanded:
-            return evaluateAPRSLandedTransitions(inputs: inputs, timeInState: timeInCurrentState)
+            return evaluateAPRSLandedTransitions(inputs: inputs)
 
         case .noTelemetry:
             return evaluateNoTelemetryTransitions(inputs: inputs)
@@ -408,32 +424,7 @@ final class BalloonPositionService: ObservableObject {
         case .liveBLELanded:
             // BLE telemetry active, balloon landed
             aprsService.disablePolling()
-            // Lock landing point on first detection, only update if balloon moves significantly (>50m)
-            if let position = currentPositionData {
-                let currentCoord = CLLocationCoordinate2D(latitude: position.latitude, longitude: position.longitude)
-
-                if let locked = lockedLandingPosition {
-                    // Landing position already locked - check if balloon moved significantly
-                    let distance = CLLocation(latitude: locked.latitude, longitude: locked.longitude)
-                        .distance(from: CLLocation(latitude: currentCoord.latitude, longitude: currentCoord.longitude))
-
-                    if distance >= landingPositionUpdateThreshold {
-                        // Significant movement detected - update locked position and route
-                        appLog("BalloonPositionService: Landed balloon moved \(Int(distance))m - updating landing position", category: .service, level: .info)
-                        lockedLandingPosition = currentCoord
-                        Task {
-                            await landingPointTrackingService?.updateLandingPoint(currentCoord, source: .currentPosition)
-                        }
-                    }
-                } else {
-                    // First time landing detected - lock position
-                    appLog("BalloonPositionService: Landing detected - locking position at [\(String(format: "%.5f", currentCoord.latitude)), \(String(format: "%.5f", currentCoord.longitude))]", category: .service, level: .info)
-                    lockedLandingPosition = currentCoord
-                    Task {
-                        await landingPointTrackingService?.updateLandingPoint(currentCoord, source: .currentPosition)
-                    }
-                }
-            }
+            updateLandingPosition()
 
         case .waitingForAPRS:
             // BLE lost - start APRS polling and wait for response
@@ -458,32 +449,7 @@ final class BalloonPositionService: ObservableObject {
         case .aprsLanded:
             // APRS-only mode with old/stale data indicating landing
             aprsService.enablePolling()
-            // Lock landing point on first detection, only update if balloon moves significantly (>50m)
-            if let position = currentPositionData {
-                let currentCoord = CLLocationCoordinate2D(latitude: position.latitude, longitude: position.longitude)
-
-                if let locked = lockedLandingPosition {
-                    // Landing position already locked - check if balloon moved significantly
-                    let distance = CLLocation(latitude: locked.latitude, longitude: locked.longitude)
-                        .distance(from: CLLocation(latitude: currentCoord.latitude, longitude: currentCoord.longitude))
-
-                    if distance >= landingPositionUpdateThreshold {
-                        // Significant movement detected - update locked position and route
-                        appLog("BalloonPositionService: Landed balloon moved \(Int(distance))m - updating landing position", category: .service, level: .info)
-                        lockedLandingPosition = currentCoord
-                        Task {
-                            await landingPointTrackingService?.updateLandingPoint(currentCoord, source: .currentPosition)
-                        }
-                    }
-                } else {
-                    // First time landing detected - lock position
-                    appLog("BalloonPositionService: Landing detected - locking position at [\(String(format: "%.5f", currentCoord.latitude)), \(String(format: "%.5f", currentCoord.longitude))]", category: .service, level: .info)
-                    lockedLandingPosition = currentCoord
-                    Task {
-                        await landingPointTrackingService?.updateLandingPoint(currentCoord, source: .currentPosition)
-                    }
-                }
-            }
+            updateLandingPosition()
             // Fill track gaps from APRS when entering APRS mode
             balloonTrackService?.fillTrackGapsFromAPRS(sondeName: currentBalloonName)
         }
@@ -493,6 +459,30 @@ final class BalloonPositionService: ObservableObject {
 
         // Notify other services of state-specific behavior changes
         notifyStateSpecificBehavior(state)
+    }
+
+    /// Lock landing position on first detection, update only if balloon moves >50m
+    /// Used by both liveBLELanded and aprsLanded states
+    private func updateLandingPosition() {
+        guard let position = currentPositionData else { return }
+
+        let currentCoord = CLLocationCoordinate2D(latitude: position.latitude, longitude: position.longitude)
+
+        if let locked = lockedLandingPosition {
+            let distance = CLLocation(latitude: locked.latitude, longitude: locked.longitude)
+                .distance(from: CLLocation(latitude: currentCoord.latitude, longitude: currentCoord.longitude))
+
+            guard distance >= landingPositionUpdateThreshold else { return }
+
+            appLog("BalloonPositionService: Landed balloon moved \(Int(distance))m - updating landing position", category: .service, level: .info)
+        } else {
+            appLog("BalloonPositionService: Landing detected - locking position at [\(String(format: "%.5f", currentCoord.latitude)), \(String(format: "%.5f", currentCoord.longitude))]", category: .service, level: .info)
+        }
+
+        lockedLandingPosition = currentCoord
+        Task {
+            await landingPointTrackingService?.updateLandingPoint(currentCoord, source: .currentPosition)
+        }
     }
 
     // MARK: - Prediction Integration
@@ -618,8 +608,9 @@ final class BalloonPositionService: ObservableObject {
         return .waitingForAPRS
     }
 
-    private func evaluateAPRSFlyingTransitions(inputs: TelemetryInputs, timeInState: TimeInterval) -> DataState {
-        // No debounce - immediate transition when BLE recovers
+    private func evaluateAPRSFlyingTransitions(inputs: TelemetryInputs) -> DataState {
+        // Transitions are immediate; the 30 s BLE staleness threshold supplies
+        // the only delay this state machine needs.
         if inputs.bleConnectionState.hasTelemetry {
             return .liveBLEFlying
         }
@@ -632,8 +623,9 @@ final class BalloonPositionService: ObservableObject {
         return .aprsFlying
     }
 
-    private func evaluateAPRSLandedTransitions(inputs: TelemetryInputs, timeInState: TimeInterval) -> DataState {
-        // No debounce - immediate transition when BLE recovers
+    private func evaluateAPRSLandedTransitions(inputs: TelemetryInputs) -> DataState {
+        // Transitions are immediate; the 30 s BLE staleness threshold supplies
+        // the only delay this state machine needs.
         if inputs.bleConnectionState.hasTelemetry {
             return inputs.balloonPhase == .landed ? .liveBLELanded : .liveBLEFlying
         }
@@ -712,119 +704,59 @@ final class BalloonPositionService: ObservableObject {
 
     // MARK: - Landing Detection (moved from BalloonTrackService)
 
-    /// Calculate landing detection based on net movement across packets
+    /// Vector analysis, delegated to `LandingDetector`.
+    ///
+    /// The algorithm and its thresholds live there so they can be tested without
+    /// a radio. This keeps only the job of handing it the track.
     private func calculateLandingDetection() -> Bool {
-        guard let balloonTrackService = balloonTrackService else { return false }
-
-        // Start evaluation at packet 5 (need 5 packets: 0,1,2,3,4)
-        guard balloonTrackService.currentBalloonTrack.count >= 5 else { return false }
-
-        // Dynamic window logic:
-        // Packets 5-19: expand from packet 0 to current packet
-        // Packet 20+: sliding window of most recent 20 packets
-        let availablePackets = balloonTrackService.currentBalloonTrack.count
-        let windowSize = min(20, availablePackets)
-        let recentPoints = Array(balloonTrackService.currentBalloonTrack.suffix(windowSize))
-
-        guard let startPoint = recentPoints.first, let endPoint = recentPoints.last else {
-            return false
-        }
-
-        // Calculate time window for speed calculation
-        let timeWindow = endPoint.timestamp.timeIntervalSince(startPoint.timestamp)
-        guard timeWindow > 0 else { return false }
-
-        // Calculate net movement distance across entire window (3D displacement)
-        let latToMeters = 111320.0 // meters per degree latitude
-        let lonToMeters = latToMeters * cos(endPoint.latitude * .pi / 180)
-
-        let dx = (endPoint.longitude - startPoint.longitude) * lonToMeters
-        let dy = (endPoint.latitude - startPoint.latitude) * latToMeters
-        let dz = endPoint.altitude - startPoint.altitude
-
-        let netDistance = sqrt(dx * dx + dy * dy + dz * dz) // meters
-        let netSpeedMS = netDistance / timeWindow // m/s
-        let netSpeedKmh = netSpeedMS * 3.6 // km/h for logging
-
-        // Simple thresholds
-        let landingThresholdKmh = 3.0 // 3 km/h
-        let landingThresholdMS = landingThresholdKmh / 3.6 // 0.83 m/s
-        let altitudeThresholdM = 3000.0
-
-        // Simple boolean logic: speed < 3 km/h AND altitude < 3000m
-        let isLanded = (netSpeedMS < landingThresholdMS) && (endPoint.altitude < altitudeThresholdM)
-
-        // Only log altitude threshold when relevant
-        let altitudeInfo = endPoint.altitude < 10000 ? " (below 10km)" : ""
-        let thresholdInfo = endPoint.altitude < altitudeThresholdM ? " alt<3km" : ""
-
-        appLog(String(format: "🎯 LANDING [%d]: %.1fm @%.1fkm/h alt=%.0fm%@%@ win=%.1fs → %@",
-                      windowSize, netDistance, netSpeedKmh, endPoint.altitude,
-                      altitudeInfo, thresholdInfo, timeWindow,
-                      isLanded ? "LANDED" : "FLYING"),
-               category: .general, level: .debug)
-
-        return isLanded
+        guard let track = balloonTrackService?.currentBalloonTrack else { return false }
+        return landingDetector.isStoppedByVectorAnalysis(track: track)
     }
 
-    /// Update balloon phase based on position data and landing detection
+    /// Classify the balloon's flight phase, delegated to `LandingDetector`.
+    ///
+    /// The priority chain - a track-based landing beats stale APRS, which beats
+    /// vector analysis, which beats vertical speed - is the business rule, and it
+    /// lives in the detector where it is unit-tested. Sticky by design: once a
+    /// track landing is known, a recovered sonde carried uphill cannot flip the
+    /// app back to flying.
     private func updateBalloonPhase() {
-        guard let currentPosition = currentPositionData else {
-            balloonPhase = .unknown
-            return
+        let trackLanding: TrackLanding? = {
+            guard let ts = balloonTrackService, ts.trackBasedLandingDetected,
+                  let when = ts.trackBasedLandingTime, let position = ts.landingPosition else { return nil }
+            return TrackLanding(index: 0, timestamp: when, coordinate: position, reason: .stationaryPeriod)
+        }()
+
+        let previous = balloonPhase
+        balloonPhase = landingDetector.classifyPhase(
+            track: balloonTrackService?.currentBalloonTrack ?? [],
+            position: currentPositionData,
+            trackLanding: trackLanding
+        )
+
+        if balloonPhase != previous {
+            appLog("BalloonPositionService: Balloon phase \(previous) → \(balloonPhase)", category: .service, level: .info)
         }
-
-        // HIGHEST PRIORITY: Check for track-based landing (20+ minutes stationary in track history)
-        // This is definitive - once detected, balloon stays landed regardless of subsequent movement
-        if let balloonTrack = balloonTrackService, balloonTrack.trackBasedLandingDetected {
-            balloonPhase = .landed
-            appLog("BalloonPositionService: Track-based landing detected - balloon marked as LANDED (stationary period at \(balloonTrack.trackBasedLandingTime?.description ?? "unknown"))", category: .service, level: .info)
-            return
-        }
-
-        // Check for old APRS data (age-based landing)
-        // Use telemetry timestamp (when balloon last transmitted) to detect landing
-        let positionAge = Date().timeIntervalSince(currentPosition.timestamp)
-        let isAprsPosition = currentPosition.telemetrySource == .aprs
-        let aprsLandingAgeThreshold = 120.0 // 2 minutes
-
-        if isAprsPosition && positionAge > aprsLandingAgeThreshold {
-            balloonPhase = .landed
-            appLog("BalloonPositionService: APRS age-based landing detected - balloon marked as LANDED (telemetry age: \(Int(positionAge))s)", category: .service, level: .info)
-            return
-        }
-
-        // BLE landing detection with 5-packet requirement
-        let landingDetected = calculateLandingDetection()
-
-        if landingDetected {
-            balloonPhase = .landed
-        } else {
-            // Determine flight phase based on vertical speed
-            if currentPosition.verticalSpeed > 0 {
-                balloonPhase = .ascending
-            } else if currentPosition.verticalSpeed < 0 {
-                balloonPhase = currentPosition.altitude < 10_000 ? .descendingBelow10k : .descendingAbove10k
-            } else {
-                balloonPhase = .unknown
-            }
-        }
-
-        // DEBUG: Critical debugging for balloon phase
     }
 
     // MARK: - Balloon Display Position Management (moved from ServiceCoordinator)
 
     private func updateBalloonDisplayPosition() {
+        // On foot, only the sonde's own GPS over BLE counts. A SondeHub position
+        // marks where the sonde was last *heard*, not where it lies, so it must
+        // not drive the close-range distance. See FSD Hunt Phases -> Phase 4.
+        let source: CloseRangeGuidance.PositionSource =
+            (currentPositionData?.telemetrySource == .aprs) ? .network : .receiver
+
         // Use landing point when landed, otherwise use live position data
         if balloonPhase == .landed, let balloonTrackService = balloonTrackService, let landingPosition = balloonTrackService.landingPosition {
             balloonDisplayPosition = landingPosition
-            currentLocationService.updateBalloonDisplayPosition(landingPosition)
+            currentLocationService.updateBalloonDisplayPosition(landingPosition, source: source)
             appLog("BalloonPositionService: Display position set to landing point [\(String(format: "%.5f", landingPosition.latitude)), \(String(format: "%.5f", landingPosition.longitude))]", category: .service, level: .debug)
         } else if let position = currentPositionData {
             let livePosition = CLLocationCoordinate2D(latitude: position.latitude, longitude: position.longitude)
             balloonDisplayPosition = livePosition
-            currentLocationService.updateBalloonDisplayPosition(livePosition)
+            currentLocationService.updateBalloonDisplayPosition(livePosition, source: source)
             appLog("BalloonPositionService: Display position set to live position [\(String(format: "%.5f", livePosition.latitude)), \(String(format: "%.5f", livePosition.longitude))]", category: .service, level: .debug)
         } else {
             appLog("BalloonPositionService: Cannot update display position - no position data available (phase=\(balloonPhase))", category: .service, level: .debug)
@@ -942,6 +874,18 @@ final class BalloonTrackService: ObservableObject {
             appLog("BalloonTrackService: Injected persisted track with \(track.count) points (no sonde name)", category: .service, level: .info)
         }
 
+        // Extent of what was restored: a leg reaching far outside the flight
+        // shows up here as a coordinate range wider than the flight could be.
+        if let first = track.first, let last = track.last {
+            let lats = track.map(\.latitude), lons = track.map(\.longitude)
+            appLog(String(format: "📍 TRACK EXTENT [restored %d pts]: lat %.5f…%.5f lon %.5f…%.5f | first=%.5f,%.5f last=%.5f,%.5f | span=%.0fmin",
+                          track.count,
+                          lats.min() ?? 0, lats.max() ?? 0, lons.min() ?? 0, lons.max() ?? 0,
+                          first.latitude, first.longitude, last.latitude, last.longitude,
+                          last.timestamp.timeIntervalSince(first.timestamp) / 60),
+                   category: .service, level: .info)
+        }
+
         // Manually trigger update for subscribers
         trackUpdated.send()
 
@@ -969,6 +913,7 @@ final class BalloonTrackService: ObservableObject {
             currentBalloonName = balloonPositionService.currentBalloonName
         }
 
+
         // Only record track points when we have valid telemetry states
         // Exclude: startup, waitingForAPRS, noTelemetry, aprsLanded (no BLE, balloon on ground)
         let state = balloonPositionService.currentState
@@ -976,6 +921,7 @@ final class BalloonTrackService: ObservableObject {
             appLog("BalloonTrackService: State \(state) - not recording track point", category: .service, level: .info)
             return
         }
+
 
         // Compute track-derived speeds prior to appending, so we can store derived values
         var derivedHorizontalMS: Double? = nil
@@ -1187,7 +1133,7 @@ final class BalloonTrackService: ObservableObject {
     }
     
     private func saveCurrentTrack() {
-        persistenceService.saveBalloonTrack(currentBalloonTrack)
+        persistenceService.saveBalloonTrack(currentBalloonTrack, sondeName: currentBalloonName)
         // Also save sonde name to keep consistency
         if let balloonName = currentBalloonName {
             persistenceService.saveSondeName(balloonName)
@@ -1252,6 +1198,17 @@ final class BalloonTrackService: ObservableObject {
         // Single update to @Published property (one map redraw for entire APRS batch)
         currentBalloonTrack = updatedTrack
 
+        // Track extent, so a stray leg is visible in the log as a coordinate
+        // range far wider than a real flight.
+        if pointsAdded > 0, let first = updatedTrack.first, let last = updatedTrack.last {
+            let lats = updatedTrack.map(\.latitude), lons = updatedTrack.map(\.longitude)
+            appLog(String(format: "📍 TRACK EXTENT [APRS +%d → %d pts]: lat %.5f…%.5f lon %.5f…%.5f | first=%.5f,%.5f last=%.5f,%.5f",
+                          pointsAdded, updatedTrack.count,
+                          lats.min() ?? 0, lats.max() ?? 0, lons.min() ?? 0, lons.max() ?? 0,
+                          first.latitude, first.longitude, last.latitude, last.longitude),
+                   category: .service, level: .info)
+        }
+
         return pointsAdded
     }
 
@@ -1272,6 +1229,7 @@ final class BalloonTrackService: ObservableObject {
         // Slot empty - append (BLE points are chronological)
         currentBalloonTrack.append(point)
     }
+
 
     /// Fill track gaps from APRS telemetry
     /// Runs asynchronously and does not block UI
@@ -1582,7 +1540,7 @@ final class BalloonTrackService: ObservableObject {
         )
 
         // Clear all track data from disk
-        persistenceService.saveBalloonTrack([])
+        persistenceService.saveBalloonTrack([], sondeName: currentBalloonName)
         persistenceService.saveSondeName("")
 
         trackUpdated.send()

@@ -56,6 +56,7 @@ import Combine
 import SwiftUI
 import CoreBluetooth
 import OSLog
+import AudioToolbox
 
 // MARK: - Internal BLE Parsing Structure
 // Pure three-channel architecture - no legacy TelemetryData
@@ -241,6 +242,57 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
     // AFC tracking for business logic
     private var afcHistory: [Double] = []
     private let afcHistoryMaxSize = 10
+
+    /// The sonde this hunt is following, set when one is selected.
+    ///
+    /// A receiver decodes whatever is on frequency, which now and then is a
+    /// different sonde - a bench unit, or a neighbour close enough in frequency
+    /// to slip through. Telemetry for anything other than this serial is dropped
+    /// here, at the radio boundary, so it never reaches the position, track,
+    /// prediction or routing services at all.
+    ///
+    /// `nil` accepts any sonde: nothing has been selected yet.
+    var huntedSondeName: String? = nil
+
+    /// Set when the receiver is confirmed to be locked to a different sonde.
+    ///
+    /// Retuning the receiver is a real sonde change and, per the FSD, must clear
+    /// every trace of the previous one. A single foreign packet is not that: it
+    /// is one sample, and acting on it is what let a bench unit destroy a live
+    /// hunt. A change is declared only once the new serial has arrived
+    /// `foreignSondeConfirmCount` times in a row with none of the hunted sonde
+    /// in between - by which point the receiver has plainly moved.
+    @Published var confirmedSondeChange: String? = nil
+
+    var foreignSondeTracker = ForeignSondeTracker()
+
+    /// Record a decoded packet belonging to a sonde other than the hunted one.
+    ///
+    /// The packet itself is discarded either way; only the run length is kept.
+    /// Once the same foreign serial has arrived often enough in succession the
+    /// receiver has clearly been retuned, and the change is announced so the
+    /// coordinator can clear the previous sonde and adopt this one.
+    private func noteForeignSonde(_ position: PositionData, hunting hunted: String) {
+        let outcome = foreignSondeTracker.sawForeignSonde(position.sondeName)
+
+        appLog(String(format: "🚫 BLE: dropped telemetry for '%@' at %.5f,%.5f alt=%.0fm - hunting '%@' (%d/%d)",
+                      position.sondeName, position.latitude, position.longitude, position.altitude,
+                      hunted, outcome.streak, foreignSondeTracker.confirmCount),
+               category: .ble, level: .info)
+
+        guard outcome.isConfirmedChange else { return }
+
+        appLog("🎈 BLE: receiver locked to '\(position.sondeName)' for \(outcome.streak) packets - reporting sonde change from '\(hunted)'", category: .ble, level: .info)
+        confirmedSondeChange = position.sondeName
+    }
+
+    /// Play a beep sound on the phone when balloon signal is decoded
+    /// Controlled by the same mute toggle as the tracker buzzer
+    private func playSignalDecodedBeep(muted: Bool) {
+        guard !muted else { return }
+        // Play system sound (1052 = short beep, similar to notification)
+        AudioServicesPlaySystemSound(1052)
+    }
 
     // MARK: - Settings Properties
     // Radio/Sonde settings (from Type 0/1/2 packets)
@@ -733,6 +785,22 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
                 if positionData.latitude == 0.0 && positionData.longitude == 0.0 {
                     return // Skip invalid coordinates
                 }
+
+                // Drop telemetry from any sonde other than the one being hunted,
+                // before it is published. Nothing downstream should have to know
+                // that a receiver occasionally decodes the wrong sonde.
+                if let hunted = huntedSondeName,
+                   !positionData.sondeName.isEmpty,
+                   positionData.sondeName != hunted {
+                    noteForeignSonde(positionData, hunting: hunted)
+                    return
+                }
+
+                // A packet from the hunted sonde ends any foreign run.
+                foreignSondeTracker.reset()
+
+                // Play beep on phone when signal is decoded
+                playSignalDecodedBeep(muted: radioData.buzmute)
 
                 DispatchQueue.main.async {
                     // Update radioSettings with probe type and frequency from Type 1 packet

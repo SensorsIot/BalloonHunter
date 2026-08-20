@@ -48,6 +48,11 @@
 			path = BalloonHunter;
 			sourceTree = "<group>";
 		};
+		A7F0DFF02E5BFFFF00000099 /* BalloonHunterTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = BalloonHunterTests;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -78,6 +83,7 @@
 		477118042E3B511A00C79172 = {
 			isa = PBXGroup;
 			children = (
+				A7F0DFF02E5BFFFF00000099 /* BalloonHunterTests */,
 				4771180F2E3B511A00C79172 /* BalloonHunter */,
 				4771180E2E3B511A00C79172 /* Products */,
 			);
@@ -130,6 +136,9 @@
 			);
 			dependencies = (
 				A7F0E0052E5C000000000001 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				A7F0DFF02E5BFFFF00000099 /* BalloonHunterTests */,
 			);
 			name = BalloonHunterTests;
 			productName = BalloonHunterTests;
@@ -475,6 +484,7 @@
 		A7F0E0072E5C000000000001 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = 2REN69VTQ3;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -489,6 +499,7 @@
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/BalloonHunter.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/BalloonHunter";
 				TEST_TARGET_NAME = BalloonHunter;
 			};
 			name = Debug;
@@ -496,6 +507,7 @@
 		A7F0E0082E5C000000000001 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = 2REN69VTQ3;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -510,6 +522,7 @@
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/BalloonHunter.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/BalloonHunter";
 				TEST_TARGET_NAME = BalloonHunter;
 			};
 			name = Release;

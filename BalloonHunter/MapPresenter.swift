@@ -87,14 +87,68 @@ final class MapPresenter: ObservableObject {
         refreshAnnotations()
     }
 
-    // MARK: - Derived Flags
+    // MARK: - Red Track Diagnostics
 
-    var isFlying: Bool {
-        balloonPhase != .landed && balloonPhase != .unknown
+    /// Log the red polyline exactly as the map will draw it.
+    ///
+    /// Every leg is measured, so a leg going somewhere it should not announces
+    /// itself as an outlier without anyone having to decide in advance where
+    /// "wrong" points end up. A radiosonde track is continuous: consecutive
+    /// points sit seconds and metres apart. One long leg is the defect.
+    private func logRedTrack(_ points: [BalloonTrackPoint]) {
+        guard points.count >= 2 else { return }
+
+        var longest: (index: Int, metres: CLLocationDistance, seconds: TimeInterval) = (0, 0, 0)
+        var legs: [(Int, CLLocationDistance, TimeInterval)] = []
+
+        for i in 1..<points.count {
+            let a = points[i - 1], b = points[i]
+            let metres = CLLocation(latitude: a.latitude, longitude: a.longitude)
+                .distance(from: CLLocation(latitude: b.latitude, longitude: b.longitude))
+            let seconds = b.timestamp.timeIntervalSince(a.timestamp)
+            if metres > longest.metres { longest = (i, metres, seconds) }
+            // A leg over 2 km is longer than a sonde travels between samples.
+            if metres > 2000 { legs.append((i, metres, seconds)) }
+        }
+
+        let first = points[0], last = points[points.count - 1]
+        appLog(String(format: "🔴 RED TRACK: %d pts | first=%.5f,%.5f t=%@ | last=%.5f,%.5f t=%@ | longest leg #%d %.0fm over %.0fs",
+                      points.count,
+                      first.latitude, first.longitude, "\(first.timestamp)",
+                      last.latitude, last.longitude, "\(last.timestamp)",
+                      longest.index, longest.metres, longest.seconds),
+               category: .general, level: .info)
+
+        // Name every implausible leg and both of its endpoints. This is what
+        // identifies the stray line and where it came from.
+        for (i, metres, seconds) in legs.prefix(5) {
+            let a = points[i - 1], b = points[i]
+            appLog(String(format: """
+                🔴 RED TRACK JUMP #%d: %.0fm in %.0fs (%.0f km/h)
+                   from[%d]: lat=%.6f lon=%.6f alt=%.0fm t=%@
+                   to  [%d]: lat=%.6f lon=%.6f alt=%.0fm t=%@
+                """,
+                i, metres, seconds, seconds > 0 ? (metres / seconds) * 3.6 : -1,
+                i - 1, a.latitude, a.longitude, a.altitude, "\(a.timestamp)",
+                i, b.latitude, b.longitude, b.altitude, "\(b.timestamp)"),
+                category: .general, level: .error)
+        }
+
+        if legs.count > 5 {
+            appLog("🔴 RED TRACK: \(legs.count) implausible legs total, first 5 logged", category: .general, level: .error)
+        }
     }
 
+    // MARK: - Derived Flags
+
+    /// Flying mode: predictions active, navigate to predicted landing point
+    var isFlying: Bool {
+        balloonPositionService.currentState.isFlying
+    }
+
+    /// Landed mode: no predictions, navigate to actual balloon position
     var isLanded: Bool {
-        balloonPhase == .landed
+        balloonPositionService.currentState.isLanded
     }
 
     var routeVisible: Bool {
@@ -167,6 +221,36 @@ final class MapPresenter: ObservableObject {
         bleService.setMute(muted)
     }
 
+    // MARK: - Startup Framing
+
+    /// Open the map on everything there is to see, as the FSD requires: track,
+    /// predicted path, route, balloon and hunter.
+    ///
+    /// It cannot be a single fit at startup, because the overlays land at
+    /// different times - the track on load, the prediction about a second later,
+    /// the route after that. Framing once would frame whichever pieces happened
+    /// to have arrived. So refit as each one appears, until the window closes.
+    private var startupFitDeadline: Date?
+
+    /// Begin the window. Called when startup hands over to the state machine.
+    func beginStartupFraming(for duration: TimeInterval = 8.0) {
+        startupFitDeadline = Date().addingTimeInterval(duration)
+        appLog("MapPresenter: Startup framing open for \(Int(duration))s - map will fit each overlay as it arrives", category: .general, level: .info)
+        refitDuringStartup()
+    }
+
+    /// Refit while the window is open. Ignored once it closes, so the view stops
+    /// moving under the hunter the moment they take control.
+    private func refitDuringStartup() {
+        guard let deadline = startupFitDeadline else { return }
+        guard Date() < deadline else {
+            startupFitDeadline = nil
+            appLog("MapPresenter: Startup framing window closed", category: .general, level: .debug)
+            return
+        }
+        performCameraFit()
+    }
+
     func triggerShowAllAnnotations() {
         showAllAnnotations = true
         updateCameraToShowAllAnnotations()
@@ -236,6 +320,7 @@ final class MapPresenter: ObservableObject {
                    !path.isEmpty,
                    self.predictionPathVisible {
                     self.predictionPath = MKPolyline(coordinates: path, count: path.count)
+                    self.refitDuringStartup()
                 } else {
                     self.predictionPath = nil
                 }
@@ -262,6 +347,7 @@ final class MapPresenter: ObservableObject {
                 } else {
                     self?.userRoute = nil
                 }
+                self?.refitDuringStartup()
             }
             .store(in: &cancellables)
 
@@ -403,7 +489,9 @@ final class MapPresenter: ObservableObject {
                 } else {
                     appLog("MapPresenter: Received track update with \(points.count) points", category: .general, level: .debug)
                 }
+                self?.logRedTrack(points)
                 self?.trackPoints = points
+                self?.refitDuringStartup()
             }
             .store(in: &cancellables)
 

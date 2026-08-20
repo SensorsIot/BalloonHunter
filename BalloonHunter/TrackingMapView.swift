@@ -237,15 +237,13 @@ struct TrackingMapView: View {
                 .onMapCameraChange { context in
                     guard !showSettings else { return }
 
-                    // DISABLED: Automatic startup zoom - user wants manual control only
-                    // if needsStartupZoom {
-                    //     needsStartupZoom = false
-                    //     appLog("🔍 ZOOM: Map initialized, triggering startup zoom", category: .general, level: .info)
-                    //     mapPresenter.updateCameraToShowAllAnnotations()
-                    //     return
-                    // }
+                    // Open the map on everything there is to see, per FSD step 7.
+                    // The overlays arrive over the next second or two, so this
+                    // opens a window that reframes as each one lands rather than
+                    // fitting once to whatever exists at this instant.
                     if needsStartupZoom {
                         needsStartupZoom = false
+                        mapPresenter.beginStartupFraming()
                     }
 
                     // Enforce minimum zoom limit for satellite view (Apple Maps satellite tiles unavailable beyond ~111)
@@ -300,7 +298,11 @@ struct TrackingMapView: View {
                 }
 
                     // Distance annotation overlay (landing mode only)
-                    if isLanded {
+                    // Shown whenever there is a distance to show. It comes from
+                    // the sonde's own GPS and the phone's, so a momentary BLE
+                    // dropout while walking must not hide it - that is exactly
+                    // when the hunter is closest and most likely to lose signal.
+                    if mapPresenter.distanceToBalloon != nil {
                         DistanceOverlayView(
                             distanceMeters: mapPresenter.distanceToBalloon
                         )
@@ -326,19 +328,23 @@ struct TrackingMapView: View {
                     }
                 }
 
-                // Sonde name mismatch field (persistent, only visible when mismatch detected)
+                // Sonde name mismatch field - tap to switch to BLE sonde
                 if mapPresenter.bleSerialName != mapPresenter.aprsSerialName &&
                    !mapPresenter.bleSerialName.isEmpty &&
                    !mapPresenter.aprsSerialName.isEmpty {
                     HStack {
                         Spacer()
-                        Text("SondeHub: '\(mapPresenter.aprsSerialName)' RadioSondyGo: '\(mapPresenter.bleSerialName)'")
-                            .font(.caption)
-                            .foregroundColor(.orange)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 4)
-                            .background(.ultraThinMaterial)
-                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                        Button {
+                            coordinator.switchToBLESonde(mapPresenter.bleSerialName)
+                        } label: {
+                            Text("Tap to switch to '\(mapPresenter.bleSerialName)'")
+                                .font(.caption)
+                                .foregroundColor(.orange)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 4)
+                                .background(.ultraThinMaterial)
+                                .clipShape(RoundedRectangle(cornerRadius: 8))
+                        }
                         Spacer()
                     }
                     .padding(.bottom, 4)
@@ -451,6 +457,17 @@ struct TrackingMapView: View {
         .cornerRadius(8)
         .opacity(mapPresenter.connectionStatus == .connected ? 1.0 : 0.0)
         .disabled(mapPresenter.connectionStatus != .connected)
+
+        #if DEBUG
+        // Temporary: answers whether Apple Maps prompts before replacing an
+        // active route. See AppleMapsHandoffProbe. Delete once answered.
+        Button("Nav A") { AppleMapsHandoffProbe.navigate(to: AppleMapsHandoffProbe.destinationA, label: "A") }
+            .buttonStyle(.bordered)
+            .tint(.orange)
+        Button("Nav B") { AppleMapsHandoffProbe.navigate(to: AppleMapsHandoffProbe.destinationB, label: "B") }
+            .buttonStyle(.bordered)
+            .tint(.orange)
+        #endif
 
         // Apple Maps navigation button (only show when landing point available)
         if shouldShowNavigationButton {

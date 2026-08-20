@@ -99,22 +99,57 @@ final class PersistenceService: ObservableObject {
 
     // MARK: - Balloon Track
 
-    func saveBalloonTrack(_ track: [BalloonTrackPoint]) {
+    /// A track stored together with the sonde it belongs to.
+    ///
+    /// The two used to live in separate files, with nothing tying them together.
+    /// A track could therefore hold points from one sonde while the name file
+    /// claimed another, and no code could tell: `BalloonTrackPoint` carries no
+    /// serial, so a mixed track is indistinguishable from a clean one.
+    private struct PersistedTrack: Codable {
+        let sondeName: String
+        let points: [BalloonTrackPoint]
+    }
+
+    func saveBalloonTrack(_ track: [BalloonTrackPoint], sondeName: String?) {
+        guard let sondeName, !sondeName.isEmpty else {
+            // Nothing to bind the points to, so storing them would recreate the
+            // very ambiguity this format exists to remove.
+            appLog("PersistenceService: Balloon track not saved - no sonde name to bind it to", category: .service, level: .info)
+            return
+        }
+
         let encoder = JSONEncoder()
-        if let encoded = try? encoder.encode(track) {
+        if let encoded = try? encoder.encode(PersistedTrack(sondeName: sondeName, points: track)) {
             saveToDocumentsDirectory(data: encoded, filename: balloonTrackFile)
-            appLog("PersistenceService: Balloon track saved (\(track.count) points)", category: .service, level: .debug)
+            appLog("PersistenceService: Balloon track saved (\(track.count) points for '\(sondeName)')", category: .service, level: .debug)
         }
     }
 
-    func loadBalloonTrack() -> [BalloonTrackPoint]? {
+    /// Load the stored track, but only if it demonstrably belongs to `sondeName`.
+    ///
+    /// Anything else is discarded rather than shown: a track from another sonde,
+    /// or one in the old format that names no owner and so cannot be vouched for.
+    func loadBalloonTrack(expecting sondeName: String?) -> [BalloonTrackPoint]? {
+        guard let data = Self.loadFromDocumentsDirectory(filename: balloonTrackFile) else { return nil }
         let decoder = JSONDecoder()
-        if let data = Self.loadFromDocumentsDirectory(filename: balloonTrackFile),
-           let track = try? decoder.decode([BalloonTrackPoint].self, from: data) {
-            appLog("PersistenceService: Balloon track loaded (\(track.count) points)", category: .service, level: .debug)
-            return track
+
+        guard let stored = try? decoder.decode(PersistedTrack.self, from: data) else {
+            // Old format: a bare array of points with no owner recorded. It may
+            // well be clean, but nothing in it can establish that, and an
+            // unverifiable track is what put another sonde's position on the map.
+            let count = (try? decoder.decode([BalloonTrackPoint].self, from: data))?.count
+            appLog("PersistenceService: Discarding unattributed track\(count.map { " (\($0) points)" } ?? "") - stored without a sonde name", category: .service, level: .info)
+            saveToDocumentsDirectory(data: Data("null".utf8), filename: balloonTrackFile)
+            return nil
         }
-        return nil
+
+        guard let sondeName, stored.sondeName == sondeName else {
+            appLog("PersistenceService: Discarding track for '\(stored.sondeName)' (\(stored.points.count) points) - now tracking '\(sondeName ?? "nothing")'", category: .service, level: .info)
+            return nil
+        }
+
+        appLog("PersistenceService: Balloon track loaded (\(stored.points.count) points for '\(stored.sondeName)')", category: .service, level: .debug)
+        return stored.points
     }
 
     // MARK: - Landing Points
@@ -148,7 +183,7 @@ final class PersistenceService: ObservableObject {
 
         // Save current track
         let track = balloonTrackService.getAllTrackPoints()
-        saveBalloonTrack(track)
+        saveBalloonTrack(track, sondeName: balloonTrackService.currentBalloonName)
 
         // Save landing points
         let landingPoints = landingPointTrackingService.landingHistory

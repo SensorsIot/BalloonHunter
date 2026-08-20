@@ -148,6 +148,7 @@ struct FrequencySyncProposal: Identifiable, Equatable {
     let id = UUID()
     let frequency: Double
     let probeType: String
+    let sondeName: String  // Track which sonde triggered this proposal
 }
 
 struct AFCData {
