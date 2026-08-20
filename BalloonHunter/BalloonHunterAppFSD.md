@@ -1462,6 +1462,67 @@ The following data is persisted as simple JSON files (single-sonde snapshot mode
 
 **Consistency:** sondeName.json and balloontrack.json are always updated together as a pair. When sonde changes, both files are overwritten with the new sonde's data. Previous sonde's data is preserved only in CSV logs (write-only, never loaded).
 
+## Hunt Phases
+
+The app's behaviour is organised around **what the hunter is doing**, not what the balloon is doing. The balloon may burst in any phase; burst does not move the hunter between them.
+
+| Phase | The hunter is | The question being answered |
+|---|---|---|
+| 1 | starting the app | What am I hunting, and what do I already know? |
+| 2 | stationary | Is it worth going, and when do I leave? |
+| 3 | on the road | Am I still driving to the right place? |
+| 4 | on foot | Which way, and how far? |
+
+### Hunt Identity
+
+**The serial identifies the hunt.** Telemetry never redefines it, and elapsed time never defines it.
+
+- **Different serial -> a new hunt -> clear everything.** It has nothing to do with the old one.
+- **Same serial -> the same hunt -> keep everything, at any age.** Re-fetching would return the same flight, so discarding the local copy is pure loss.
+
+**Elapsed time is the fallback used only when no data is arriving at all**, to decide whether what is remembered is still worth showing:
+
+```
+no data at all  ->  is the last thing we knew younger than 6 h?
+                    yes -> treat the hunt as current, display everything known, wait for data
+                    no  -> say so, draw nothing,                                wait for data
+```
+
+Six hours spans a real recovery: ascent, descent, the drive, and the search on foot. Both branches wait; neither gives up and neither asks anything. When data arrives, the hunt either continues (if there is one) or a new one starts - auto-selected if a sonde is demonstrably airborne, otherwise through the picker.
+
+> The sonde picker cannot serve as the empty state: it is fed by SondeHub and is therefore unavailable in exactly the situation it would be needed.
+
+### Phase 1 - Startup
+
+Cold launch and foreground resume are **separate sequences**. Today `handleForegroundResume()` also fires on a cold launch, because SwiftUI passes through `.inactive -> .active`, and the two race - visible in the log as `APRSDataService: Polling already active, ignoring start request`. Resume must be guarded so it never runs during a launch.
+
+They answer different questions: startup asks what is being hunted and what is known; resume asks only what changed while away. The **display rules above are identical for both** - how the app was last terminated is not something the hunter should be able to perceive.
+
+### Phase 2 - Stationary
+
+Two jobs, and the app currently performs neither:
+
+1. **When to depart, to meet the landing.**
+
+   ```
+   depart at  =  predicted landing time  -  route travel time
+   ```
+
+   No margin; the hunter judges their own slack. Both inputs move - landing time as the flight develops, travel time as the route changes - so it is a live value. When it goes negative the landing cannot be met; show the negative number and nothing more.
+
+   The panel's existing `Arrival:` answers a different question - when you would arrive if you left this instant.
+
+2. **Whether the effort is worth it**, judged from `Dist:`, which is **driving** distance rather than straight-line.
+
+**Route recalculation is gated on travel time changing, not on how far the landing point moved.** In alpine terrain 500 m of coordinate movement can put the landing in a different valley and change the drive completely, while 5 km along the same motorway changes nothing.
+
+### Data Ageing Across Phases
+
+**Each datum belongs to its source and survives until that source updates it.** Losing one channel never invalidates another:
+
+- No data at all -> keep everything.
+- BLE only -> keep the internet-derived values (prediction, route, departure time) and update the BLE-derived ones (position, altitude, speeds, track).
+
 ## Startup
 
 The coordinator runs `performCompleteStartupSequence()` in eight stages, waiting for definitive service answers before handing control to the state machine. Stages 4b, 4c and 4d are numbered as sub-steps of 4 because they run after both services have answered and before handover; they update the progress label but not `currentStartupStep`.
