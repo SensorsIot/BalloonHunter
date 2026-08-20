@@ -1578,12 +1578,16 @@ The hunter is driving. Two screens: **Apple Maps on CarPlay does the navigating*
   routed to where the balloon *was* predicted to land before continuing to where
   it is predicted now.
 
-- **`MKMapItem.openMaps(with: [source, destination])` behaves differently.** Tested
-  on device: handing Maps an explicit source *and* destination does not produce the
-  Add-a-stop prompt. This is undocumented - Apple describes no difference between
-  the one-item and two-item calls, and no developer report of either behaviour
-  exists. Whether it replaces an active route outright, or still needs the hunter
-  to end the current one first, is being confirmed.
+- **`MKMapItem.openMaps(with: [source, destination])` avoids the Add-a-stop prompt
+  but still cannot replace an active route.** Tested on device: it raises its own
+  prompt, and the hunter must end the current navigation before it will route. All
+  of this is undocumented - Apple describes no difference between the one-item and
+  two-item calls, and research found no developer report of either behaviour.
+
+**Conclusion: an active Apple Maps route cannot be replaced from another app.**
+Three mechanisms were tried on device and all three require the hunter to
+intervene. Combined with there being no way to end navigation programmatically,
+the automatic update Phase 3 asks for is not achievable through Apple Maps.
 
 - **There is no way to end navigation programmatically.** No public API, no
   Shortcuts action, and no means for an app to trigger a Siri command - apps may
