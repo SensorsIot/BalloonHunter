@@ -1571,7 +1571,17 @@ The hunter is driving. Two screens: **Apple Maps on CarPlay does the navigating*
 - There is **no API to update a running Apple Maps navigation session**. Not MapKit, not the Maps URL scheme, not App Intents, not CarPlay. Relaunching directions is the only mechanism that exists.
 - `MKMapItem.openInMaps(launchOptions:)` is documented as blocking: *"the system suspends interaction with your app until the Maps app finishes launching."* Each update therefore takes the iPhone screen.
 - The scene-aware overload `openInMaps(launchOptions:from:completionHandler:)` accepts a `UIScene`, and Apple DTS directs developers to pass the **CarPlay** scene so Maps opens on the head unit instead of the phone. This is the mechanism that would let updates reach CarPlay without stealing the hunt display - but an app only has a CarPlay scene if it holds a CarPlay entitlement, which this app does not.
-- Whether Apple Maps prompts before replacing an active route is **undocumented and unverified**. It needs testing on real hardware; nothing should be designed around an assumed prompt.
+- **Tested on device, 21 Aug 2026: Apple Maps offers to "Add a stop".** Calling
+  `openInMaps` while navigation is running does not replace the destination; it
+  treats the new one as a waypoint on the existing trip. For a moving landing
+  prediction that is worse than not updating at all, because the hunter would be
+  routed to where the balloon *was* predicted to land before continuing to where
+  it is predicted now.
+
+  So the requirement above is **not satisfiable by this mechanism**. Either a way
+  is found to force a replacement, or the hunter ends navigation themselves before
+  the app hands over a new destination, or the app takes on CarPlay navigation of
+  its own. Not yet decided.
 
 ### Descent Rate and Parachute Behaviour
 
