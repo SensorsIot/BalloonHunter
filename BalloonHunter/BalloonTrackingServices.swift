@@ -104,13 +104,6 @@ final class BalloonPositionService: ObservableObject {
     // Display position: shows landing point when landed, live position when flying
     @Published var balloonDisplayPosition: CLLocationCoordinate2D? = nil
 
-    /// The hunter's own position, exposed so incoming track data can be checked
-    /// against it. A sonde never reports the hunter's exact coordinates - even a
-    /// ground test unit sits some metres away - so a match means bad provenance.
-    var userCoordinate: CLLocationCoordinate2D? {
-        guard let location = currentLocationService.locationData else { return nil }
-        return CLLocationCoordinate2D(latitude: location.latitude, longitude: location.longitude)
-    }
 
     // Locked landing position - set when first detected as landed, only updated if balloon moves significantly
     private var lockedLandingPosition: CLLocationCoordinate2D? = nil
@@ -1008,15 +1001,6 @@ final class BalloonTrackService: ObservableObject {
             return
         }
 
-        // Diagnostic: the gate above lets liveBLELanded through, so the track
-        // keeps growing after touchdown. Record that it happened, and where,
-        // without changing the behaviour.
-        if state.isLanded {
-            appLog(String(format: "📌 TRACK-AFTER-LANDING [%@]: appending lat=%.6f lon=%.6f alt=%.0fm (track=%d)",
-                          state.description, positionData.latitude, positionData.longitude,
-                          positionData.altitude, currentBalloonTrack.count),
-                   category: .service, level: .info)
-        }
 
         // Compute track-derived speeds prior to appending, so we can store derived values
         var derivedHorizontalMS: Double? = nil
@@ -1280,7 +1264,6 @@ final class BalloonTrackService: ObservableObject {
 
         // Check each APRS point and insert at correct chronological position if slot empty
         for point in aprsPoints {
-            logIfPointReachesHunter(point, source: "APRS")
             let roundedTime = roundToSecond(point.timestamp)
             if !occupiedSlots.contains(roundedTime) {
                 // Find correct insertion position to maintain chronological order
@@ -1312,8 +1295,6 @@ final class BalloonTrackService: ObservableObject {
     /// Check if slot occupied, insert if empty
     /// BLE points arrive in chronological order - no sorting needed
     private func insertTrackPointIfSlotEmpty(_ point: BalloonTrackPoint, source: String) {
-        logIfPointReachesHunter(point, source: source)
-
         let roundedTime = roundToSecond(point.timestamp)
 
         // Check if this second slot is already occupied
@@ -1328,35 +1309,6 @@ final class BalloonTrackService: ObservableObject {
         currentBalloonTrack.append(point)
     }
 
-    /// Report a track point that reaches the hunter's own position.
-    ///
-    /// Diagnostic only: nothing is dropped or altered. A sonde does not transmit
-    /// from where the hunter stands, so when this fires it records which feed
-    /// supplied the point and what the app believed at that moment - enough to
-    /// identify the source without guessing at it.
-    private func logIfPointReachesHunter(_ point: BalloonTrackPoint, source: String) {
-        guard let user = balloonPositionService.userCoordinate else { return }
-
-        let separation = CLLocation(latitude: user.latitude, longitude: user.longitude)
-            .distance(from: CLLocation(latitude: point.latitude, longitude: point.longitude))
-        guard separation < 50 else { return }
-
-        appLog(String(format: """
-            🔎 TRACK@HUNTER [%@]: point %.1fm from hunter
-               point:  lat=%.6f lon=%.6f alt=%.0fm vs=%.1f hs=%.1f t=%@
-               hunter: lat=%.6f lon=%.6f
-               state=%@ phase=%@ sonde=%@ trackSize=%d
-            """,
-            source, separation,
-            point.latitude, point.longitude, point.altitude,
-            point.verticalSpeed, point.horizontalSpeed, "\(point.timestamp)",
-            user.latitude, user.longitude,
-            balloonPositionService.currentState.description,
-            "\(balloonPositionService.balloonPhase)",
-            currentBalloonName ?? "none",
-            currentBalloonTrack.count),
-            category: .service, level: .error)
-    }
 
     /// Fill track gaps from APRS telemetry
     /// Runs asynchronously and does not block UI
