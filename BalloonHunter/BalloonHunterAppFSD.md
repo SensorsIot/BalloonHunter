@@ -150,10 +150,8 @@ The balloon carries a sonde that transmits its position signal. This signal is r
 • Device config: battery, display, callSign
 • NO overlap with Type 1 fields!
 
-🎯 **Legacy TelemetryData** (Backward compatibility):
-• Combination of Position + Radio data
-• Used by state machine during transition
-• Will be phased out for pure channels
+(The legacy combined TelemetryData type has been removed. Everything now flows
+through the three channels above.)
 
 ### Packet Type Routing
 
@@ -491,7 +489,7 @@ An extension to ServiceCoordinator that specifically contains the detailed start
 
 #### CoreModels.swift:
 
-Centralizes the shared data types (`TelemetryData`, `BalloonTrackPoint`, `PredictionData`, etc.) plus logging helpers so every service can import the same model definitions without circular references.
+Centralizes the shared data types (`PositionData`, `RadioChannelData`, `SettingsData`, `BalloonTrackPoint`, `PredictionData`, etc.) plus logging helpers so every service can import the same model definitions without circular references.
 
 #### LocationServices.swift:
 
@@ -774,8 +772,8 @@ Discover and connect to MySondyGo devices over Bluetooth Low Energy, subscribe t
 
 **State Publishers**
 
-- `latestTelemetry`, `deviceSettings`, `connectionStatus`, `isReadyForCommands`.
-- `telemetryData` (`PassthroughSubject<TelemetryData, Never>`).
+- `latestPosition`, `latestRadioChannel`, `latestSettings`, `deviceSettings`, `connectionState`.
+- `positionDataStream` and `radioChannelDataStream` (`PassthroughSubject`).
 - `centralManagerPoweredOn` (`PassthroughSubject<Void, Never>`).
 - Internal state: `lastMessageType`, `lastTelemetryUpdateTime`, `isBLETelemetryStale` (not @Published).
 
@@ -809,7 +807,23 @@ Discover and connect to MySondyGo devices over Bluetooth Low Energy, subscribe t
 - On the first packet it also logs telemetry availability (Type 1 implies telemetry is ready).
 - Switches on `messageType`:
   - **Type 0** (device status): logs a structured “📊 BLE PARSED (Type 0)” line; on parse failure logs raw fields.
-  - **Type 1** (telemetry): logs both a debug (label=value) and info summary, performs plausibility checks (latitude/longitude bounds, altitude range, horizontal speed ≤150 m/s, vertical speed ≤100 m/s, battery percentage 0–100, battery mV 2500–5000). Failing fields emit a ⚠️ log. Calls `parseType1Message` to build `TelemetryData` and discards samples with latitude/longitude 0. Valid telemetry updates `latestTelemetry`, `lastTelemetryUpdateTime`, and pushes through `telemetryData`.
+  - **Type 1** (telemetry): parsed by `parseType1Message`. A sample at latitude and
+    longitude 0 is discarded outright; valid telemetry updates `latestPosition`,
+    `latestRadioChannel` and `lastTelemetryUpdateTime`, and is published on the
+    position and radio channel streams.
+
+    Each field is range-checked, and anything outside its bounds emits a ⚠️ log
+    without discarding the sample:
+
+    | field | accepted range |
+    |---|---|
+    | latitude | −90 to 90 |
+    | longitude | −180 to 180 |
+    | altitude | −500 to 60 000 m |
+    | horizontal speed | 0 to 150 m/s |
+    | vertical speed | −100 to 100 m/s |
+    | battery | 0 to 100 % |
+    | battery voltage | 2 500 to 5 000 mV |
   - **Type 2** (name/status) and **Type 3** (device config) log structured output and update `deviceSettings`.
 - Out-of-range or malformed packets (also la:0/lon:0) log `🔴` messages and are skipped. RSSI is reported as a positive number from BLE and is displayed as negative nummer.
 
@@ -1073,14 +1087,33 @@ Build the flight history, smooth velocities, detect landings, derive descent met
 **Standard case**: Balloon lands and stays at landing location - track naturally ends at landing, no truncation needed (handled by real-time landing detection). **Special cases requiring track truncation** (checked in order):
 
    - **Telemetry blackout scenario**: Balloon lands, signal lost for >20 minutes after burst, then recovered/moved and transmits again from different location. Landing = last point before gap. Track truncated at gap - everything after is post-recovery transmission from recovery team. User is notified via local notification that post-landing track points were removed due to detected blackout.
-   - **Stationary period scenario**: Balloon lands and transmits stationary position for 20+ minutes, then moved (recovery/transport) while still transmitting. Uses a sliding window sized to span 20 minutes at the track's actual point density (`max(10, 20min / avgPointInterval)`) to calculate moving averages of lat/lon/altitude changes **only after burst**. If all three averages below threshold (lat/lon < 0.0001° ≈ 11m, altitude < 0.3 m/point), balloon marked as landed and track truncated. **Altitude detection prevents false positives during descent** where balloon falls nearly straight down. This takes **highest priority** over all other landing detection methods in BalloonPositionService. Triggers state machine evaluation to transition to landed state. Runs automatically after APRS telemetry fill and on restored persisted tracks at startup. User is notified via local notification that post-landing track points were removed due to detected stationary period.
+   - **Stationary period scenario**: the balloon lands and keeps transmitting from
+     where it lies, then moves again when someone picks it up.
+
+     **The rule.** After burst, look for a window spanning 20 minutes at the
+     track's own point density (`max(10, 20min / avgPointInterval)`). If the
+     average per-point change in latitude, longitude *and* altitude are all below
+     threshold (lat/lon under 0.0001° ≈ 11 m, altitude under 0.3 m), the balloon
+     is down. The track is truncated there.
+
+     **Why altitude is included.** A balloon falling nearly straight down barely
+     changes latitude or longitude, so position alone would call a fast descent a
+     landing. Altitude is what separates the two.
+
+     **What the hunter sees.** A local notification saying post-landing points
+     were removed, so the track shortening is never a silent surprise. This takes
+     priority over every other landing test, and runs after an APRS fill and on a
+     restored track at startup.
 
 **User notification**: When track truncation occurs, the app sends a short local notification explaining why points were removed (e.g., "Landing detected: Removed 147 post-landing track points from recovery period"). This helps the user understand track changes and confirms the landing detection worked correctly.
 
 5b. **Track-based landing detection trigger scenarios** — To avoid unnecessary CPU-intensive analysis (1.5+ seconds on 10K+ point tracks), track-based landing detection runs conditionally based on specific scenarios rather than on every APRS poll. The following scenarios determine when detection should run and when track recording should continue or stop:
 
-   **Scenario 1: Track Load when the last packet is older than 20 minutes (App started After Flight ended)**
-   When the app hasn't run during the flight and the user launches it, the persisted track contains historical data where the last packet timestamp is more than 20 minutes old. This indicates the app wasn't running during the recent flight period. During startup, when the state machine transitions to an APRS state (Step 5), `fillTrackGapsFromAPRS()` is called automatically. Inside this function, detection logic checks: (1) track has data before APRS fetch (`trackSizeBeforeInsertion > 0`), and (2) last packet timestamp is older than 20 minutes (`lastPacketAge > 1200 seconds`). If both conditions are true, track-based landing detection runs on the complete track to analyze the entire historical flight path for blackout gaps or stationary periods that indicate where the balloon landed. If a new/different sonde is detected during APRS fetch, the sonde change flow clears all old data first. Track recording continues normally for all telemetry sources after detection completes.
+   **Scenario 1: the app was not running during the flight.**
+   The stored track's last packet is over 20 minutes old, so the flight happened
+   while the app was closed. `fillTrackGapsFromAPRS()` fetches what was missed and
+   then runs the track-based detection above over the whole flight, looking for
+   the blackout or the stationary period that marks where it came down.
 
    **Scenario 2: APRS-Only Mode After Landing Detected (No BLE)**
    When the balloon has landed and BLE is not available (state machine is in `aprsLanded`), APRS polling continues at a reduced frequency to confirm the balloon remains landed, but track recording must stop to prevent unnecessary data accumulation. The hunter no longer needs continuous track updates once the balloon is stationary on the ground with no BLE connection. Detection method: The state machine has already transitioned to `aprsLanded` based on age-based landing detection (APRS telemetry older than 120 seconds) or track-based landing detection. In `processPositionData()`, check the current state before recording track points. If state is `aprsLanded`, skip appending the point to `currentBalloonTrack`. APRS polling remains enabled (not disabled) to periodically verify landing status.
@@ -1128,7 +1161,7 @@ Call the SondeHub prediction API on demand (manual or scheduled), cache results 
 
 #### Inputs
 
-- Latest telemetry frame (`TelemetryData`).
+- Latest position frame (`PositionData`).
 - User settings (burst altitude, ascent/descent rates).
 - Smoothed descent rate supplied by `BalloonTrackService` when the balloon is below 10 000 m.
 - Cache key components (balloon ID, location, altitude, time bucket).
