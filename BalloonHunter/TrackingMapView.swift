@@ -298,7 +298,11 @@ struct TrackingMapView: View {
                 }
 
                     // Distance annotation overlay (landing mode only)
-                    if isLanded {
+                    // Shown whenever there is a distance to show. It comes from
+                    // the sonde's own GPS and the phone's, so a momentary BLE
+                    // dropout while walking must not hide it - that is exactly
+                    // when the hunter is closest and most likely to lose signal.
+                    if mapPresenter.distanceToBalloon != nil {
                         DistanceOverlayView(
                             distanceMeters: mapPresenter.distanceToBalloon
                         )

@@ -807,15 +807,21 @@ final class BalloonPositionService: ObservableObject {
     // MARK: - Balloon Display Position Management (moved from ServiceCoordinator)
 
     private func updateBalloonDisplayPosition() {
+        // On foot, only the sonde's own GPS over BLE counts. A SondeHub position
+        // marks where the sonde was last *heard*, not where it lies, so it must
+        // not drive the close-range distance. See FSD Hunt Phases -> Phase 4.
+        let source: CloseRangeGuidance.PositionSource =
+            (currentPositionData?.telemetrySource == .aprs) ? .network : .receiver
+
         // Use landing point when landed, otherwise use live position data
         if balloonPhase == .landed, let balloonTrackService = balloonTrackService, let landingPosition = balloonTrackService.landingPosition {
             balloonDisplayPosition = landingPosition
-            currentLocationService.updateBalloonDisplayPosition(landingPosition)
+            currentLocationService.updateBalloonDisplayPosition(landingPosition, source: source)
             appLog("BalloonPositionService: Display position set to landing point [\(String(format: "%.5f", landingPosition.latitude)), \(String(format: "%.5f", landingPosition.longitude))]", category: .service, level: .debug)
         } else if let position = currentPositionData {
             let livePosition = CLLocationCoordinate2D(latitude: position.latitude, longitude: position.longitude)
             balloonDisplayPosition = livePosition
-            currentLocationService.updateBalloonDisplayPosition(livePosition)
+            currentLocationService.updateBalloonDisplayPosition(livePosition, source: source)
             appLog("BalloonPositionService: Display position set to live position [\(String(format: "%.5f", livePosition.latitude)), \(String(format: "%.5f", livePosition.longitude))]", category: .service, level: .debug)
         } else {
             appLog("BalloonPositionService: Cannot update display position - no position data available (phase=\(balloonPhase))", category: .service, level: .debug)
