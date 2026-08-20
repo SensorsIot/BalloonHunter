@@ -454,6 +454,17 @@ struct TrackingMapView: View {
         .opacity(mapPresenter.connectionStatus == .connected ? 1.0 : 0.0)
         .disabled(mapPresenter.connectionStatus != .connected)
 
+        #if DEBUG
+        // Temporary: answers whether Apple Maps prompts before replacing an
+        // active route. See AppleMapsHandoffProbe. Delete once answered.
+        Button("Nav A") { AppleMapsHandoffProbe.navigate(to: AppleMapsHandoffProbe.destinationA, label: "A") }
+            .buttonStyle(.bordered)
+            .tint(.orange)
+        Button("Nav B") { AppleMapsHandoffProbe.navigate(to: AppleMapsHandoffProbe.destinationB, label: "B") }
+            .buttonStyle(.bordered)
+            .tint(.orange)
+        #endif
+
         // Apple Maps navigation button (only show when landing point available)
         if shouldShowNavigationButton {
             Button {
