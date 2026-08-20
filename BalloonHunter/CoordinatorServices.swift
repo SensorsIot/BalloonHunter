@@ -187,16 +187,19 @@ extension ServiceCoordinator {
             appLog("STARTUP: Step 4c - BLE not ready, skipping frequency sync", category: .general, level: .info)
         }
 
-        // Step 4d: Rebuild the flight path if the local copy is gone.
+        // Step 4d: Fill whatever the local track is missing, from SondeHub.
         //
-        // SondeHub holds the flight; balloontrack.json is only a cache of it. A
-        // cache that could not be attributed to this sonde is discarded on load,
-        // and a hunt that begins mid-flight never had one. Either way the path
-        // must come back from the source, or the map opens on a bare stub of
-        // whatever arrived since launch.
-        if balloonTrackService.currentBalloonTrack.isEmpty,
-           let hunted = balloonPositionService.currentBalloonName {
-            appLog("STARTUP: Step 4d - No local track for '\(hunted)' - rebuilding flight path from SondeHub", category: .general, level: .info)
+        // SondeHub holds the flight; balloontrack.json is only as complete as
+        // this device happened to be listening. Anything the app missed - before
+        // it was started, while it was closed, or while the receiver was on
+        // another sonde - exists there and nowhere else.
+        //
+        // Unconditional on purpose. Gating this on an empty track meant a hunt
+        // that had recorded a couple of minutes was treated as complete, and the
+        // rest of the flight stayed missing. The merge only writes into seconds
+        // the track has no point for, so live BLE data is never displaced.
+        if let hunted = balloonPositionService.currentBalloonName {
+            appLog("STARTUP: Step 4d - Filling track gaps for '\(hunted)' from SondeHub (have \(balloonTrackService.currentBalloonTrack.count) points)", category: .general, level: .info)
             balloonTrackService.fillTrackGapsFromAPRS(sondeName: hunted)
         }
 
