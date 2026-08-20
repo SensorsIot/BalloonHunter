@@ -187,6 +187,19 @@ extension ServiceCoordinator {
             appLog("STARTUP: Step 4c - BLE not ready, skipping frequency sync", category: .general, level: .info)
         }
 
+        // Step 4d: Rebuild the flight path if the local copy is gone.
+        //
+        // SondeHub holds the flight; balloontrack.json is only a cache of it. A
+        // cache that could not be attributed to this sonde is discarded on load,
+        // and a hunt that begins mid-flight never had one. Either way the path
+        // must come back from the source, or the map opens on a bare stub of
+        // whatever arrived since launch.
+        if balloonTrackService.currentBalloonTrack.isEmpty,
+           let hunted = balloonPositionService.currentBalloonName {
+            appLog("STARTUP: Step 4d - No local track for '\(hunted)' - rebuilding flight path from SondeHub", category: .general, level: .info)
+            balloonTrackService.fillTrackGapsFromAPRS(sondeName: hunted)
+        }
+
         // Step 5: State Machine Handoff & UI Transition
         await MainActor.run {
             currentStartupStep = 5
