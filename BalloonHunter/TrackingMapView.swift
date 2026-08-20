@@ -237,15 +237,13 @@ struct TrackingMapView: View {
                 .onMapCameraChange { context in
                     guard !showSettings else { return }
 
-                    // DISABLED: Automatic startup zoom - user wants manual control only
-                    // if needsStartupZoom {
-                    //     needsStartupZoom = false
-                    //     appLog("🔍 ZOOM: Map initialized, triggering startup zoom", category: .general, level: .info)
-                    //     mapPresenter.updateCameraToShowAllAnnotations()
-                    //     return
-                    // }
+                    // Open the map on everything there is to see, per FSD step 7.
+                    // The overlays arrive over the next second or two, so this
+                    // opens a window that reframes as each one lands rather than
+                    // fitting once to whatever exists at this instant.
                     if needsStartupZoom {
                         needsStartupZoom = false
+                        mapPresenter.beginStartupFraming()
                     }
 
                     // Enforce minimum zoom limit for satellite view (Apple Maps satellite tiles unavailable beyond ~111)

@@ -221,6 +221,36 @@ final class MapPresenter: ObservableObject {
         bleService.setMute(muted)
     }
 
+    // MARK: - Startup Framing
+
+    /// Open the map on everything there is to see, as the FSD requires: track,
+    /// predicted path, route, balloon and hunter.
+    ///
+    /// It cannot be a single fit at startup, because the overlays land at
+    /// different times - the track on load, the prediction about a second later,
+    /// the route after that. Framing once would frame whichever pieces happened
+    /// to have arrived. So refit as each one appears, until the window closes.
+    private var startupFitDeadline: Date?
+
+    /// Begin the window. Called when startup hands over to the state machine.
+    func beginStartupFraming(for duration: TimeInterval = 8.0) {
+        startupFitDeadline = Date().addingTimeInterval(duration)
+        appLog("MapPresenter: Startup framing open for \(Int(duration))s - map will fit each overlay as it arrives", category: .general, level: .info)
+        refitDuringStartup()
+    }
+
+    /// Refit while the window is open. Ignored once it closes, so the view stops
+    /// moving under the hunter the moment they take control.
+    private func refitDuringStartup() {
+        guard let deadline = startupFitDeadline else { return }
+        guard Date() < deadline else {
+            startupFitDeadline = nil
+            appLog("MapPresenter: Startup framing window closed", category: .general, level: .debug)
+            return
+        }
+        performCameraFit()
+    }
+
     func triggerShowAllAnnotations() {
         showAllAnnotations = true
         updateCameraToShowAllAnnotations()
@@ -290,6 +320,7 @@ final class MapPresenter: ObservableObject {
                    !path.isEmpty,
                    self.predictionPathVisible {
                     self.predictionPath = MKPolyline(coordinates: path, count: path.count)
+                    self.refitDuringStartup()
                 } else {
                     self.predictionPath = nil
                 }
@@ -316,6 +347,7 @@ final class MapPresenter: ObservableObject {
                 } else {
                     self?.userRoute = nil
                 }
+                self?.refitDuringStartup()
             }
             .store(in: &cancellables)
 
@@ -459,6 +491,7 @@ final class MapPresenter: ObservableObject {
                 }
                 self?.logRedTrack(points)
                 self?.trackPoints = points
+                self?.refitDuringStartup()
             }
             .store(in: &cancellables)
 
