@@ -112,6 +112,8 @@ extension ServiceCoordinator {
         // Inject sonde name into BalloonPositionService for change detection
         if let sondeName = sondeName {
             balloonPositionService.currentBalloonName = sondeName
+            // Filter the receiver from the first packet, before selection runs.
+            bleCommunicationService.huntedSondeName = sondeName
         }
 
         // Inject landing points into LandingPointTrackingService

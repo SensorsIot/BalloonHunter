@@ -202,6 +202,19 @@ final class ServiceCoordinator: ObservableObject {
         // Currently position data is accessed directly by consumers
         // Frequency sync is handled explicitly during startup and sonde change (not via subscription)
 
+        // Receiver retuned to a different sonde. Per FSD "Sonde Change Flow",
+        // every trace of the previous sonde is cleared before the new one is
+        // adopted - which is what startTrackingSonde does.
+        bleCommunicationService.$confirmedSondeChange
+            .compactMap { $0 }
+            .sink { [weak self] newSonde in
+                guard let self else { return }
+                appLog("🎈 ServiceCoordinator: Receiver retuned to '\(newSonde)' - clearing previous sonde", category: .service, level: .info)
+                self.bleCommunicationService.confirmedSondeChange = nil
+                self.startTrackingSonde(name: newSonde, checkFrequencySync: false)
+            }
+            .store(in: &cancellables)
+
         // Monitor state changes to control 60-second prediction timer
         balloonPositionService.$currentState
             .receive(on: DispatchQueue.main)
@@ -319,6 +332,10 @@ final class ServiceCoordinator: ObservableObject {
         // 3. Set sonde name in services
         balloonPositionService.currentBalloonName = name
         balloonTrackService.injectPersistedData(sondeName: name, track: [])
+
+        // Tell the receiver which sonde this hunt follows, so telemetry for any
+        // other one is dropped before it enters the app.
+        bleCommunicationService.huntedSondeName = name
 
         // 4. Set APRS override (works even if sonde not in APRS)
         balloonPositionService.aprsService.overrideSondeSerial = name

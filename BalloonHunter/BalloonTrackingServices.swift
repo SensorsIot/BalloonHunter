@@ -273,44 +273,23 @@ final class BalloonPositionService: ObservableObject {
         // Log every position for tracking (debug level to reduce verbosity)
         appLog("BalloonPositionService: Processing \(source) position for \(position.sondeName) at [\(String(format: "%.5f", position.latitude)), \(String(format: "%.5f", position.longitude))] alt=\(Int(position.altitude))m", category: .service, level: .debug)
 
-        // Detect sonde change BEFORE updating anything (Per FSD: Sonde Change Flow)
+        // Which sonde is being hunted is decided by selection - at startup, or
+        // through the picker - and telemetry never redefines it.
+        //
+        // This used to treat any differing serial as a sonde change: it wiped
+        // every service via clearAllSondeData() and adopted the new serial. A
+        // receiver decodes a neighbouring sonde now and then, a bench unit or
+        // one on an adjacent frequency, and a single such packet was enough to
+        // destroy the tracked flight and adopt the intruder - leaving its
+        // position stitched into the track as a leg running off to wherever it
+        // sat. Selection now owns the identity, so a foreign serial is simply
+        // not this hunt's data.
         let incomingName = position.sondeName.trimmingCharacters(in: .whitespacesAndNewlines)
         if !incomingName.isEmpty, let currentName = currentBalloonName, currentName != incomingName {
-            appLog("🎈 BalloonPositionService: Sonde name change detected: \(currentName) → \(incomingName)", category: .service, level: .info)
-
-            // Sequential steps per FSD:
-            // 1. Detect - done above
-            // 2. Stash the new telemetry packet
-            sondeChangePosition = position
-            sondeChangeSource = source
-            appLog("BalloonPositionService: Stashed new sonde telemetry from \(source)", category: .service, level: .info)
-
-            // 3. Call coordinator.clearAllSondeData() - wait for completion
-            if let coordinator = serviceCoordinator {
-                coordinator.clearAllSondeData()
-            } else {
-                appLog("BalloonPositionService: WARNING - No ServiceCoordinator available for sonde change", category: .service, level: .error)
-            }
-
-            // 4. Update currentBalloonName to new sonde (prevents infinite loop)
-            currentBalloonName = incomingName
-
-            // 5. Trigger async APRS track fetch for new sonde (don't wait)
-            balloonTrackService?.fillTrackGapsFromAPRS(sondeName: incomingName)
-
-            // 6. Process stashed packet normally (publishes to subscribers)
-            if let stashedPosition = sondeChangePosition, let stashedSource = sondeChangeSource {
-                appLog("BalloonPositionService: Processing stashed telemetry for new sonde \(stashedPosition.sondeName)", category: .service, level: .info)
-
-                // Clear stash
-                sondeChangePosition = nil
-                sondeChangeSource = nil
-
-                // Process as if it just arrived (recursive call with fresh state)
-                handlePositionUpdate(stashedPosition, source: stashedSource)
-            }
-
-            // 7. Return - processing complete
+            appLog(String(format: "🚫 FOREIGN SONDE [%@]: '%@' at %.5f,%.5f alt=%.0fm ignored while hunting '%@'",
+                          source, incomingName, position.latitude, position.longitude,
+                          position.altitude, currentName),
+                   category: .service, level: .info)
             return
         }
 
@@ -993,20 +972,6 @@ final class BalloonTrackService: ObservableObject {
             currentBalloonName = balloonPositionService.currentBalloonName
         }
 
-        // A track holds points from exactly one sonde. The receiver can decode a
-        // different one for a packet or two - a bench unit nearby, or a neighbour
-        // on an adjacent frequency - and appending that sample draws a leg from
-        // the flight to wherever the other sonde sits. Sonde changes are handled
-        // upstream, where the track is cleared first.
-        if let tracked = currentBalloonName,
-           !positionData.sondeName.isEmpty,
-           positionData.sondeName != tracked {
-            appLog(String(format: "🚫 FOREIGN SONDE: '%@' at %.5f,%.5f alt=%.0fm rejected while tracking '%@'",
-                          positionData.sondeName, positionData.latitude, positionData.longitude,
-                          positionData.altitude, tracked),
-                   category: .service, level: .error)
-            return
-        }
 
         // Only record track points when we have valid telemetry states
         // Exclude: startup, waitingForAPRS, noTelemetry, aprsLanded (no BLE, balloon on ground)
