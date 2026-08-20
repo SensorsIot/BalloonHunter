@@ -230,7 +230,7 @@ This architecture ensures that:
 - **UI Integration**: BLE icon color reflects connection state - red for readyForCommands (connected but no position data), green flash animation for active telemetry reception
 
 **APRS Telemetry:**
-- `aprsTelemetryIsAvailable`: TRUE when the latest SondeHub call returned and was parsed successfully.
+- `aprsDataAvailable`: TRUE when the latest SondeHub call returned and was parsed successfully.
 
 ### State Machine Implementation
 
@@ -252,9 +252,9 @@ The state machine defines seven distinct states based on telemetry source availa
 
 State transitions are driven by the following input signals:
 
-- `bleTelemetryState`: The BLE telemetry state enum (`.BLEnotconnected`, `.readyForCommands`, `.BLEtelemetryIsReady`) from the BLE service.
-- `aprsTelemetryIsAvailable`: `true` when the `APRSTelemetryService` has successfully fetched data.
-- `balloonPhase`: The flight phase of the balloon (`.flying`, `.landed`,  `descendingAbove10k`, `descendingBelow10k`, `.unknown`), as determined by `BalloonPositionService` using vector analysis landing detection.
+- `bleTelemetryState`: The BLE telemetry state enum (`.notConnected`, `.readyForCommands`, `.dataReady`) from the BLE service.
+- `aprsDataAvailable`: `true` when the `APRSDataService` has successfully fetched data.
+- `balloonPhase`: The flight phase of the balloon (`.ascending`, `.descendingAbove10k`, `.descendingBelow10k`, `.landed`, `.unknown`), as determined by `BalloonPositionService` using vector analysis landing detection.
 
 #### State Behaviors and Transitions
 
@@ -269,8 +269,8 @@ Each state defines explicit entry functionality and exit criteria:
 - **Transitions**:
   1. `bleTelemetryState.hasTelemetry` AND `balloonPhase == .landed` → `liveBLELanded`
   2. `bleTelemetryState.hasTelemetry AND balloonPhase == (not).landed` → `liveBLEFlying`
-  3. `aprsTelemetryIsAvailable` AND `balloonPhase == .landed` → `aprsLanded`
-  4. `aprsTelemetryIsAvailable AND balloonPhase == (not).landed` → `aprsFlying` 
+  3. `aprsDataAvailable` AND `balloonPhase == .landed` → `aprsLanded`
+  4. `aprsDataAvailable AND balloonPhase == (not).landed` → `aprsFlying` 
   5. `ELSE` → `noTelemetry`
 
 **State: `liveBLEFlying`**
@@ -299,7 +299,7 @@ Each state defines explicit entry functionality and exit criteria:
   - Disables predictions, routing, and landing detection while waiting for a response
 - **Transitions**:
   1. `bleTelemetryState.hasTelemetry` → `liveBLEFlying` or `liveBLELanded` (based on `balloonPhase`)
-  2. `aprsTelemetryIsAvailable` → `aprsFlying` or `aprsLanded` (based on `balloonPhase`)
+  2. `aprsDataAvailable` → `aprsFlying` or `aprsLanded` (based on `balloonPhase`)
   3. `APRS timeout` (10 s without an APRS answer) → `noTelemetry`
 
 **State: `aprsFlying`**
@@ -308,7 +308,7 @@ Each state defines explicit entry functionality and exit criteria:
   - **Triggers APRS track fill** (BalloonTrackService.fillTrackGapsFromAPRS()) — NEW
   - Calls chain: Prediction with APRS balloon position → Landing point tracking → Routing
   - Map shows balloon track, landing point, landing point track, predicted path, route
-  - Frequency sync is **not** performed here. It runs once per startup and once per sonde change, and asks the user before changing anything — see *Frequency Sync*.
+  - Frequency sync is **not** performed here. It runs once per startup and once per sonde change, and asks the user before changing anything — see *Startup → Step 4c: Frequency Sync*.
 - **Transitions**:
   1. `bleTelemetryState.hasTelemetry` → `liveBLEFlying`
   2. `balloonPhase == .landed` → `aprsLanded`
@@ -322,7 +322,7 @@ Each state defines explicit entry functionality and exit criteria:
   - Calls chain: Landing point tracking with APRS balloon position → Routing
   - Map shows balloon track, landing point, landing point track
   - Data panel shows motion metrics as zero
-  - Frequency sync is **not** performed here. It runs once per startup and once per sonde change, and asks the user before changing anything — see *Frequency Sync*.
+  - Frequency sync is **not** performed here. It runs once per startup and once per sonde change, and asks the user before changing anything — see *Startup → Step 4c: Frequency Sync*.
 - **Transitions**:
   1. `bleTelemetryState.hasTelemetry` → `liveBLEFlying` or `liveBLELanded` (based on `balloonPhase`)
   2. `balloonPhase != .landed` → `aprsFlying`
@@ -343,8 +343,8 @@ Each state defines explicit entry functionality and exit criteria:
 - **Transitions**:
   1. `bleTelemetryState.hasTelemetry` AND `balloonPhase == .landed` → `liveBLELanded`
   2. `bleTelemetryState.hasTelemetry` → `liveBLEFlying`
-  3. `aprsTelemetryIsAvailable` AND `balloonPhase == .landed` → `aprsLanded`
-  4. `aprsTelemetryIsAvailable` → `aprsFlying`
+  3. `aprsDataAvailable` AND `balloonPhase == .landed` → `aprsLanded`
+  4. `aprsDataAvailable` → `aprsFlying`
 
 ### Key Design Principles
 
@@ -353,7 +353,7 @@ Each state defines explicit entry functionality and exit criteria:
 
 - **Input-Driven Transitions**: State changes occur only when input signals change.
 - **No Debouncing**: State transitions between BLE and APRS sources occur immediately when telemetry availability changes. The 30-second BLE staleness threshold provides sufficient delay to prevent false positives, eliminating the need for additional debouncing.
-- **APRS Polling Control**: The `APRSTelemetryService` handles polling frequency internally; the state machine enables/disables it. Exception: APRS polling starts immediately during startup (Step 2) 
+- **APRS Polling Control**: The `APRSDataService` handles polling frequency internally; the state machine enables/disables it. Exception: APRS polling starts immediately during startup (Step 2) 
 
 
 
@@ -430,7 +430,7 @@ serviceCoordinator.openInAppleMaps() // Uses location + routing + settings
 
 Do not open a new file without asking the user
 
-#### Complete Service Layer Organization (22 Swift Files)
+#### Complete Service Layer Organization (26 Swift files)
 
 The codebase is organized into logical layers with clear separation of responsibilities:
 
@@ -441,7 +441,7 @@ The codebase is organized into logical layers with clear separation of responsib
 
 **Communication Layer:**
 - `BLEService.swift` - MySondyGo BLE protocol implementation and device communication
-- `APRSTelemetryService.swift` - SondeHub API integration and APRS data management
+- `APRSDataService.swift` - SondeHub API integration and APRS data management
 - `LocationServices.swift` - GPS tracking, location services, and proximity detection
 
 **Processing Layer:**
@@ -779,7 +779,7 @@ Discover and connect to MySondyGo devices over Bluetooth Low Energy, subscribe t
 - `centralManagerPoweredOn` (`PassthroughSubject<Void, Never>`).
 - Internal state: `lastMessageType`, `lastTelemetryUpdateTime`, `isBLETelemetryStale` (not @Published).
 
-**Note**: BLE telemetry state is managed by `BLECommunicationService` via the `BLETelemetryState` enum. APRS availability is managed by `BalloonPositionService` via `aprsTelemetryIsAvailable` for proper separation of concerns.
+**Note**: BLE telemetry state is managed by `BLECommunicationService` via the `BLETelemetryState` enum. APRS availability is managed by `BalloonPositionService` via `aprsDataAvailable` for proper separation of concerns.
 
 **Central Manager Lifecycle**
 
@@ -1018,7 +1018,7 @@ Hold the authoritative telemetry snapshot for the hunted sonde, derive the ballo
 #### Behavior
 
 - **Telemetry Management**: Subscribes to both BLE and APRS telemetry streams, implementing arbitration logic (APRS only used when BLE unavailable).
-- **Availability State**: Manages `aprsTelemetryIsAvailable` based on APRS connection status and telemetry flow. BLE state managed by BLECommunicationService.
+- **Availability State**: Manages `aprsDataAvailable` based on APRS connection status and telemetry flow. BLE state managed by BLECommunicationService.
 - **Position Tracking**: Caches the latest packet, updating timestamp and derived values. Recomputes distance when user location changes.
 - **Balloon Phase Detection**: The three algorithms and their priority chain live in `LandingDetector`, a pure value type with no Combine or service dependencies, so the thresholds that decide flying-versus-landed can be unit-tested in isolation. `BalloonPositionService` calls it and publishes the answer. Priority order:
   1. `landed` (highest priority): Track-based landing detected (BalloonTrackService.trackBasedLandingDetected) — NEW
@@ -1029,7 +1029,7 @@ Hold the authoritative telemetry snapshot for the hunted sonde, derive the ballo
   6. `descendingBelow10k`: vertical speed < 0 AND altitude < 10,000m
   7. `unknown`: vertical speed = 0
 - **Staleness Detection**: A 1 Hz timer updates `timeSinceLastUpdate` and `isTelemetryStale` for downstream consumers.
-- **APRS Integration**: Automatically notifies APRSTelemetryService of BLE health changes to control APRS polling.
+- **APRS Integration**: Automatically notifies APRSDataService of BLE health changes to control APRS polling.
 - **Burst Killer**: Manages burst killer countdown from BLE, retaining last known value in memory during APRS sessions.
 - Exposes helper methods (`getBalloonLocation()`, `isWithinRange(_:)`, etc.) for downstream policies.
 
@@ -1056,7 +1056,13 @@ Build the flight history, smooth velocities, detect landings, derive descent met
 1. **Sonde management** — When a new sonde appears, the service clears the previous track and counters, then starts fresh. At app startup, persisted track from previous session (if any) is loaded from balloontrack.json.
 2. **Track updates with slot-based deduplication** — Each telemetry sample is converted into a `BalloonTrackPoint`; if a previous point exists the service recomputes horizontal speed via great-circle distance and vertical speed via altitude delta for consistency. **Slot-based deduplication**: Track stores maximum 1 point per second (identified by rounded timestamp). Before insertion, checks if slot is occupied. BLE points (arriving chronologically) simply append if slot empty. APRS batch points check all slots, append points to empty slots only (no sorting needed - points naturally stay chronological). This prevents duplicate points when BLE and APRS report same second, with BLE naturally taking priority. Map updates immediately on each BLE point and once per APRS batch. Descent regression is updated, and observers receive `trackUpdated`.
 
-2a. **APRS track filling** — `fillTrackGapsFromAPRS(sondeName: String? = nil, forceDetection: Bool = false)` fetches APRS telemetry from SondeHub API and inserts missing points into the track using slot-based deduplication. Called automatically when state machine transitions to APRS states (`aprsFlying`, `aprsLanded`), during sonde changes, and when app returns from background during flight. Function validates sonde name hasn't changed during async fetch, captures track size before insertion for scenario detection, inserts APRS points into empty slots only (BLE takes priority), saves track, then conditionally runs track-based landing detection based on two triggers: (1) **Historical track load**: track exists before fetch AND last packet timestamp is older than 20 minutes (`lastPacketAge > 1200 seconds`), OR (2) **Background return**: `forceDetection = true` flag passed from foreground resume handler. If either condition is true, `detectTrackBasedLanding()` executes to analyze complete track for blackout gaps or stationary periods. Detection is skipped for incremental APRS updates to avoid unnecessary CPU-intensive processing (1.5+ seconds on 10K+ point tracks). **Task cancellation**: Tracks `currentAPRSFillTask` and cancels any existing fill operation before starting a new one, or when `clearAllData()` is called during sonde changes. Running tasks check `Task.checkCancellation()` after API fetch and before processing results to exit cleanly with `CancellationError` when cancelled. This prevents stale APRS data from old sondes being processed after sonde change completes.
+2a. **APRS track filling** — `fillTrackGapsFromAPRS(sondeName:forceDetection:)` fetches SondeHub telemetry and fills gaps in the track. APRS points go only into seconds the track has no point for, so BLE data is never displaced or duplicated.
+
+   It runs when the state machine enters an APRS state, on a sonde change, at startup, and on returning from the background mid-flight.
+
+   Landing detection runs afterwards only in two cases: the track was already loaded and its last packet is over 20 minutes old, or the caller forced it. Skipping it on routine updates matters — detection takes over a second on a large track.
+
+   **Task cancellation:** any fill already running is cancelled before a new one starts, and by `clearAllData()` on a sonde change. Without this, a fetch begun for the previous sonde can write its results after the change completes.
 
 3. **Speed smoothing** — Maintains Hampel buffers (window 10, k=3) to reject outliers, applies deadbands near zero, and feeds an exponential moving average (τ = 10 s) to publish smoothed horizontal/vertical speeds alongside the raw telemetry values within `motionMetrics`.
 4. **Adjusted descent rate** — Looks back 60 s over the track, computes interval descent rates, takes the median, and keeps a 20-entry rolling average; the latest value is exposed through `motionMetrics` (and zeroed when the balloon is landed).
@@ -1411,17 +1417,14 @@ A sonde change is triggered by **selection** — the startup auto-select, the pi
 
 When it occurs, the app clears all old sonde data and transitions to tracking the new sonde. This ensures each sonde's data remains isolated and prevents mixing of telemetry from different balloons.
 
-#### Detection (BalloonPositionService.handlePositionUpdate)
+#### How a change is triggered
 
-Sequential steps when sonde name change is detected:
+Telemetry naming a different sonde does **not** start a change. It is dropped at
+the radio boundary — see *Sonde Selection → Rejecting foreign telemetry*. A change
+comes from selection, or from a retune confirmed by a sustained run of packets.
 
-1. **Detect** sonde name change: `incomingName != currentBalloonName`
-2. **Stash** the new telemetry packet (with new sonde name/data)
-3. **Call** `coordinator.clearAllSondeData()` - wait for completion (clears ALL old sonde data)
-4. **Update** `currentBalloonName = incomingName` (prevents infinite loop)
-5. **Trigger** async APRS track fetch: `balloonTrackService.fillTrackGapsFromAPRS(sondeName: incomingName)` (fetches new sonde's APRS track with explicit sonde name)
-6. **Process** stashed telemetry packet normally (publishes to all subscribers, adds first point to track)
-7. **Continue** normal operation (state machine evaluates, services react to new telemetry)
+Whatever the source, every path runs through `ServiceCoordinator.startTrackingSonde`,
+so the clearing below happens in exactly one place.
 
 #### Clearing (Coordinator.clearAllSondeData)
 
@@ -1450,7 +1453,6 @@ Sequential steps to clear all old sonde data:
 - **Transparent to other services** - Services see telemetry stop, then start again with new sonde name
 - **State machine continues normally** - No special state transitions; evaluates based on current inputs
 - **APRS fetch happens after clearing** - Loads APRS track for new sonde asynchronously
-- **Stashing preserves first packet** - New sonde's triggering telemetry becomes its first data point
 - **Service encapsulation** - Each service owns its clearing logic via `clearAllData()`
 - **Coordinator orchestration** - Coordinator calls each service but doesn't manipulate internals
 - **Separation of concerns**:
@@ -1628,53 +1630,52 @@ The coordinator runs `performCompleteStartupSequence()` in eight stages, waiting
 - **15-Second Safety Timeout**: If either service fails to answer, displays "💀 Something horrible happened"
 
 ### Startup Steps
-1.  **Step 1: Load Persisted Data**
+**Step 1: Load Persisted Data**
     *   Progress label: "Step 1: Loading Data"
     *   **Load from disk**: Read all 4 JSON files (userSettings.json, sondeName.json, balloontrack.json, landingPoints.json)
     *   **Validate ownership**: The track is stored with the serial it belongs to, so a track naming a different sonde — or an older one naming none — is discarded rather than drawn (see *Persistence Service*)
     *   **Handle errors**: If corrupted or unattributable, start with a clean track and rebuild it in stage 4d
     *   **No injection yet**: Data loaded but not yet injected into services
 
-2.  **Step 2: Service Initialization (0-100ms)**
+**Step 2: Service Initialization (0-100ms)**
     *   Progress label: "Step 2: Services"
     *   AppServices dependency injection and core service instantiation
     *   Initial property setup across all services
     *   **Services constructed with empty state** (no data loading in init)
 
-3.  **Step 3: Inject Persisted Data**
+**Step 3: Inject Persisted Data**
     *   Progress label: "Step 3: Restoring State"
     *   **Inject persisted data**: Load validated data from Step 1 into services
     *   **Track loaded**: BalloonTrackService now has persisted track points
     *   **Landing history loaded**: LandingPointTrackingService has previous predictions
     *   **Critical**: Track MUST be populated before APRS starts (gap filling requires existing track)
 
-4.  **Step 4: Service Startup + Answer Detection (100ms-~4s) [PARALLEL]**
+**Step 4: Service Startup + Answer Detection (100ms-~4s) [PARALLEL]**
     *   Progress label: "Step 4: BLE & APRS"
     *   **BLE Service**: Start scanning (if Bluetooth powered on)
     *   **APRS Service**: Start polling station data (gap filling now works on persisted track)
     *   **Wait for both definitive answers**:
         - BLE: Bluetooth off OR connection state enum published (after first packet)
         - APRS: Telemetry data received OR network error
-    *   **Frequency Sync Detection**: Enhanced startup frequency sync compares APRS-BLE frequencies with comprehensive logging
     *   **No individual timeouts** - let each service handle its own timing
     *   **Coordinator timeout**: 15 seconds maximum (only if services don't answer)
 
-5.  **Step 4b: Sonde Selection**
+**Step 4b: Sonde Selection**
     *   Progress label: "Step 4: Select Sonde"
     *   Auto-select the sonde positively confirmed airborne, or present the picker — see *Sonde Selection* for the classification rule and the undetermined case
     *   Selection funnels through `startTrackingSonde`, which clears any previous sonde's data
 
-6.  **Step 4c: Frequency Sync**
+**Step 4c: Frequency Sync**
     *   Runs only if the receiver is ready for commands and APRS has published a radio channel
     *   Compares frequency (0.01 MHz tolerance) and sonde type; on a mismatch, raises a proposal for the user to accept or decline
     *   Evaluated **once**. Declining records a 5-minute cooldown for that frequency/type pair. Not repeated while hunting; reset on sonde change
 
-7.  **Step 4d: Fill Track Gaps**
+**Step 4d: Fill Track Gaps**
     *   Fetch from SondeHub whatever the flight path is missing and merge it in
     *   Runs unconditionally, not only when the track is empty: a track holding a few minutes of BLE is still missing everything before the app was started, and SondeHub is the only source for it
     *   Merge is slot-based — every held point claims its one-second slot and APRS writes only into slots with none — so live BLE data is never displaced or duplicated
 
-8.  **Step 5: State Machine Handoff & UI Transition**
+**Step 5: State Machine Handoff & UI Transition**
     *   Progress label: "Step 5: Startup Complete"
     *   **State Machine**: Call `balloonPositionService.completeStartup()`
     *   **Service answers available** - state machine can make informed decisions
@@ -1840,7 +1841,7 @@ Text in Columns: left aligned
 
 The app's data flow is designed to be reactive, with SwiftUI views updating automatically as new data becomes available from the various services.
 
-1.  **Data Ingestion**: Services like `BLECommunicationService`, `APRSTelemetryService`, and `CurrentLocationService` receive raw data from external sources (BLE device, SondeHub API, GPS).
+1.  **Data Ingestion**: Services like `BLECommunicationService`, `APRSDataService`, and `CurrentLocationService` receive raw data from external sources (BLE device, SondeHub API, GPS).
 
 2.  **Service Processing**: These services, along with `BalloonTrackService` and `PredictionService`, process the raw data, calculate derived values (e.g., smoothed speeds, predictions), and publish the results via `@Published` properties.
 
