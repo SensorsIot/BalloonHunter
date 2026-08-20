@@ -66,11 +66,9 @@ scripts/ci*
 *.yml
 *.yaml
 
-# Test Directories and Schemes (removed - using Xcode directly)
-*Tests/
-*Tests.xctest
-*test*
-*Test*
-xctestplans/
-*Tests.xcscheme
+# Build products only. The test target and its sources are tracked:
+# they were excluded when this project had no tests, and that rule silently
+# discarded every test written since.
+*.xctest
+DerivedData/
 BalloonHunterAppFSD_backup.md
