@@ -80,15 +80,39 @@ extension ServiceCoordinator {
         appLog("STARTUP: Step 1 - Loading persisted data from disk", category: .general, level: .info)
 
         let sondeName = persistenceService.loadSondeName()
-        let track = persistenceService.loadBalloonTrack(expecting: sondeName) ?? []
+        var track = persistenceService.loadBalloonTrack(expecting: sondeName) ?? []
         // Don't load old landing points - they should only exist for current session
         let landingPoints: [LandingPredictionPoint] = []
 
-        // Validate consistency (sondeName must match track)
-        if let sondeName = sondeName, !track.isEmpty {
-            appLog("STARTUP: Step 1 - Loaded sonde '\(sondeName)' with \(track.count) track points", category: .general, level: .info)
-        } else if !track.isEmpty {
-            appLog("STARTUP: Step 1 - WARNING: Track data exists but no sonde name", category: .general, level: .error)
+        // Is what was stored still the hunt in progress?
+        //
+        // The serial decides identity; elapsed time only decides whether a hunt
+        // nothing is arriving for is still worth drawing. Six hours covers a real
+        // recovery: the climb, the fall, the drive and the walk.
+        // See FSD Hunt Phases -> Hunt Identity.
+        let huntState = HuntState()
+        let storedHunt = (sondeName != nil && !track.isEmpty)
+            ? HuntState.StoredHunt(serial: sondeName!, lastDataAt: track.last!.timestamp)
+            : nil
+        let decision = huntState.decide(stored: storedHunt, hunting: sondeName)
+
+        switch decision {
+        case .resumeHunt:
+            appLog("STARTUP: Step 1 - Resuming hunt for '\(sondeName!)' with \(track.count) track points", category: .general, level: .info)
+        case .tooOldToShow:
+            let hours = Date().timeIntervalSince(track.last!.timestamp) / 3600
+            appLog(String(format: "STARTUP: Step 1 - Last data for '%@' is %.1f h old, beyond the %.0f h a hunt lasts. Not drawing it; waiting for data.",
+                          sondeName!, hours, huntState.staleAfter / 3600),
+                   category: .general, level: .info)
+            track = []
+        case .startNewHunt:
+            appLog("STARTUP: Step 1 - Stored track belongs to another sonde - discarding", category: .general, level: .info)
+            track = []
+        case .nothingStored:
+            if !track.isEmpty {
+                appLog("STARTUP: Step 1 - WARNING: Track data exists but no sonde name", category: .general, level: .error)
+                track = []
+            }
         }
 
         // Step 2: Service Initialization (already done in init) + Request location
