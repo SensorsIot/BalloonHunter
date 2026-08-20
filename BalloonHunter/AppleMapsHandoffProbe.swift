@@ -35,6 +35,7 @@ Debug builds only.
 import Foundation
 import MapKit
 import OSLog
+import UIKit
 import CoreLocation
 
 #if DEBUG
@@ -44,6 +45,46 @@ enum AppleMapsHandoffProbe {
     /// completely, rather than shifting along the same road.
     static let destinationA = CLLocationCoordinate2D(latitude: 46.9480, longitude: 7.4474)  // Bern
     static let destinationB = CLLocationCoordinate2D(latitude: 47.0502, longitude: 8.3093)  // Lucerne
+
+    /// Variant 1: hand Maps an explicit source *and* destination.
+    ///
+    /// A different code path from the single-item call, and plausibly a request
+    /// for a whole trip rather than a destination to bolt onto the current one.
+    /// Undocumented either way - no source describes what this does to an active
+    /// session, and nobody has reported trying it.
+    static func navigateWithExplicitSource(to destination: CLLocationCoordinate2D, label: String) {
+        let from = MKMapItem.forCurrentLocation()
+        let to = MKMapItem(placemark: MKPlacemark(coordinate: destination))
+        to.name = "Handoff probe \(label)"
+
+        appLog("PROBE: openMaps(with:) two items, destination \(label)", category: .general, level: .info)
+        MKMapItem.openMaps(with: [from, to],
+                           launchOptions: [MKLaunchOptionsDirectionsModeKey: MKLaunchOptionsDirectionsModeDriving])
+        appLog("PROBE: openMaps(with:) returned for \(label)", category: .general, level: .info)
+    }
+
+    /// Variant 2: the URL scheme instead of MapKit.
+    ///
+    /// A different entry point into Maps entirely. `dirflg=d` asks for driving
+    /// directions without going through MKMapItem at all.
+    static func navigateByURL(to destination: CLLocationCoordinate2D, label: String) {
+        let url = URL(string: "maps://?daddr=\(destination.latitude),\(destination.longitude)&dirflg=d")!
+        appLog("PROBE: opening URL \(url.absoluteString)", category: .general, level: .info)
+        UIApplication.shared.open(url) { ok in
+            appLog("PROBE: URL open returned \(ok) for \(label)", category: .general, level: .info)
+        }
+    }
+
+    /// Try to return Maps to browse mode, in the hope that a later directions
+    /// request then starts a fresh trip rather than offering to add a stop.
+    ///
+    /// There is no public API to end another app's navigation, so this can only
+    /// nudge: it opens Maps with no directions request at all. Whether that stops
+    /// guidance is exactly what the probe is for.
+    static func attemptStopNavigation() {
+        appLog("PROBE: opening Maps with no directions request", category: .general, level: .info)
+        MKMapItem.forCurrentLocation().openInMaps(launchOptions: nil)
+    }
 
     /// Start driving directions, exactly as `NavigationService` does in the field.
     ///

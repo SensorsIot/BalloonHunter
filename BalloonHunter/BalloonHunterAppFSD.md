@@ -1578,10 +1578,18 @@ The hunter is driving. Two screens: **Apple Maps on CarPlay does the navigating*
   routed to where the balloon *was* predicted to land before continuing to where
   it is predicted now.
 
-  So the requirement above is **not satisfiable by this mechanism**. Either a way
-  is found to force a replacement, or the hunter ends navigation themselves before
-  the app hands over a new destination, or the app takes on CarPlay navigation of
-  its own. Not yet decided.
+- **`MKMapItem.openMaps(with: [source, destination])` behaves differently.** Tested
+  on device: handing Maps an explicit source *and* destination does not produce the
+  Add-a-stop prompt. This is undocumented - Apple describes no difference between
+  the one-item and two-item calls, and no developer report of either behaviour
+  exists. Whether it replaces an active route outright, or still needs the hunter
+  to end the current one first, is being confirmed.
+
+- **There is no way to end navigation programmatically.** No public API, no
+  Shortcuts action, and no means for an app to trigger a Siri command - apps may
+  donate intents for Siri to invoke, never the reverse. If a cancel is required it
+  must come from the hunter, and *"Hey Siri, stop navigating"* is the hands-free
+  way to give it.
 
 ### Descent Rate and Parachute Behaviour
 
