@@ -1,0 +1,22 @@
+{
+  "serial": "W3960661",
+  "type": null,
+  "station": "live",
+  "state": "closed",
+  "launch_datetime": "2026-08-20T16:46:56Z",
+  "burst_datetime": "2026-08-20T18:42:05Z",
+  "burst_altitude": 33508.3118,
+  "burst_lat": 50.26423,
+  "burst_lon": 8.64854,
+  "last_heard": {
+    "datetime": "2026-08-20T19:13:09Z",
+    "alt": 378.8,
+    "lat": 50.42745,
+    "lon": 9.07754,
+    "vel_v": -7.688
+  },
+  "closed_at": "2026-08-20T19:43:19Z",
+  "frames_seen": 8769,
+  "gaps": 1,
+  "max_gap_s": 73.0
+}

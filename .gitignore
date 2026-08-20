@@ -137,3 +137,18 @@ scripts/ci*
 .env.*
 secrets.xml
 credentials.json
+
+# =============================================================================
+# Python (Simulation target)
+# =============================================================================
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.coverage
+
+# Devcontainer claude state
+.claude-data/

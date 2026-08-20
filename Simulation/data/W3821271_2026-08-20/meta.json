@@ -1,0 +1,22 @@
+{
+  "serial": "W3821271",
+  "type": null,
+  "station": "10868",
+  "state": "closed",
+  "launch_datetime": "2026-08-20T15:49:16Z",
+  "burst_datetime": "2026-08-20T16:29:52Z",
+  "burst_altitude": 15523.1623,
+  "burst_lat": 48.07605,
+  "burst_lon": 11.65273,
+  "last_heard": {
+    "datetime": "2026-08-20T16:55:11Z",
+    "alt": 982.6,
+    "lat": 48.2158,
+    "lon": 12.11704,
+    "vel_v": -9.93464
+  },
+  "closed_at": "2026-08-20T17:25:17Z",
+  "frames_seen": 3501,
+  "gaps": 0,
+  "max_gap_s": 0.0
+}

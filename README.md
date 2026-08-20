@@ -14,6 +14,7 @@ A cross-platform mobile application for tracking and recovering weather balloons
 |----------|--------|---------------|
 | 🍎 **iOS** | App Store Pending | [ios/README.md](ios/README.md) |
 | 🤖 **Android** | In Development | [android/README.md](android/README.md) |
+| 🐍 **Simulation** | Scaffold | [Simulation/README.md](Simulation/README.md) |
 
 ## ✨ Key Features
 
@@ -51,6 +52,13 @@ cd android
 ./gradlew assembleDebug
 ```
 Requirements: Android Studio, JDK 17+, Google Maps API key
+
+### 🐍 Simulation
+```bash
+pip install -e Simulation
+pytest Simulation/tests
+```
+Requirements: Python 3.11+ (provided by the repo devcontainer)
 
 ## 📡 API Integration
 
