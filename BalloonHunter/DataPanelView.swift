@@ -65,8 +65,12 @@ struct DataPanelView: View {
                             .frame(width: table2ColumnWidth, alignment: .leading)
                         Text("\(signalStrengthString) dBm")
                             .frame(width: table2ColumnWidth, alignment: .leading)
-                        Text("\(batteryPercentageString)%")
-                            .frame(width: table2ColumnWidth, alignment: .leading)
+                        HStack(spacing: 2) {
+                            Image(systemName: batteryIconName)
+                                .foregroundColor(batteryColor)
+                            Text("\(batteryPercentageString)%")
+                        }
+                        .frame(width: table2ColumnWidth, alignment: .leading)
                     }
                     // Row 2: Vertical speed, Horizontal speed, Distance
                     GridRow {
@@ -382,6 +386,35 @@ struct DataPanelView: View {
             return "\(val)"
         }
         return "0"
+    }
+
+    private var batteryPercentage: Int {
+        if showingPlaceholders {
+            return 0
+        }
+        return balloonPositionService.currentRadioChannel?.batteryPercentage ?? 0
+    }
+
+    private var batteryIconName: String {
+        let pct = batteryPercentage
+        switch pct {
+        case 88...100: return "battery.100"
+        case 63..<88: return "battery.75"
+        case 38..<63: return "battery.50"
+        case 13..<38: return "battery.25"
+        default: return "battery.0"
+        }
+    }
+
+    private var batteryColor: Color {
+        let pct = batteryPercentage
+        if pct <= 20 {
+            return .red
+        } else if pct <= 40 {
+            return .orange
+        } else {
+            return .green
+        }
     }
 
 }

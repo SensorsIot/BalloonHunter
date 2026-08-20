@@ -16,8 +16,8 @@ struct SondeHubSondeData: Codable {
     let lat: Double
     let lon: Double
     let alt: Double
-    let vel_h: Double
-    let vel_v: Double
+    let vel_h: Double?  // Optional - iMet sondes may not have velocity data
+    let vel_v: Double?  // Optional - iMet sondes may not have velocity data
     let temp: Double?
     let humidity: Double?
     let pressure: Double?
@@ -85,6 +85,9 @@ final class APRSDataService: ObservableObject {
     // Sonde name mismatch tracking (display only)
     @Published var bleSerialName: String? = nil
     @Published var aprsSerialName: String? = nil
+
+    // Available sondes from station (for selection popup)
+    @Published var availableSondes: [SondeHubSondeData] = []
 
     // Compatible telemetry stream with BLE service
     // Legacy telemetryData stream removed - use three-channel streams
@@ -278,8 +281,27 @@ final class APRSDataService: ObservableObject {
             // Filter out ground-based test sondes before selecting
             let flyingSondes = filterGroundTestSondes(from: Array(siteResponse.values))
 
+            // Filter to sondes from the last 24 hours only
+            let twentyFourHoursAgo = Date().addingTimeInterval(-24 * 60 * 60)
+            let recentSondes = flyingSondes.filter { sonde in
+                guard let sondeDate = parseISO8601Date(sonde.datetime) else { return false }
+                return sondeDate > twentyFourHoursAgo
+            }
+
+            // Sort by datetime (most recent first) and store for selection popup
+            let sortedSondes = recentSondes.sorted { sonde1, sonde2 in
+                let date1 = parseISO8601Date(sonde1.datetime) ?? Date.distantPast
+                let date2 = parseISO8601Date(sonde2.datetime) ?? Date.distantPast
+                return date1 > date2
+            }
+            availableSondes = sortedSondes
+
+            if sortedSondes.count > 1 {
+                appLog("APRSDataService: \(sortedSondes.count) sondes available (last 24h): \(sortedSondes.map { $0.serial }.joined(separator: ", "))", category: .service, level: .info)
+            }
+
             // Find the most recent sonde by timestamp
-            guard let latestSonde = findLatestSonde(from: flyingSondes) else {
+            guard let latestSonde = sortedSondes.first else {
                 appLog("APRSDataService: No flying sondes found for station \(currentStationId)", category: .service, level: .info)
                 return
             }
@@ -505,7 +527,7 @@ final class APRSDataService: ObservableObject {
             // Log essential telemetry data only (debug level)
             let sondesSummary = siteResponse.map { (serial, data) in
                 let freqStr = "freq=\(String(format: "%.2f", data.frequency ?? 0.0))/tx=\(String(format: "%.2f", data.tx_frequency ?? 0.0))/eff=\(String(format: "%.2f", data.effectiveFrequency))MHz"
-                return "\(serial): lat=\(String(format: "%.5f", data.lat)), lon=\(String(format: "%.5f", data.lon)), alt=\(String(format: "%.0f", data.alt))m, v_v=\(String(format: "%.1f", data.vel_v))m/s, v_h=\(String(format: "%.1f", data.vel_h))m/s, \(freqStr), type=\(data.type), time=\(data.datetime)"
+                return "\(serial): lat=\(String(format: "%.5f", data.lat)), lon=\(String(format: "%.5f", data.lon)), alt=\(String(format: "%.0f", data.alt))m, v_v=\(String(format: "%.1f", data.vel_v ?? 0.0))m/s, v_h=\(String(format: "%.1f", data.vel_h ?? 0.0))m/s, \(freqStr), type=\(data.type), time=\(data.datetime)"
             }.joined(separator: " | ")
             appLog("APRSDataService: Telemetry data: \(sondesSummary)", category: .service, level: .debug)
             appLog("APRSDataService: Received data for \(siteResponse.count) sondes", category: .service, level: .debug)
@@ -607,8 +629,8 @@ final class APRSDataService: ObservableObject {
             latitude: latitude,
             longitude: longitude,
             altitude: sonde.alt,
-            verticalSpeed: sonde.vel_v,
-            horizontalSpeed: sonde.vel_h,
+            verticalSpeed: sonde.vel_v ?? 0.0,
+            horizontalSpeed: sonde.vel_h ?? 0.0,
             heading: 0.0, // Not provided by APRS
             temperature: sonde.temp ?? 0.0,
             humidity: sonde.humidity ?? 0.0,

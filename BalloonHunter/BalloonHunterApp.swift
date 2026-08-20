@@ -157,19 +157,19 @@ struct BalloonHunterApp: App {
                     .onAppear {
                         animateLoading = true
                     }
-                    .sheet(isPresented: $serviceCoordinator.showSondeSelectionPopup) {
-                        SondeSelectionSheet(
-                            detectedSondeName: serviceCoordinator.detectedSondeName,
-                            selectedSondeName: $serviceCoordinator.selectedSondeName,
-                            countdown: serviceCoordinator.sondeSelectionCountdown,
-                            onConfirm: { serviceCoordinator.confirmSondeSelection() },
-                            onSkip: { serviceCoordinator.skipSondeSelection() },
-                            onStartEditing: { serviceCoordinator.userDidStartEditingSondeName() }
-                        )
-                        .presentationDetents([.medium])
-                        .interactiveDismissDisabled()
-                    }
                 }
+            }
+            .sheet(isPresented: $serviceCoordinator.showSondeSelectionPopup) {
+                SondeSelectionSheet(
+                    availableSondes: serviceCoordinator.availableSondesForSelection,
+                    selectedSondeSerial: $serviceCoordinator.selectedSondeSerial,
+                    countdown: serviceCoordinator.sondeSelectionCountdown,
+                    onConfirm: { serviceCoordinator.confirmSondeSelection() },
+                    onSkip: { serviceCoordinator.skipSondeSelection() },
+                    onStartEditing: { serviceCoordinator.userDidStartEditingSondeName() }
+                )
+                .presentationDetents([.large])
+                .interactiveDismissDisabled()
             }
             .onAppear {
                 // Request notification permissions
@@ -275,84 +275,102 @@ struct BalloonHunterApp: App {
 // MARK: - Sonde Selection Sheet
 
 struct SondeSelectionSheet: View {
-    let detectedSondeName: String
-    @Binding var selectedSondeName: String
+    let availableSondes: [SondeHubSondeData]
+    @Binding var selectedSondeSerial: String?
     let countdown: Int
     let onConfirm: () -> Void
     let onSkip: () -> Void
     let onStartEditing: () -> Void
 
+    @State private var manualSerial: String = ""
     @FocusState private var isTextFieldFocused: Bool
 
     var body: some View {
         NavigationView {
-            VStack(spacing: 20) {
+            VStack(spacing: 16) {
                 // Header
                 VStack(spacing: 8) {
                     Image(systemName: "antenna.radiowaves.left.and.right")
-                        .font(.system(size: 50))
+                        .font(.system(size: 40))
                         .foregroundColor(.blue)
 
                     Text("Select Sonde")
                         .font(.title2)
                         .fontWeight(.bold)
 
-                    if !detectedSondeName.isEmpty {
-                        Text("Auto-detected from Payerne station")
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
-                    } else {
-                        Text("No sonde detected from Payerne")
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
-                    }
+                    Text("\(availableSondes.count) sonde\(availableSondes.count == 1 ? "" : "s") available (last 24h)")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
                 }
-                .padding(.top, 20)
+                .padding(.top, 16)
 
-                // Text field
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Sonde Serial")
+                // Sonde List
+                if !availableSondes.isEmpty {
+                    List(availableSondes, id: \.serial) { sonde in
+                        SondeRowView(
+                            sonde: sonde,
+                            isSelected: selectedSondeSerial == sonde.serial
+                        )
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            selectedSondeSerial = sonde.serial
+                            manualSerial = ""
+                            onStartEditing()
+                        }
+                    }
+                    .listStyle(.plain)
+                    .frame(maxHeight: 250)
+                } else {
+                    Text("No sondes found")
+                        .foregroundColor(.secondary)
+                        .padding()
+                }
+
+                // Manual entry
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Or enter serial manually:")
                         .font(.caption)
                         .foregroundColor(.secondary)
 
-                    TextField("Enter sonde serial (e.g., V3240531)", text: $selectedSondeName)
+                    TextField("e.g., V3240531", text: $manualSerial)
                         .textFieldStyle(.roundedBorder)
                         .font(.system(.body, design: .monospaced))
                         .autocapitalization(.allCharacters)
                         .disableAutocorrection(true)
                         .focused($isTextFieldFocused)
+                        .onChange(of: manualSerial) { _, newValue in
+                            if !newValue.isEmpty {
+                                selectedSondeSerial = newValue.uppercased()
+                                onStartEditing()
+                            }
+                        }
                         .onChange(of: isTextFieldFocused) { _, isFocused in
                             if isFocused {
                                 onStartEditing()
                             }
                         }
                 }
-                .padding(.horizontal, 30)
+                .padding(.horizontal, 20)
 
-                // Countdown (only shown when not editing)
+                // Countdown
                 if countdown > 0 {
                     Text("Auto-continuing in \(countdown)s...")
                         .font(.subheadline)
                         .foregroundColor(.orange)
-                } else {
-                    Text("Enter sonde name or tap Use")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
                 }
-
-                Spacer()
 
                 // Buttons
                 VStack(spacing: 12) {
                     Button(action: onConfirm) {
-                        Text("Use")
+                        Text("Use Selected")
                             .font(.headline)
                             .frame(maxWidth: .infinity)
                             .padding()
-                            .background(Color.blue)
+                            .background(selectedSondeSerial != nil ? Color.blue : Color.gray)
                             .foregroundColor(.white)
                             .cornerRadius(12)
                     }
+                    .disabled(selectedSondeSerial == nil)
 
                     Button(action: onSkip) {
                         Text("Skip")
@@ -360,9 +378,96 @@ struct SondeSelectionSheet: View {
                             .foregroundColor(.secondary)
                     }
                 }
-                .padding(.horizontal, 30)
-                .padding(.bottom, 30)
+                .padding(.horizontal, 20)
+                .padding(.bottom, 20)
             }
+        }
+    }
+}
+
+// MARK: - Sonde Row View
+
+struct SondeRowView: View {
+    let sonde: SondeHubSondeData
+    let isSelected: Bool
+
+    var body: some View {
+        HStack(spacing: 12) {
+            // Selection indicator
+            Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                .foregroundColor(isSelected ? .blue : .gray)
+                .font(.title3)
+
+            // Sonde info
+            VStack(alignment: .leading, spacing: 2) {
+                HStack {
+                    Text(sonde.serial)
+                        .font(.system(.body, design: .monospaced))
+                        .fontWeight(.semibold)
+
+                    Text(sonde.type)
+                        .font(.caption)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.blue.opacity(0.2))
+                        .cornerRadius(4)
+                }
+
+                HStack(spacing: 8) {
+                    // Time
+                    Label(formatSondeTime(sonde.datetime), systemImage: "clock")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+
+                    // Altitude
+                    Label("\(Int(sonde.alt))m", systemImage: "arrow.up")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+
+                    // Frequency
+                    if sonde.effectiveFrequency > 0 {
+                        Text(String(format: "%.2f", sonde.effectiveFrequency))
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+            }
+
+            Spacer()
+        }
+        .padding(.vertical, 4)
+        .background(isSelected ? Color.blue.opacity(0.1) : Color.clear)
+        .cornerRadius(8)
+    }
+
+    private func formatSondeTime(_ dateString: String) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+
+        var date: Date?
+        date = formatter.date(from: dateString)
+        if date == nil {
+            formatter.formatOptions = [.withInternetDateTime]
+            date = formatter.date(from: dateString)
+        }
+
+        guard let sondeDate = date else { return dateString }
+
+        let calendar = Calendar.current
+        let now = Date()
+
+        if calendar.isDateInToday(sondeDate) {
+            let timeFormatter = DateFormatter()
+            timeFormatter.dateFormat = "HH:mm"
+            return timeFormatter.string(from: sondeDate)
+        } else if calendar.isDateInYesterday(sondeDate) {
+            let timeFormatter = DateFormatter()
+            timeFormatter.dateFormat = "HH:mm"
+            return "Yesterday \(timeFormatter.string(from: sondeDate))"
+        } else {
+            let dateFormatter = DateFormatter()
+            dateFormatter.dateFormat = "MMM d HH:mm"
+            return dateFormatter.string(from: sondeDate)
         }
     }
 }

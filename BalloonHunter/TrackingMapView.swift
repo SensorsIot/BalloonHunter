@@ -392,6 +392,17 @@ struct TrackingMapView: View {
         .background(.ultraThinMaterial)
         .cornerRadius(8)
 
+        // Change Sonde button
+        Button {
+            coordinator.showSondeSelectionForChange()
+        } label: {
+            Image(systemName: "antenna.radiowaves.left.and.right")
+                .imageScale(.large)
+                .padding(8)
+        }
+        .background(.ultraThinMaterial)
+        .cornerRadius(8)
+
         // Transport mode picker
         Picker("Mode", selection: Binding(
             get: { mapPresenter.transportMode },

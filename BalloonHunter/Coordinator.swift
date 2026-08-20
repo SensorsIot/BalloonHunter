@@ -27,8 +27,8 @@ final class ServiceCoordinator: ObservableObject {
 
     // Sonde selection popup state
     @Published var showSondeSelectionPopup: Bool = false
-    @Published var detectedSondeName: String = ""
-    @Published var selectedSondeName: String = ""
+    @Published var availableSondesForSelection: [SondeHubSondeData] = []
+    @Published var selectedSondeSerial: String? = nil
     @Published var sondeSelectionCountdown: Int = 5
     private var sondeSelectionContinuation: CheckedContinuation<Void, Never>?
     private var sondeSelectionTimer: Timer?
@@ -372,32 +372,46 @@ final class ServiceCoordinator: ObservableObject {
         sondeSelectionTimer?.invalidate()
         sondeSelectionTimer = nil
 
-        let trimmedName = selectedSondeName.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        guard let selectedSerial = selectedSondeSerial?.trimmingCharacters(in: .whitespacesAndNewlines).uppercased(),
+              !selectedSerial.isEmpty else {
+            appLog("ServiceCoordinator: confirmSondeSelection - no sonde selected", category: .general, level: .info)
+            showSondeSelectionPopup = false
+            sondeSelectionContinuation?.resume()
+            sondeSelectionContinuation = nil
+            return
+        }
 
-        appLog("ServiceCoordinator: confirmSondeSelection - selected='\(trimmedName)', detected='\(detectedSondeName)'", category: .general, level: .info)
+        let currentSonde = balloonPositionService.currentBalloonName ?? ""
 
-        if !trimmedName.isEmpty && trimmedName != detectedSondeName {
-            // User entered a different sonde name - clear all old data and set override
-            appLog("ServiceCoordinator: User selected different sonde: '\(trimmedName)' (was: '\(detectedSondeName)') - clearing old data", category: .general, level: .info)
+        appLog("ServiceCoordinator: confirmSondeSelection - selected='\(selectedSerial)', current='\(currentSonde)'", category: .general, level: .info)
+
+        if selectedSerial != currentSonde {
+            // User selected a different sonde - clear all old data and set override
+            appLog("ServiceCoordinator: User selected different sonde: '\(selectedSerial)' (was: '\(currentSonde)') - clearing old data", category: .general, level: .info)
 
             // Clear all persisted and in-memory data for the old sonde
             clearAllSondeData()
 
             // Set override in APRS service for the new sonde
-            balloonPositionService.aprsService.overrideSondeSerial = trimmedName
+            balloonPositionService.aprsService.overrideSondeSerial = selectedSerial
 
             // Update the current balloon name to the new sonde
-            balloonPositionService.currentBalloonName = trimmedName
-            balloonTrackService.injectPersistedData(sondeName: trimmedName, track: [])
+            balloonPositionService.currentBalloonName = selectedSerial
+            balloonTrackService.injectPersistedData(sondeName: selectedSerial, track: [])
 
-            // Trigger immediate fetch for the new sonde
+            // Trigger immediate fetch and track fill for the new sonde
             Task {
                 await balloonPositionService.aprsService.forceImmediateFetch()
+                // Fetch historical track for the new sonde (triggers landing detection → route calculation)
+                balloonTrackService.fillTrackGapsFromAPRS(sondeName: selectedSerial)
             }
 
-            appLog("ServiceCoordinator: Sonde override set to '\(trimmedName)' - triggering immediate fetch", category: .general, level: .info)
-        } else if !trimmedName.isEmpty {
-            appLog("ServiceCoordinator: User confirmed auto-detected sonde: '\(trimmedName)'", category: .general, level: .info)
+            // Trigger state machine re-evaluation to enter correct state for new sonde
+            balloonPositionService.triggerStateEvaluation()
+
+            appLog("ServiceCoordinator: Sonde override set to '\(selectedSerial)' - triggering fetch, track fill, and state evaluation", category: .general, level: .info)
+        } else {
+            appLog("ServiceCoordinator: User confirmed current sonde: '\(selectedSerial)'", category: .general, level: .info)
         }
 
         showSondeSelectionPopup = false
@@ -415,5 +429,19 @@ final class ServiceCoordinator: ObservableObject {
         showSondeSelectionPopup = false
         sondeSelectionContinuation?.resume()
         sondeSelectionContinuation = nil
+    }
+
+    /// Show sonde selection popup during operation (Change Sonde)
+    func showSondeSelectionForChange() {
+        // Update available sondes list from APRS service
+        availableSondesForSelection = balloonPositionService.aprsService.availableSondes
+        selectedSondeSerial = balloonPositionService.currentBalloonName
+
+        // Reset countdown
+        sondeSelectionCountdown = 0  // No auto-confirm during manual change
+        userStartedEditing = false
+
+        showSondeSelectionPopup = true
+        appLog("ServiceCoordinator: Showing sonde selection for manual change (\(availableSondesForSelection.count) sondes available)", category: .general, level: .info)
     }
 }

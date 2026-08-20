@@ -133,19 +133,24 @@ extension ServiceCoordinator {
         // Wait for definitive answers from both services (with timeout)
         await waitForServiceAnswers(maxWaitTime: maxStartupTime - Date().timeIntervalSince(startTime))
 
-        // Step 4b: Show sonde selection popup
+        // Step 4b: Show sonde selection popup if sondes are available
         await MainActor.run {
             startupProgress = "Step 4: Select Sonde"
         }
 
-        // Get detected sonde from APRS service (latest from Payerne station)
-        let detectedSerial = balloonPositionService.aprsService.lastSondeSerial ?? ""
+        // Get available sondes from APRS service (sorted by datetime, most recent first)
+        let sondes = balloonPositionService.aprsService.availableSondes
+        let mostRecentSerial = sondes.first?.serial
+
         await MainActor.run {
-            detectedSondeName = detectedSerial
-            selectedSondeName = detectedSerial
-            showSondeSelectionPopup = true
+            availableSondesForSelection = sondes
+            selectedSondeSerial = mostRecentSerial
+            // Only show popup if there are sondes available
+            if !sondes.isEmpty {
+                showSondeSelectionPopup = true
+            }
         }
-        appLog("STARTUP: Step 4b - Showing sonde selection popup (detected: '\(detectedSerial)')", category: .general, level: .info)
+        appLog("STARTUP: Step 4b - \(sondes.count) sondes available, showing selection popup", category: .general, level: .info)
 
         // Wait for user to confirm or skip (with 5-second auto-confirm)
         await waitForSondeSelection()
