@@ -993,6 +993,21 @@ final class BalloonTrackService: ObservableObject {
             currentBalloonName = balloonPositionService.currentBalloonName
         }
 
+        // A track holds points from exactly one sonde. The receiver can decode a
+        // different one for a packet or two - a bench unit nearby, or a neighbour
+        // on an adjacent frequency - and appending that sample draws a leg from
+        // the flight to wherever the other sonde sits. Sonde changes are handled
+        // upstream, where the track is cleared first.
+        if let tracked = currentBalloonName,
+           !positionData.sondeName.isEmpty,
+           positionData.sondeName != tracked {
+            appLog(String(format: "🚫 FOREIGN SONDE: '%@' at %.5f,%.5f alt=%.0fm rejected while tracking '%@'",
+                          positionData.sondeName, positionData.latitude, positionData.longitude,
+                          positionData.altitude, tracked),
+                   category: .service, level: .error)
+            return
+        }
+
         // Only record track points when we have valid telemetry states
         // Exclude: startup, waitingForAPRS, noTelemetry, aprsLanded (no BLE, balloon on ground)
         let state = balloonPositionService.currentState

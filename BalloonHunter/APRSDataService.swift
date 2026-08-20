@@ -746,11 +746,32 @@ final class APRSDataService: ObservableObject {
             let decoder = JSONDecoder()
             let nestedDict = try decoder.decode([String: [String: SondeHubAPRSPoint]].self, from: data)
 
+            // The outer key is the sonde serial. SondeHub can return more than
+            // the serial that was asked for, and merging them writes another
+            // station's position into this sonde's track - drawn as a red leg
+            // running off to wherever that station stands.
             var aprsPoints: [SondeHubAPRSPoint] = []
-            for (_, timestampDict) in nestedDict {
+            var foreignSerials: [String: Int] = [:]
+
+            for (responseSerial, timestampDict) in nestedDict {
+                guard responseSerial.caseInsensitiveCompare(serial) == .orderedSame else {
+                    foreignSerials[responseSerial] = timestampDict.count
+                    continue
+                }
                 for (_, point) in timestampDict {
+                    // Belt and braces: the record carries its own serial too.
+                    if let pointSerial = point.serial,
+                       pointSerial.caseInsensitiveCompare(serial) != .orderedSame {
+                        foreignSerials[pointSerial, default: 0] += 1
+                        continue
+                    }
                     aprsPoints.append(point)
                 }
+            }
+
+            if !foreignSerials.isEmpty {
+                let summary = foreignSerials.map { "\($0.key)×\($0.value)" }.joined(separator: ", ")
+                appLog("APRSDataService: Discarded points for other serials while fetching \(serial): \(summary)", category: .service, level: .info)
             }
 
             // Use rounded timestamps (to second) for slot-based filtering
