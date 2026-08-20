@@ -332,10 +332,14 @@ Each state defines explicit entry functionality and exit criteria:
 - **Functionality**:
   - Enables APRS
   - On startup (before any BLE/APRS data) or after both feeds go silent
-  - Data panel  shows placeholders (e.g., `"--"` distance, `"--:--"` arrival) while the red telemetry-stale frame
   - The flight state is set to unknown
-  - Map shows balloon track, landing point, landing point track,
-  - The last landing point is still valid and the tracking map (including routing) still works
+  - **What is displayed depends on the age of what is remembered** (see *Hunt Identity*):
+    - last known data younger than 6 h -> the hunt is still current; show the track, landing point and route, and keep waiting for data
+    - older than 6 h, or nothing stored -> say so plainly, draw nothing, and keep waiting for data
+  - An hour-old landing point is still a real place on a real map. Routing to a
+    landing that is no longer current sends the hunter to the wrong field, which
+    is why staleness is stated rather than silently drawn.
+  - Data panel shows placeholders (e.g. `"--"` distance, `"--:--"` arrival) behind the red telemetry-stale frame
 - **Transitions**:
   1. `bleTelemetryState.hasTelemetry` AND `balloonPhase == .landed` → `liveBLELanded`
   2. `bleTelemetryState.hasTelemetry` → `liveBLEFlying`
@@ -343,6 +347,9 @@ Each state defines explicit entry functionality and exit criteria:
   4. `aprsTelemetryIsAvailable` → `aprsFlying`
 
 ### Key Design Principles
+
+- **Hunt identity is the serial, not elapsed time.** See *Hunt Phases -> Hunt Identity* for what a state may display when no telemetry is arriving; the six-hour horizon applies to every state, not only `noTelemetry`.
+
 
 - **Input-Driven Transitions**: State changes occur only when input signals change.
 - **No Debouncing**: State transitions between BLE and APRS sources occur immediately when telemetry availability changes. The 30-second BLE staleness threshold provides sufficient delay to prevent false positives, eliminating the need for additional debouncing.
@@ -1709,6 +1716,19 @@ Table 2: 3 columns
 | Vertical speed | Horizontal speed | Distance     |
 | Flight time    | Landing time     | Arrival time |
 | Adjusted Descent Rate    | Burst killer expiry time| |
+
+**Not yet implemented — Phase 2 requires a departure time.** `Arrival:` answers
+when the hunter would arrive *if they left this instant*, which is not the
+question being asked while stationary. What Phase 2 needs is:
+
+```
+depart at  =  predicted landing time  -  route travel time
+```
+
+Both inputs are already computed and simply never subtracted. The value is live,
+carries no margin, and goes negative when the landing cannot be met — in which
+case the negative number is shown and nothing else. See *Hunt Phases -> Phase 2*.
+
 Text in Columns: left aligned  
 • "V: ... m/s" for vertical speed  
 • "H: ... km/h" for horizontal speed  
