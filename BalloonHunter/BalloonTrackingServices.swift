@@ -945,36 +945,11 @@ final class BalloonTrackService: ObservableObject {
         // Persisted data will be injected during startup sequence
     }
 
-    /// A persisted track older than this belongs to a finished hunt and is
-    /// discarded at startup. Matches the 24 h window used for the sonde list.
-    private static let staleTrackMaxAge: TimeInterval = 24 * 60 * 60
-
     /// Inject persisted data from startup sequence
     func injectPersistedData(sondeName: String?, track: [BalloonTrackPoint]) {
         guard !track.isEmpty else {
             appLog("BalloonTrackService: No persisted track to inject", category: .service, level: .info)
             return
-        }
-
-        // A track outliving its hunt is worse than no track. Its last points sit
-        // wherever the sonde was when recording stopped - and if it was recovered
-        // and carried, that is exactly where the hunter stood, drawn on the map
-        // as a red leg reaching to their own position.
-        if let last = track.last {
-            let age = Date().timeIntervalSince(last.timestamp)
-            if age > Self.staleTrackMaxAge {
-                appLog(String(format: """
-                    🗑️ TRACK DISCARD: persisted track is %.1f h old, exceeding the %.0f h limit
-                       sonde: %@, %d points
-                       last:  lat=%.5f lon=%.5f alt=%.0fm t=%@
-                    """,
-                    age / 3600, Self.staleTrackMaxAge / 3600,
-                    sondeName ?? "unknown", track.count,
-                    last.latitude, last.longitude, last.altitude, "\(last.timestamp)"),
-                    category: .service, level: .info)
-                persistenceService.saveBalloonTrack([])
-                return
-            }
         }
 
         self.currentBalloonTrack = track
@@ -1031,6 +1006,16 @@ final class BalloonTrackService: ObservableObject {
         guard state != .startup && state != .waitingForAPRS && state != .noTelemetry && state != .aprsLanded else {
             appLog("BalloonTrackService: State \(state) - not recording track point", category: .service, level: .info)
             return
+        }
+
+        // Diagnostic: the gate above lets liveBLELanded through, so the track
+        // keeps growing after touchdown. Record that it happened, and where,
+        // without changing the behaviour.
+        if state.isLanded {
+            appLog(String(format: "📌 TRACK-AFTER-LANDING [%@]: appending lat=%.6f lon=%.6f alt=%.0fm (track=%d)",
+                          state.description, positionData.latitude, positionData.longitude,
+                          positionData.altitude, currentBalloonTrack.count),
+                   category: .service, level: .info)
         }
 
         // Compute track-derived speeds prior to appending, so we can store derived values
@@ -1294,14 +1279,8 @@ final class BalloonTrackService: ObservableObject {
         var pointsAdded = 0
 
         // Check each APRS point and insert at correct chronological position if slot empty
-        var rejected = 0
         for point in aprsPoints {
-            // Same provenance gate the BLE path uses. This batch route used to
-            // bypass it entirely, so nothing stopped a bad coordinate here.
-            guard isPlausibleTrackPoint(point, source: "APRS") else {
-                rejected += 1
-                continue
-            }
+            logIfPointReachesHunter(point, source: "APRS")
             let roundedTime = roundToSecond(point.timestamp)
             if !occupiedSlots.contains(roundedTime) {
                 // Find correct insertion position to maintain chronological order
@@ -1314,10 +1293,6 @@ final class BalloonTrackService: ObservableObject {
 
         // Single update to @Published property (one map redraw for entire APRS batch)
         currentBalloonTrack = updatedTrack
-
-        if rejected > 0 {
-            appLog("🚫 APRS batch: rejected \(rejected) of \(aprsPoints.count) points as implausible (added \(pointsAdded))", category: .service, level: .error)
-        }
 
         // Track extent, so a stray leg is visible in the log as a coordinate
         // range far wider than a real flight.
@@ -1337,10 +1312,7 @@ final class BalloonTrackService: ObservableObject {
     /// Check if slot occupied, insert if empty
     /// BLE points arrive in chronological order - no sorting needed
     private func insertTrackPointIfSlotEmpty(_ point: BalloonTrackPoint, source: String) {
-        // The BLE parser validates coordinates before publishing; the APRS fill
-        // path did not, so this chokepoint guards both. A single bad point is
-        // drawn as a polyline leg reaching across the map.
-        guard isPlausibleTrackPoint(point, source: source) else { return }
+        logIfPointReachesHunter(point, source: source)
 
         let roundedTime = roundToSecond(point.timestamp)
 
@@ -1356,76 +1328,35 @@ final class BalloonTrackService: ObservableObject {
         currentBalloonTrack.append(point)
     }
 
-    /// Reject track points that cannot describe a radiosonde.
+    /// Report a track point that reaches the hunter's own position.
     ///
-    /// Logs the source and the rejected coordinate so a recurrence names its own
-    /// culprit rather than appearing only as a stray line on the map.
-    private func isPlausibleTrackPoint(_ point: BalloonTrackPoint, source: String) -> Bool {
-        func reject(_ reason: String) -> Bool {
-            appLog(String(format: "🚫 TRACK REJECT [%@]: %@ - lat=%.5f lon=%.5f alt=%.0fm t=%@",
-                          source, reason, point.latitude, point.longitude,
-                          point.altitude, "\(point.timestamp)"),
-                   category: .service, level: .error)
-            return false
-        }
+    /// Diagnostic only: nothing is dropped or altered. A sonde does not transmit
+    /// from where the hunter stands, so when this fires it records which feed
+    /// supplied the point and what the app believed at that moment - enough to
+    /// identify the source without guessing at it.
+    private func logIfPointReachesHunter(_ point: BalloonTrackPoint, source: String) {
+        guard let user = balloonPositionService.userCoordinate else { return }
 
-        guard point.latitude.isFinite, point.longitude.isFinite, point.altitude.isFinite else {
-            return reject("non-finite value")
-        }
-        guard abs(point.latitude) <= 90, abs(point.longitude) <= 180 else {
-            return reject("coordinate out of range")
-        }
-        guard !(point.latitude == 0 && point.longitude == 0) else {
-            return reject("null island (0,0)")
-        }
-        guard point.altitude >= -500, point.altitude <= 60_000 else {
-            return reject("altitude implausible")
-        }
+        let separation = CLLocation(latitude: user.latitude, longitude: user.longitude)
+            .distance(from: CLLocation(latitude: point.latitude, longitude: point.longitude))
+        guard separation < 50 else { return }
 
-        // A sonde never reports the hunter's own coordinates. Even a ground test
-        // unit lying beside them is metres away, so a coincident point is bad
-        // provenance - user position leaking into the balloon feed - and would
-        // be drawn as a red track leg running to wherever the hunter stands.
-        if let user = balloonPositionService.userCoordinate {
-            let separation = CLLocation(latitude: user.latitude, longitude: user.longitude)
-                .distance(from: CLLocation(latitude: point.latitude, longitude: point.longitude))
-
-            if separation < Self.userCoincidenceRejectM {
-                appLog(String(format: """
-                    🚨 TRACK REJECT [%@]: point coincides with hunter position (%.1fm)
-                       point: lat=%.6f lon=%.6f alt=%.0fm t=%@
-                       user:  lat=%.6f lon=%.6f
-                       track: %d points, sonde=%@, state=%@, phase=%@
-                    """,
-                    source, separation,
-                    point.latitude, point.longitude, point.altitude, "\(point.timestamp)",
-                    user.latitude, user.longitude,
-                    currentBalloonTrack.count,
-                    currentBalloonName ?? "none",
-                    balloonPositionService.currentState.description,
-                    "\(balloonPositionService.balloonPhase)"),
-                    category: .service, level: .error)
-                return false
-            }
-
-            if separation < Self.userProximityWarnM {
-                appLog(String(format: "⚠️ TRACK NEAR-USER [%@]: %.1fm from hunter - lat=%.6f lon=%.6f alt=%.0fm (kept)",
-                              source, separation, point.latitude, point.longitude, point.altitude),
-                       category: .service, level: .info)
-            }
-        }
-
-        return true
+        appLog(String(format: """
+            🔎 TRACK@HUNTER [%@]: point %.1fm from hunter
+               point:  lat=%.6f lon=%.6f alt=%.0fm vs=%.1f hs=%.1f t=%@
+               hunter: lat=%.6f lon=%.6f
+               state=%@ phase=%@ sonde=%@ trackSize=%d
+            """,
+            source, separation,
+            point.latitude, point.longitude, point.altitude,
+            point.verticalSpeed, point.horizontalSpeed, "\(point.timestamp)",
+            user.latitude, user.longitude,
+            balloonPositionService.currentState.description,
+            "\(balloonPositionService.balloonPhase)",
+            currentBalloonName ?? "none",
+            currentBalloonTrack.count),
+            category: .service, level: .error)
     }
-
-    /// Below this, a track point is treated as the hunter's own position leaking
-    /// into the balloon feed and dropped. Set deliberately tight: it catches an
-    /// exact coordinate copy without touching a real sonde lying nearby.
-    private static let userCoincidenceRejectM: CLLocationDistance = 2.0
-
-    /// Below this, the point is kept but logged, so the run leaves a trail if
-    /// something is feeding hunter-adjacent positions into the track.
-    private static let userProximityWarnM: CLLocationDistance = 50.0
 
     /// Fill track gaps from APRS telemetry
     /// Runs asynchronously and does not block UI
