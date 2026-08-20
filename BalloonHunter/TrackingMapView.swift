@@ -326,19 +326,23 @@ struct TrackingMapView: View {
                     }
                 }
 
-                // Sonde name mismatch field (persistent, only visible when mismatch detected)
+                // Sonde name mismatch field - tap to switch to BLE sonde
                 if mapPresenter.bleSerialName != mapPresenter.aprsSerialName &&
                    !mapPresenter.bleSerialName.isEmpty &&
                    !mapPresenter.aprsSerialName.isEmpty {
                     HStack {
                         Spacer()
-                        Text("SondeHub: '\(mapPresenter.aprsSerialName)' RadioSondyGo: '\(mapPresenter.bleSerialName)'")
-                            .font(.caption)
-                            .foregroundColor(.orange)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 4)
-                            .background(.ultraThinMaterial)
-                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                        Button {
+                            coordinator.switchToBLESonde(mapPresenter.bleSerialName)
+                        } label: {
+                            Text("Tap to switch to '\(mapPresenter.bleSerialName)'")
+                                .font(.caption)
+                                .foregroundColor(.orange)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 4)
+                                .background(.ultraThinMaterial)
+                                .clipShape(RoundedRectangle(cornerRadius: 8))
+                        }
                         Spacer()
                     }
                     .padding(.bottom, 4)

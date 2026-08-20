@@ -89,12 +89,14 @@ final class MapPresenter: ObservableObject {
 
     // MARK: - Derived Flags
 
+    /// Flying mode: predictions active, navigate to predicted landing point
     var isFlying: Bool {
-        balloonPhase != .landed && balloonPhase != .unknown
+        balloonPositionService.currentState.isFlying
     }
 
+    /// Landed mode: no predictions, navigate to actual balloon position
     var isLanded: Bool {
-        balloonPhase == .landed
+        balloonPositionService.currentState.isLanded
     }
 
     var routeVisible: Bool {

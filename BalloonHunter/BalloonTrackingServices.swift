@@ -27,6 +27,38 @@ enum DataState: CustomStringConvertible, Equatable {
         }
     }
 
+    // MARK: - Mode Detection (Two Primary Modes)
+
+    /// Balloon is flying - predictions active, navigate to predicted landing
+    var isFlying: Bool {
+        switch self {
+        case .liveBLEFlying, .aprsFlying:
+            return true
+        case .startup, .liveBLELanded, .waitingForAPRS, .aprsLanded, .noTelemetry:
+            return false
+        }
+    }
+
+    /// Balloon has landed - no predictions, navigate to actual position
+    var isLanded: Bool {
+        switch self {
+        case .liveBLELanded, .aprsLanded:
+            return true
+        case .startup, .liveBLEFlying, .waitingForAPRS, .aprsFlying, .noTelemetry:
+            return false
+        }
+    }
+
+    /// Has active telemetry (BLE or APRS)
+    var hasActiveTelemetry: Bool {
+        switch self {
+        case .liveBLEFlying, .liveBLELanded, .aprsFlying, .aprsLanded:
+            return true
+        case .startup, .waitingForAPRS, .noTelemetry:
+            return false
+        }
+    }
+
     var requiresAPRSPolling: Bool {
         switch self {
         case .startup, .noTelemetry, .waitingForAPRS, .aprsFlying, .aprsLanded:
@@ -408,32 +440,7 @@ final class BalloonPositionService: ObservableObject {
         case .liveBLELanded:
             // BLE telemetry active, balloon landed
             aprsService.disablePolling()
-            // Lock landing point on first detection, only update if balloon moves significantly (>50m)
-            if let position = currentPositionData {
-                let currentCoord = CLLocationCoordinate2D(latitude: position.latitude, longitude: position.longitude)
-
-                if let locked = lockedLandingPosition {
-                    // Landing position already locked - check if balloon moved significantly
-                    let distance = CLLocation(latitude: locked.latitude, longitude: locked.longitude)
-                        .distance(from: CLLocation(latitude: currentCoord.latitude, longitude: currentCoord.longitude))
-
-                    if distance >= landingPositionUpdateThreshold {
-                        // Significant movement detected - update locked position and route
-                        appLog("BalloonPositionService: Landed balloon moved \(Int(distance))m - updating landing position", category: .service, level: .info)
-                        lockedLandingPosition = currentCoord
-                        Task {
-                            await landingPointTrackingService?.updateLandingPoint(currentCoord, source: .currentPosition)
-                        }
-                    }
-                } else {
-                    // First time landing detected - lock position
-                    appLog("BalloonPositionService: Landing detected - locking position at [\(String(format: "%.5f", currentCoord.latitude)), \(String(format: "%.5f", currentCoord.longitude))]", category: .service, level: .info)
-                    lockedLandingPosition = currentCoord
-                    Task {
-                        await landingPointTrackingService?.updateLandingPoint(currentCoord, source: .currentPosition)
-                    }
-                }
-            }
+            updateLandingPosition()
 
         case .waitingForAPRS:
             // BLE lost - start APRS polling and wait for response
@@ -458,32 +465,7 @@ final class BalloonPositionService: ObservableObject {
         case .aprsLanded:
             // APRS-only mode with old/stale data indicating landing
             aprsService.enablePolling()
-            // Lock landing point on first detection, only update if balloon moves significantly (>50m)
-            if let position = currentPositionData {
-                let currentCoord = CLLocationCoordinate2D(latitude: position.latitude, longitude: position.longitude)
-
-                if let locked = lockedLandingPosition {
-                    // Landing position already locked - check if balloon moved significantly
-                    let distance = CLLocation(latitude: locked.latitude, longitude: locked.longitude)
-                        .distance(from: CLLocation(latitude: currentCoord.latitude, longitude: currentCoord.longitude))
-
-                    if distance >= landingPositionUpdateThreshold {
-                        // Significant movement detected - update locked position and route
-                        appLog("BalloonPositionService: Landed balloon moved \(Int(distance))m - updating landing position", category: .service, level: .info)
-                        lockedLandingPosition = currentCoord
-                        Task {
-                            await landingPointTrackingService?.updateLandingPoint(currentCoord, source: .currentPosition)
-                        }
-                    }
-                } else {
-                    // First time landing detected - lock position
-                    appLog("BalloonPositionService: Landing detected - locking position at [\(String(format: "%.5f", currentCoord.latitude)), \(String(format: "%.5f", currentCoord.longitude))]", category: .service, level: .info)
-                    lockedLandingPosition = currentCoord
-                    Task {
-                        await landingPointTrackingService?.updateLandingPoint(currentCoord, source: .currentPosition)
-                    }
-                }
-            }
+            updateLandingPosition()
             // Fill track gaps from APRS when entering APRS mode
             balloonTrackService?.fillTrackGapsFromAPRS(sondeName: currentBalloonName)
         }
@@ -493,6 +475,30 @@ final class BalloonPositionService: ObservableObject {
 
         // Notify other services of state-specific behavior changes
         notifyStateSpecificBehavior(state)
+    }
+
+    /// Lock landing position on first detection, update only if balloon moves >50m
+    /// Used by both liveBLELanded and aprsLanded states
+    private func updateLandingPosition() {
+        guard let position = currentPositionData else { return }
+
+        let currentCoord = CLLocationCoordinate2D(latitude: position.latitude, longitude: position.longitude)
+
+        if let locked = lockedLandingPosition {
+            let distance = CLLocation(latitude: locked.latitude, longitude: locked.longitude)
+                .distance(from: CLLocation(latitude: currentCoord.latitude, longitude: currentCoord.longitude))
+
+            guard distance >= landingPositionUpdateThreshold else { return }
+
+            appLog("BalloonPositionService: Landed balloon moved \(Int(distance))m - updating landing position", category: .service, level: .info)
+        } else {
+            appLog("BalloonPositionService: Landing detected - locking position at [\(String(format: "%.5f", currentCoord.latitude)), \(String(format: "%.5f", currentCoord.longitude))]", category: .service, level: .info)
+        }
+
+        lockedLandingPosition = currentCoord
+        Task {
+            await landingPointTrackingService?.updateLandingPoint(currentCoord, source: .currentPosition)
+        }
     }
 
     // MARK: - Prediction Integration

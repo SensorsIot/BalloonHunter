@@ -27,6 +27,11 @@ struct SondeHubSondeData: Codable {
     var effectiveFrequency: Double {
         return tx_frequency ?? frequency ?? 0.0
     }
+
+    // Check if sonde is currently flying (above 500m altitude)
+    var isFlying: Bool {
+        return alt > 500
+    }
 }
 
 // Site response is a dictionary with serial numbers as keys and sonde data as values

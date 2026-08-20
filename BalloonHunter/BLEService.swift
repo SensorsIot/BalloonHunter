@@ -56,6 +56,7 @@ import Combine
 import SwiftUI
 import CoreBluetooth
 import OSLog
+import AudioToolbox
 
 // MARK: - Internal BLE Parsing Structure
 // Pure three-channel architecture - no legacy TelemetryData
@@ -241,6 +242,14 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
     // AFC tracking for business logic
     private var afcHistory: [Double] = []
     private let afcHistoryMaxSize = 10
+
+    /// Play a beep sound on the phone when balloon signal is decoded
+    /// Controlled by the same mute toggle as the tracker buzzer
+    private func playSignalDecodedBeep(muted: Bool) {
+        guard !muted else { return }
+        // Play system sound (1052 = short beep, similar to notification)
+        AudioServicesPlaySystemSound(1052)
+    }
 
     // MARK: - Settings Properties
     // Radio/Sonde settings (from Type 0/1/2 packets)
@@ -733,6 +742,9 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
                 if positionData.latitude == 0.0 && positionData.longitude == 0.0 {
                     return // Skip invalid coordinates
                 }
+
+                // Play beep on phone when signal is decoded
+                playSignalDecodedBeep(muted: radioData.buzmute)
 
                 DispatchQueue.main.async {
                     // Update radioSettings with probe type and frequency from Type 1 packet

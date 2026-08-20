@@ -133,27 +133,51 @@ extension ServiceCoordinator {
         // Wait for definitive answers from both services (with timeout)
         await waitForServiceAnswers(maxWaitTime: maxStartupTime - Date().timeIntervalSince(startTime))
 
-        // Step 4b: Show sonde selection popup if sondes are available
+        // Step 4b: Check for flying sondes - auto-select if found, otherwise show selection
         await MainActor.run {
             startupProgress = "Step 4: Select Sonde"
         }
 
         // Get available sondes from APRS service (sorted by datetime, most recent first)
         let sondes = balloonPositionService.aprsService.availableSondes
-        let mostRecentSerial = sondes.first?.serial
 
-        await MainActor.run {
-            availableSondesForSelection = sondes
-            selectedSondeSerial = mostRecentSerial
-            // Only show popup if there are sondes available
-            if !sondes.isEmpty {
+        // Check if any sonde is flying (altitude > 500m)
+        let flyingSonde = sondes.first { $0.isFlying }
+
+        if let flyingSonde = flyingSonde {
+            // Flying sonde found - auto-select it, skip popup
+            appLog("STARTUP: Step 4b - Flying sonde detected: '\(flyingSonde.serial)' at \(Int(flyingSonde.alt))m - auto-selecting", category: .general, level: .info)
+
+            await MainActor.run {
+                selectedSondeSerial = flyingSonde.serial
+                availableSondesForSelection = sondes
+            }
+
+            // Directly confirm the flying sonde selection
+            confirmSondeSelection()
+
+        } else {
+            // No flying sonde - show selection popup
+            appLog("STARTUP: Step 4b - No flying sonde, showing selection popup (\(sondes.count) available)", category: .general, level: .info)
+
+            await MainActor.run {
+                availableSondesForSelection = sondes
+                selectedSondeSerial = sondes.first?.serial
                 showSondeSelectionPopup = true
             }
-        }
-        appLog("STARTUP: Step 4b - \(sondes.count) sondes available, showing selection popup", category: .general, level: .info)
 
-        // Wait for user to confirm or skip (with 5-second auto-confirm)
-        await waitForSondeSelection()
+            // Wait for user to confirm or skip (with 5-second auto-confirm)
+            await waitForSondeSelection()
+        }
+
+        // Step 4c: Check frequency sync if BLE is connected
+        if bleCommunicationService.connectionState.canReceiveCommands,
+           let aprsRadio = balloonPositionService.aprsService.latestRadioChannel {
+            appLog("STARTUP: Step 4c - BLE connected, checking frequency sync", category: .general, level: .info)
+            checkStartupFrequencySync(aprsRadio: aprsRadio)
+        } else {
+            appLog("STARTUP: Step 4c - BLE not ready, skipping frequency sync", category: .general, level: .info)
+        }
 
         // Step 5: State Machine Handoff & UI Transition
         await MainActor.run {
