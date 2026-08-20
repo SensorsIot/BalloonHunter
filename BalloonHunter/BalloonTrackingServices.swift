@@ -109,6 +109,9 @@ final class BalloonPositionService: ObservableObject {
     private var lockedLandingPosition: CLLocationCoordinate2D? = nil
     private let landingPositionUpdateThreshold: CLLocationDistance = 50.0 // meters
 
+    /// Owns the three landing algorithms and their priority chain.
+    private let landingDetector = LandingDetector()
+
     // Cached prediction data for flying state landing point determination
 
     private var stateEntryTime: Date = Date()
@@ -117,8 +120,6 @@ final class BalloonPositionService: ObservableObject {
     private var isStartupComplete: Bool = false
 
     // Sonde change handling - stash new packet while clearing old sonde data
-    private var sondeChangePosition: PositionData?
-    private var sondeChangeSource: String?
 
     private let bleService: BLECommunicationService
     let aprsService: APRSDataService
@@ -703,105 +704,39 @@ final class BalloonPositionService: ObservableObject {
 
     // MARK: - Landing Detection (moved from BalloonTrackService)
 
-    /// Calculate landing detection based on net movement across packets
+    /// Vector analysis, delegated to `LandingDetector`.
+    ///
+    /// The algorithm and its thresholds live there so they can be tested without
+    /// a radio. This keeps only the job of handing it the track.
     private func calculateLandingDetection() -> Bool {
-        guard let balloonTrackService = balloonTrackService else { return false }
-
-        // Start evaluation at packet 5 (need 5 packets: 0,1,2,3,4)
-        guard balloonTrackService.currentBalloonTrack.count >= 5 else { return false }
-
-        // Dynamic window logic:
-        // Packets 5-19: expand from packet 0 to current packet
-        // Packet 20+: sliding window of most recent 20 packets
-        let availablePackets = balloonTrackService.currentBalloonTrack.count
-        let windowSize = min(20, availablePackets)
-        let recentPoints = Array(balloonTrackService.currentBalloonTrack.suffix(windowSize))
-
-        guard let startPoint = recentPoints.first, let endPoint = recentPoints.last else {
-            return false
-        }
-
-        // Calculate time window for speed calculation
-        let timeWindow = endPoint.timestamp.timeIntervalSince(startPoint.timestamp)
-        guard timeWindow > 0 else { return false }
-
-        // Calculate net movement distance across entire window (3D displacement)
-        let latToMeters = 111320.0 // meters per degree latitude
-        let lonToMeters = latToMeters * cos(endPoint.latitude * .pi / 180)
-
-        let dx = (endPoint.longitude - startPoint.longitude) * lonToMeters
-        let dy = (endPoint.latitude - startPoint.latitude) * latToMeters
-        let dz = endPoint.altitude - startPoint.altitude
-
-        let netDistance = sqrt(dx * dx + dy * dy + dz * dz) // meters
-        let netSpeedMS = netDistance / timeWindow // m/s
-        let netSpeedKmh = netSpeedMS * 3.6 // km/h for logging
-
-        // Simple thresholds
-        let landingThresholdKmh = 3.0 // 3 km/h
-        let landingThresholdMS = landingThresholdKmh / 3.6 // 0.83 m/s
-        let altitudeThresholdM = 3000.0
-
-        // Simple boolean logic: speed < 3 km/h AND altitude < 3000m
-        let isLanded = (netSpeedMS < landingThresholdMS) && (endPoint.altitude < altitudeThresholdM)
-
-        // Only log altitude threshold when relevant
-        let altitudeInfo = endPoint.altitude < 10000 ? " (below 10km)" : ""
-        let thresholdInfo = endPoint.altitude < altitudeThresholdM ? " alt<3km" : ""
-
-        appLog(String(format: "🎯 LANDING [%d]: %.1fm @%.1fkm/h alt=%.0fm%@%@ win=%.1fs → %@",
-                      windowSize, netDistance, netSpeedKmh, endPoint.altitude,
-                      altitudeInfo, thresholdInfo, timeWindow,
-                      isLanded ? "LANDED" : "FLYING"),
-               category: .general, level: .debug)
-
-        return isLanded
+        guard let track = balloonTrackService?.currentBalloonTrack else { return false }
+        return landingDetector.isStoppedByVectorAnalysis(track: track)
     }
 
-    /// Update balloon phase based on position data and landing detection
+    /// Classify the balloon's flight phase, delegated to `LandingDetector`.
+    ///
+    /// The priority chain - a track-based landing beats stale APRS, which beats
+    /// vector analysis, which beats vertical speed - is the business rule, and it
+    /// lives in the detector where it is unit-tested. Sticky by design: once a
+    /// track landing is known, a recovered sonde carried uphill cannot flip the
+    /// app back to flying.
     private func updateBalloonPhase() {
-        guard let currentPosition = currentPositionData else {
-            balloonPhase = .unknown
-            return
+        let trackLanding: TrackLanding? = {
+            guard let ts = balloonTrackService, ts.trackBasedLandingDetected,
+                  let when = ts.trackBasedLandingTime, let position = ts.landingPosition else { return nil }
+            return TrackLanding(index: 0, timestamp: when, coordinate: position, reason: .stationaryPeriod)
+        }()
+
+        let previous = balloonPhase
+        balloonPhase = landingDetector.classifyPhase(
+            track: balloonTrackService?.currentBalloonTrack ?? [],
+            position: currentPositionData,
+            trackLanding: trackLanding
+        )
+
+        if balloonPhase != previous {
+            appLog("BalloonPositionService: Balloon phase \(previous) → \(balloonPhase)", category: .service, level: .info)
         }
-
-        // HIGHEST PRIORITY: Check for track-based landing (20+ minutes stationary in track history)
-        // This is definitive - once detected, balloon stays landed regardless of subsequent movement
-        if let balloonTrack = balloonTrackService, balloonTrack.trackBasedLandingDetected {
-            balloonPhase = .landed
-            appLog("BalloonPositionService: Track-based landing detected - balloon marked as LANDED (stationary period at \(balloonTrack.trackBasedLandingTime?.description ?? "unknown"))", category: .service, level: .info)
-            return
-        }
-
-        // Check for old APRS data (age-based landing)
-        // Use telemetry timestamp (when balloon last transmitted) to detect landing
-        let positionAge = Date().timeIntervalSince(currentPosition.timestamp)
-        let isAprsPosition = currentPosition.telemetrySource == .aprs
-        let aprsLandingAgeThreshold = 120.0 // 2 minutes
-
-        if isAprsPosition && positionAge > aprsLandingAgeThreshold {
-            balloonPhase = .landed
-            appLog("BalloonPositionService: APRS age-based landing detected - balloon marked as LANDED (telemetry age: \(Int(positionAge))s)", category: .service, level: .info)
-            return
-        }
-
-        // BLE landing detection with 5-packet requirement
-        let landingDetected = calculateLandingDetection()
-
-        if landingDetected {
-            balloonPhase = .landed
-        } else {
-            // Determine flight phase based on vertical speed
-            if currentPosition.verticalSpeed > 0 {
-                balloonPhase = .ascending
-            } else if currentPosition.verticalSpeed < 0 {
-                balloonPhase = currentPosition.altitude < 10_000 ? .descendingBelow10k : .descendingAbove10k
-            } else {
-                balloonPhase = .unknown
-            }
-        }
-
-        // DEBUG: Critical debugging for balloon phase
     }
 
     // MARK: - Balloon Display Position Management (moved from ServiceCoordinator)
