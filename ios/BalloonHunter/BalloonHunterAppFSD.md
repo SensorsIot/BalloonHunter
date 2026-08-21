@@ -719,10 +719,10 @@ private func generateCacheKey(lat: Double, lon: Double, altitude: Double, time: 
 }
 ```
 
-**Dual Descent Rate Logic:**
-- **Below 10,000m**: Uses smoothed rate from actual balloon data for accuracy
-- **Above 10,000m**: Uses user-configured descent rate settings
-- Automatic switching provides optimal prediction accuracy throughout flight
+**Descent Rate:** the configured value from Settings, unchanged, at every
+altitude. See *Descent Rate and Parachute Behaviour* for why the app must not
+substitute the observed rate.
+
 
 **State Machine Control:**
 - Predictions enabled only in flying states (ascending, descending)
@@ -1163,7 +1163,7 @@ Call the SondeHub prediction API on demand (manual or scheduled), cache results 
 
 - Latest position frame (`PositionData`).
 - User settings (burst altitude, ascent/descent rates).
-- Smoothed descent rate supplied by `BalloonTrackService` when the balloon is below 10 000 m.
+- The descent rate goes to the predictor unchanged; nothing measured is substituted.
 - Cache key components (balloon ID, location, altitude, time bucket).
 #### Triggers
 
@@ -1597,16 +1597,22 @@ the automatic update Phase 3 asks for is not achievable through Apple Maps.
 
 ### Descent Rate and Parachute Behaviour
 
-**The descent rate sent to the predictor is the configured one, for the whole
-flight.** Tawhiri's `descent_rate` is a sea-level terminal velocity, which is
-exactly what the setting holds, and the predictor scales it with altitude itself.
-Reality is applied afterwards by comparing how far the sonde has actually fallen
-against how far Tawhiri said it would.
+**The descent rate sent to the predictor is the configured one, unchanged, for
+the whole flight.** Tawhiri's `descent_rate` is a sea-level terminal velocity,
+which is exactly what the setting holds, and the predictor scales it with
+altitude itself. On the SondeHub path the app applies **no correction of any kind**
+to the request - what is in Settings is what is sent, from launch to landing.
 
 The app used to substitute the sonde's *observed* rate below 10 000 m. That was a
 category error - handing Tawhiri a figure already scaled for altitude so it scaled
-it again - and it has been removed. With the comparison doing the work at any
-altitude, the 10 000 m threshold no longer governs the prediction at all.
+it again - and it has been removed, along with the 10 000 m threshold's influence
+on the prediction.
+
+Adapting the rate to what the sonde is actually doing is real work and is **not
+done here**. It belongs to the own predictor (see the prospective data collection
+below), which owns the model rather than trying to steer someone else's from
+outside. Until that exists, a flight whose parachute misbehaves will be predicted
+wrongly, and the app says nothing about it. That is a known, accepted gap.
 
 The distinction between descending above and below 10 000 m now serves one
 purpose: the balloon marker is orange above and red below, because a balloon
@@ -1617,26 +1623,27 @@ below 10 km is coming down soon and near enough to matter.
 - **Slow descent** - the sonde stays aloft far longer than modelled and drifts well beyond the prediction. Observed on W4214915 (31 July 2026): ~2.3 m/s near the ground against an assumed 5.0, giving 22 extra minutes below 10 km alone and a landing roughly 50 km from the first prediction.
 - **Partially opened parachute** - fast descent and a hard landing. This is the case that causes harm and is the more important of the two to catch.
 
-**Correction method: compare against Tawhiri's own trajectory.** Every prediction
-returns predicted altitude against time, so the reference for "how fast should it
-be falling" already exists and does not need reproducing. Measured across the
-**entire fall since burst** rather than between consecutive samples, so the drop
-integrates and the estimate sharpens as the descent proceeds:
+**Candidate method for the own predictor, not implemented in the app:** compare
+against Tawhiri's own trajectory. Every prediction returns predicted altitude
+against time, so the reference for "how fast should it be falling" already exists
+and does not need reproducing. Measured across the **entire fall since burst**
+rather than between consecutive samples, so the drop integrates and the estimate
+sharpens as the descent proceeds:
 
 ```
 ratio           =  actual drop since burst  /  predicted drop over the same span
-corrected rate  =  rate last sent  x  ratio
+adapted rate    =  rate last sent  x  ratio
 ```
 
-A ratio below 1 means the sonde is falling short of the prediction and the rate
-must come down. The correction refuses to answer below a minimum accumulated drop
-(timing jitter dominates a small fall), steps rather than leaps when the ratio is
-extreme (which means the reference no longer describes this flight), and rejects
-a result outside the plausible range rather than sending a near-zero rate that
-would make predicted time aloft diverge.
+A ratio below 1 means the sonde is falling short of the prediction. An earlier
+implementation of this lived in the app and has been removed; it steered a model
+it did not own, and its guard constants (minimum accumulated drop, step cap,
+plausible range) were chosen rather than measured. Recorded here as a starting
+point for whoever builds the predictor, not as an approved requirement.
 
-`DescentRateModel` carries this as a pure value type and is unit-tested,
-including that repeated application converges rather than oscillates.
+The evidence it rests on is kept in `RealFlightTests`, stated as plain
+measurement: below 10 km, W4214915 averaged under 4 m/s against an assumed 5.0,
+and the normal control separates from it by more than 0.5 m/s.
 
 **Why the raw rate cannot be sent: `descent_rate` is a sea-level terminal velocity, not the current rate.** Tawhiri models atmospheric density itself: probing the API from 3-30 km at fixed rates gives a flight time of 0.44-0.84 of the naive `altitude / rate`, and the implied scale height settles at **~15 500 m** above 12 km. Terminal velocity scales as `1 / sqrt(density)`, so a measured rate converts with:
 
@@ -1646,7 +1653,7 @@ descent_rate_to_send  =  v_measured * exp(-altitude / 15500)
 
 Sending the raw instantaneous rate is a category error: at 20 km a sonde falls at ~14 m/s, and Tawhiri would scale *that* up again for altitude. It also explains the observed behaviour where successive landing predictions march in a straight line - the raw rate falls roughly 13x during a descent, so each prediction assumes more time aloft than the last and pushes the landing further downwind.
 
-**Open, and deliberately not specified yet:** how early the two failure modes can be told apart. Measured on one slow flight against one normal control, the corrected estimates were indistinguishable 5-10 minutes after burst (3.46 vs 3.68) and only separated after roughly 20-25 minutes. Two flights and one control cannot support a threshold. A prospective data collection across Payerne flights is planned to settle it.
+**Open, and deliberately not specified yet:** how early the two failure modes can be told apart. Measured on one slow flight against one normal control, the ratio-based estimates were indistinguishable 5-10 minutes after burst (3.46 vs 3.68) and only separated after roughly 20-25 minutes. Two flights and one control cannot support a threshold. A prospective data collection across Payerne flights is planned to settle it.
 
 ### Phase 4 - On Foot
 
@@ -1904,7 +1911,7 @@ Text in Columns: left aligned
     *   **Orange**: The app is in APRS fallback mode.
     *   **Red**: Telemetry is stale (no data received for more than 3 seconds).
 *   **Speed Colors**: The vertical speed is colored green for ascending and red for descending.
-*   **Descent Rate Color**: The adjusted descent rate is colored green when it is being used for predictions.
+*   **Descent Rate**: shown in the primary colour. It is a measurement, not a setting the prediction follows, so there is no state to colour it by.
 
 ### Data Flow
 

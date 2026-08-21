@@ -96,31 +96,30 @@ final class RealFlightTests: XCTestCase {
         return (first.altitude - last.altitude, last.timestamp.timeIntervalSince(first.timestamp))
     }
 
+    /// What the sonde actually averaged below 10 km, in m/s.
+    private func observedRateBelowTenK(_ name: String) throws -> Double {
+        let seg = try belowTenK(name)
+        return seg.drop / seg.seconds
+    }
+
     func testSlowFlightFallsMarkedlyShortOfTheAssumedRate() throws {
-        let seg = try belowTenK("W4214915")
-        let model = DescentRateModel()
-        let comparison = DescentRateModel.FallComparison(
-            actualDrop: seg.drop, predictedDrop: 5.0 * seg.seconds, rateUsed: 5.0)
+        // The settings rate is 5 m/s and stays 5 m/s for the whole flight. This
+        // is the evidence that it was the wrong number for this flight, and how
+        // early the data said so.
+        let observed = try observedRateBelowTenK("W4214915")
+        XCTAssertLessThan(observed, 4.0, "a slow chute must fall well under the assumed rate, got \(observed)")
 
-        let corrected = try XCTUnwrap(model.correctedRate(from: comparison))
-        XCTAssertLessThan(corrected, 4.0, "a slow chute must pull the rate down, got \(corrected)")
-
-        let deviation = try XCTUnwrap(model.deviationPercent(from: comparison))
+        let deviation = (observed / 5.0 - 1) * 100
         XCTAssertLessThan(deviation, -20, "should read as clearly slower than assumed, got \(deviation)%")
     }
 
     func testTheTwoFlightsAreDistinguishable() throws {
-        // The discrimination the whole feature rests on. If a slow chute and a
-        // normal one correct to the same rate, none of this is worth building.
-        func correction(_ name: String) throws -> Double {
-            let seg = try belowTenK(name)
-            return try XCTUnwrap(DescentRateModel().correctedRate(
-                from: .init(actualDrop: seg.drop, predictedDrop: 5.0 * seg.seconds, rateUsed: 5.0)))
-        }
-        let slow = try correction("W4214915")
-        let normal = try correction("W4140855")
+        // The discrimination any future adaptation rests on. If a slow chute and
+        // a normal one look the same in the data, none of it is worth building.
+        let slow = try observedRateBelowTenK("W4214915")
+        let normal = try observedRateBelowTenK("W4140855")
 
-        XCTAssertLessThan(slow, normal, "the slow flight must correct to a lower rate than the control")
+        XCTAssertLessThan(slow, normal, "the slow flight must read lower than the control")
         XCTAssertGreaterThan(normal - slow, 0.5, "separation was only \(normal - slow) m/s")
     }
 

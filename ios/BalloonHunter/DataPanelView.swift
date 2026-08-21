@@ -114,7 +114,7 @@ struct DataPanelView: View {
                         let burstKillerExpiry = burstKillerExpiryString()
                         HStack(spacing: 0) {
                             Text("Descent Rate: \(descentValue) m/s")
-                                .foregroundColor(mapPresenter.descentRateCorrected ? .green : .primary)
+                                .foregroundColor(.primary)
                             Text("  •  Burst killer: \(burstKillerExpiry)")
                                 .foregroundColor(.primary)
                         }
