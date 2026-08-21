@@ -177,7 +177,9 @@ struct PredictionData {
     let burstAltitude: Double?
     let flightTime: TimeInterval?
     let metadata: [String: Any]?
-    let usedSmoothedDescentRate: Bool
+    /// True when the predicted descent rate was corrected against how far the
+    /// sonde has actually fallen, rather than left at the configured value.
+    let descentRateCorrected: Bool
 }
 
 enum LandingPredictionSource: String, Codable {

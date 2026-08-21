@@ -41,7 +41,8 @@ final class MapPresenter: ObservableObject {
     // MOVED FROM ServiceCoordinator: Additional UI state
     @Published private(set) var connectionStatus: ConnectionStatus = .disconnected
     @Published private(set) var smoothedDescentRate: Double? = nil
-    @Published private(set) var smoothenedPredictionActive: Bool = false
+    /// True when the prediction is running on a corrected descent rate.
+    @Published private(set) var descentRateCorrected: Bool = false
     @Published private(set) var isDataStale: Bool = false
     @Published private(set) var aprsDataAvailable: Bool = false
     @Published private(set) var showAllAnnotations: Bool = false
@@ -312,7 +313,7 @@ final class MapPresenter: ObservableObject {
                 guard let self = self else { return }
                 self.predictionData = prediction
                 // Update smoothed descent rate flag from prediction data
-                self.smoothenedPredictionActive = prediction?.usedSmoothedDescentRate ?? false
+                self.descentRateCorrected = prediction?.descentRateCorrected ?? false
 
                 // Update prediction path based on state machine and prediction data
                 if let prediction = prediction,

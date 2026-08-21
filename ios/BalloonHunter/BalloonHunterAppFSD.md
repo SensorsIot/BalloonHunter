@@ -1597,7 +1597,20 @@ the automatic update Phase 3 asks for is not achievable through Apple Maps.
 
 ### Descent Rate and Parachute Behaviour
 
-**Why the 10 000 m threshold exists.** Above it, the simulation is adequate and differences do not matter. Below it, the balloon begins to drift and the descent rate governs where it lands.
+**The descent rate sent to the predictor is the configured one, for the whole
+flight.** Tawhiri's `descent_rate` is a sea-level terminal velocity, which is
+exactly what the setting holds, and the predictor scales it with altitude itself.
+Reality is applied afterwards by comparing how far the sonde has actually fallen
+against how far Tawhiri said it would.
+
+The app used to substitute the sonde's *observed* rate below 10 000 m. That was a
+category error - handing Tawhiri a figure already scaled for altitude so it scaled
+it again - and it has been removed. With the comparison doing the work at any
+altitude, the 10 000 m threshold no longer governs the prediction at all.
+
+The distinction between descending above and below 10 000 m now serves one
+purpose: the balloon marker is orange above and red below, because a balloon
+below 10 km is coming down soon and near enough to matter.
 
 **Requirement: abnormal parachute behaviour must be detected as early as possible.** Two failure modes, opposite in sign:
 

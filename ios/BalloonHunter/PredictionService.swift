@@ -186,7 +186,8 @@ final class PredictionService: ObservableObject {
     // Time calculations (moved from DataPanelView for proper separation of concerns)
     @Published var predictedLandingTimeString: String = "--:--"
     @Published var remainingFlightTimeString: String = "--:--"
-    private var usingSmoothedDescentRate: Bool = false
+    /// Set once the descent-rate correction has something to work with.
+    private var descentRateCorrected: Bool = false
     
     // MARK: - Private State
     private var lastProcessedPosition: PositionData?
@@ -362,7 +363,11 @@ final class PredictionService: ObservableObject {
             appLog("PredictionService: Balloon descending: \(balloonDescends) (verticalSpeed: \(position.verticalSpeed) m/s)", category: .service, level: .info)
 
             // Calculate effective descent rate
-            let effectiveDescentRate = calculateEffectiveDescentRate(position: position)
+            // Tawhiri's descent_rate is a sea-level terminal velocity, which is
+            // exactly what the setting holds, so it is the base for the whole
+            // flight. Reality is applied afterwards by comparing how far the
+            // sonde has actually fallen against how far Tawhiri said it would.
+            let effectiveDescentRate = userSettings.descentRate
 
             // Create cache key
             let cacheKey = createCacheKey(position)
@@ -484,6 +489,7 @@ final class PredictionService: ObservableObject {
 
         guard let corrected = descentRateModel.correctedRate(from: comparison) else { return baseRate }
 
+        descentRateCorrected = true
         let deviation = descentRateModel.deviationPercent(from: comparison) ?? 0
         appLog(String(format: "PredictionService: Descent correction — fell %.0f m where %.0f m was predicted (%+.0f%%), rate %.2f → %.2f m/s",
                       actualDrop, predictedDrop, deviation, ref.rateUsed, corrected),
@@ -504,36 +510,6 @@ final class PredictionService: ObservableObject {
                category: .service, level: .info)
     }
 
-    /// Three-channel architecture: Calculate effective descent rate from PositionData
-    private func calculateEffectiveDescentRate(position: PositionData) -> Double {
-        guard let serviceCoordinator = serviceCoordinator else {
-            let val = userSettings.descentRate
-            appLog("PredictionService: Using settings descent rate: \(String(format: "%.2f", val)) m/s (no service coordinator)", category: .service, level: .info)
-            return val
-        }
-
-        let balloonPhase = serviceCoordinator.balloonPositionService.balloonPhase
-
-        // Use smoothed descent rate only when descending below 10k with valid smoothed data
-        if balloonPhase == .descendingBelow10k,
-           let balloonTrackService = balloonTrackService,
-           let smoothedRate = balloonTrackService.motionMetrics.adjustedDescentRateMS,
-           smoothedRate != 0 {
-            let val = abs(smoothedRate)
-            usingSmoothedDescentRate = true
-            appLog("PredictionService: Using smoothed descent rate: \(String(format: "%.2f", val)) m/s (descendingBelow10k)", category: .service, level: .info)
-            return val
-        } else {
-            let val = userSettings.descentRate
-            usingSmoothedDescentRate = false
-            let reason = balloonPhase == .descendingAbove10k ? "descendingAbove10k" :
-                        balloonPhase == .ascending ? "ascending" :
-                        balloonPhase == .landed ? "landed" :
-                        balloonPhase == .unknown ? "unknown" : "no smoothed rate"
-            appLog("PredictionService: Using settings descent rate: \(String(format: "%.2f", val)) m/s (\(reason))", category: .service, level: .info)
-            return val
-        }
-    }
 
     private func createCacheKey(_ position: PositionData) -> String {
         return PredictionCache.makeKey(
@@ -729,7 +705,7 @@ final class PredictionService: ObservableObject {
             burstAltitude: ascentLast?.altitude,
             flightTime: nil,
             metadata: nil,
-            usedSmoothedDescentRate: self.usingSmoothedDescentRate
+            descentRateCorrected: self.descentRateCorrected
         )
 
         // Update time calculations for direct API calls
@@ -835,7 +811,7 @@ final class PredictionService: ObservableObject {
         hasValidPrediction = false
         lastPredictionTime = nil
         lastProcessedPosition = nil
-        usingSmoothedDescentRate = false
+        descentRateCorrected = false
         appLog("PredictionService: All data cleared for new sonde (cancelled in-flight prediction)", category: .service, level: .info)
     }
 }
