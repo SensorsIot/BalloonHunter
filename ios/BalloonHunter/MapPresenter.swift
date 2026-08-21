@@ -495,7 +495,9 @@ final class MapPresenter: ObservableObject {
                     appLog("MapPresenter: Received track update with \(points.count) points", category: .general, level: .debug)
                 }
                 self?.logRedTrack(points)
-                self?.trackPoints = points
+                // Draw a simplified polyline; the full 1 Hz track stays in
+                // BalloonTrackService for all calculations.
+                self?.trackPoints = points.simplifiedForDrawing()
                 self?.refitDuringStartup()
             }
             .store(in: &cancellables)

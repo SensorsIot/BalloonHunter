@@ -1104,6 +1104,8 @@ Build the flight history, smooth velocities, detect landings, derive descent met
 
    **The live BLE stream keeps one point per second.** Full rate matters here: smoothing and real-time landing detection run on it, and a balloon sitting on the ground must keep laying down samples so the vector and stationary-period detectors can see it has stopped. Cross-source duplication never happens on the live path, because live APRS is suppressed while BLE is active (below). Map updates immediately on each BLE point and once per APRS batch.
 
+   **Drawing is simplified; calculations are not.** `BalloonTrackService.currentBalloonTrack` holds the full 1 Hz track — every calculation (landing detection, descent rate, position dedup) uses it. `MapPresenter` draws `currentBalloonTrack.simplifiedForDrawing()` instead — an iterative Douglas–Peucker that drops points within ~25 m of the line they sit on, so a long flight's polyline renders cheaply while burst, wind shifts and the descent curve are kept. The simplification is pure and lives only on the draw path; no calculation ever sees the thinned track.
+
 #### Reading a sonde: the four steps
 
 Selecting a sonde (startup **and** every new sonde go through `startTrackingSonde`)

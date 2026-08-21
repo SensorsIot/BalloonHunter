@@ -175,6 +175,48 @@ struct BalloonTrackPoint: Codable {
 }
 
 extension Array where Element == BalloonTrackPoint {
+    /// A simplified copy of the track **for drawing only** — the full 1 Hz track
+    /// is kept for every calculation (landing detection, descent rate, dedup);
+    /// this just thins the map polyline so a long flight renders fast. Iterative
+    /// Douglas–Peucker: drops points that lie within `toleranceMeters` of the
+    /// line they sit on, so straight runs collapse to their endpoints while turns
+    /// (burst, wind shifts, the descent curve) are kept. Never on the calculation
+    /// path. Default ~25 m is far below a map pixel at hunt zoom.
+    func simplifiedForDrawing(toleranceMeters: Double = 25.0) -> [BalloonTrackPoint] {
+        guard count > 2 else { return self }
+        var keep = [Bool](repeating: false, count: count)
+        keep[0] = true; keep[count - 1] = true
+        var stack = [(0, count - 1)]
+        while let (start, end) = stack.popLast() {
+            guard end > start + 1 else { continue }
+            var maxDist = 0.0, index = -1
+            for i in (start + 1)..<end {
+                let d = Self.perpendicularMeters(self[i], self[start], self[end])
+                if d > maxDist { maxDist = d; index = i }
+            }
+            if maxDist > toleranceMeters, index != -1 {
+                keep[index] = true
+                stack.append((start, index))
+                stack.append((index, end))
+            }
+        }
+        return enumerated().compactMap { keep[$0.offset] ? $0.element : nil }
+    }
+
+    /// Perpendicular distance in metres from point `p` to the segment `a`–`b`,
+    /// using a local equirectangular approximation (fine over a flight's extent).
+    private static func perpendicularMeters(_ p: BalloonTrackPoint, _ a: BalloonTrackPoint, _ b: BalloonTrackPoint) -> Double {
+        let mPerLat = 111_320.0
+        let mPerLon = 111_320.0 * cos(a.latitude * .pi / 180)
+        let bx = (b.longitude - a.longitude) * mPerLon, by = (b.latitude - a.latitude) * mPerLat
+        let px = (p.longitude - a.longitude) * mPerLon, py = (p.latitude - a.latitude) * mPerLat
+        let len2 = bx * bx + by * by
+        if len2 == 0 { return (px * px + py * py).squareRoot() }
+        let t = Swift.max(0.0, Swift.min(1.0, (px * bx + py * by) / len2))
+        let dx = px - t * bx, dy = py - t * by
+        return (dx * dx + dy * dy).squareRoot()
+    }
+
     /// Merge `incoming` points into this track, skipping any whose physical
     /// position is already present, and return the result in chronological order.
     ///

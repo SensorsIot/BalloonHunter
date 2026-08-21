@@ -105,6 +105,33 @@ final class TrackDedupTests: XCTestCase {
 
     // MARK: - Legacy persistence
 
+    // MARK: - Drawing simplification (full track kept for calculations)
+
+    func testSimplify_straightRunCollapsesToEndpoints() {
+        // 50 collinear 1 Hz points (due north) → just the two endpoints.
+        let line = (0..<50).map { i in pt(47.0 + Double(i) * 1e-4, 7.0, 1000, Double(i), .aprs) }
+        let simplified = line.simplifiedForDrawing(toleranceMeters: 25)
+        XCTAssertEqual(simplified.count, 2, "a straight run keeps only its endpoints")
+        XCTAssertEqual(simplified.first?.latitude, 47.0)
+        XCTAssertEqual(simplified.last?.latitude, 47.0 + 49e-4)
+    }
+
+    func testSimplify_keepsACorner() {
+        // An L-shape: north then east. The corner must survive.
+        var pts = (0..<20).map { i in pt(47.0 + Double(i) * 1e-4, 7.0, 1000, Double(i), .aprs) }
+        pts += (1..<20).map { i in pt(47.0 + 19e-4, 7.0 + Double(i) * 1e-4, 1000, Double(20 + i), .aprs) }
+        let simplified = pts.simplifiedForDrawing(toleranceMeters: 25)
+        XCTAssertTrue(simplified.count >= 3, "the corner is preserved, not collapsed")
+        XCTAssertTrue(simplified.count < pts.count, "but it is still simplified")
+        // The corner point (47.0+19e-4, 7.0) must be present.
+        XCTAssertTrue(simplified.contains { abs($0.latitude - (47.0 + 19e-4)) < 1e-9 && abs($0.longitude - 7.0) < 1e-9 })
+    }
+
+    func testSimplify_smallTrackUntouched() {
+        let two = [pt(47.0, 7.0, 1000, 0, .aprs), pt(47.001, 7.001, 1000, 1, .aprs)]
+        XCTAssertEqual(two.simplifiedForDrawing().count, 2)
+    }
+
     func testLegacyPointWithoutSourceDecodes() throws {
         // Tracks persisted before source tracking existed must still load.
         let legacy = #"{"latitude":47.5,"longitude":7.5,"altitude":1000,"timestamp":0,"verticalSpeed":-4,"horizontalSpeed":1}"#
