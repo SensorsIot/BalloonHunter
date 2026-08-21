@@ -1789,6 +1789,18 @@ knowing where the balloon lies:**
   launches from ~490 m, and a sonde in the hills can rest higher than one still
   falling over the lake.
 
+**Drawing the predicted-descent line — one decision, one place.** Visibility of
+the blue descent polyline is decided **only** in `MapPresenter`
+(`predictionPathVisible`): it publishes the polyline through flight and through
+landed-by-silence, and sets it to `nil` on a confirmed touchdown or a no-data
+state. `TrackingMapView` draws it whenever the presenter has published one — it
+does **not** re-gate on flight state. (Regression guarded: the view once drew it
+only `if isFlying`, so the line vanished the moment the state became `aprsLanded`
+even though the presenter had published it and the route and markers were shown.
+For a sonde lost near the ground the line is short — target and last fix only a
+couple hundred metres apart — but it is drawn; for a flight caught higher it is
+the full descent curve.)
+
 ### Phase 4 - On Foot
 
 The hunter is out of the car, walking, with the receiver in one hand and the
