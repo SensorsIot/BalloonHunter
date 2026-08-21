@@ -1,0 +1,78 @@
+To-do list (surgical edits)
+
+Make one canonical State Machine section; compress duplicates elsewhere
+
+Keep the detailed, normative state list + transitions in one section (recommend: the current “State Machine Implementation” block). In other places, replace with a 1-paragraph summary and a link (“See State Machine”). Sources to deduplicate: repeated liveBLEFlying, aprsLanded, noTelemetry blocks.
+
+Harmonize APRS service wording
+
+Replace “only supplies raw telemetry frames” with:
+“Publishes normalized telemetry frames; additionally fetches historical APRS tracks for gap-filling when enabled by the coordinator/state machine.” This reconciles the “raw” vs “gap fill” roles. 
+
+BalloonHunterAppFSD
+
+Pin responsibilities for landing detection
+
+Declare BalloonPositionService as the sole authority for real-time landing phase (vector/age rules).
+
+Keep BalloonTrackService responsible only for offline/track-based landing post-factum analysis + optional truncation; add an explicit forward reference and remove any language that implies it sets the phase directly. (You already hint “MOVED TO BALLOONPOSITIONSERVICE”—make this normative and unique.)
+
+Unify the “APRS on startup” exception
+
+The doc mentions an exception (“APRS polling starts immediately during startup”). Place this rule once in the State Machine “Key Design Principles” and reference it from Startup Responsibilities—avoid repeating the same sentence verbatim in two places.
+
+Terminology consistency pass (machine-readability)
+
+Normalize names: “MySondyGo” (device), “APRS Telemetry Service” / “APRSTelemetryService”, “SondeHub”. Fix typos: frequendy → frequency, mergrf → merged, Sttes → States, th → the, RadioSondyGo → MySondyGo.
+
+Use one enum naming style throughout (.readyForCommands, .dataReady, etc.). 
+
+BalloonHunterAppFSD
+
+Single-source landing point rule
+
+You already describe the coordinator as the landing point arbitrator; add a tiny normative statement near LandingPointTrackingService: “LandingPointTrackingService only accepts updates from ServiceCoordinator; no other service writes to it.” This prevents parallel publications. 
+
+BalloonHunterAppFSD
+
+Tighten the File Structure section
+
+Keep the 22-file inventory, but move narrative explanations (MapPresenter code blocks, TrackingMapView layout) to their own sections and link from File Structure. This makes the structure skimmable for agents.
+
+State inputs table (compact, canonical)
+
+Add a small table listing input signals (bleTelemetryState, aprsTelemetryIsAvailable, balloonPhase), their owners, and update cadence. This avoids ambiguity about which service sets which flag. (Currently spread across multiple sections.)
+
+APRS gap-fill guardrails pulled up front
+
+In the APRS section, preface gap-fill with its two triggers (historical >20 min and background-return flag) and “slot-per-second de-dup” rule. It’s beautifully specified later—surface it earlier so readers don’t miss the constraints. 
+
+BalloonHunterAppFSD
+
+Explicit error & cancellation policy box
+
+You already define task cancellation for prediction/route/APRS fill. Add a unified “Cancellation & Retry Policy” subsection (timeouts, jitter/backoff, when to abandon) and link each service’s detailed behavior there.
+
+UI status color semantics in one place
+
+Consolidate the color/status rules (frame colors, icon colors) into a single “UI Status Semantics” appendix and reference it from DataPanelView and BLE state notes.
+
+Compact glossary
+
+Add a short glossary for: Landing Point, Balloon Phase, Prediction Path, APRSTelemetryIsAvailable, BLETelemetryState, Track-based Landing—with single-sentence, code-friendly definitions to aid LLM parsing. (Terms appear in many places.)
+
+Nomenclature for streams and models
+
+In “Three-Channel Data Architecture,” finalize the exact type names (e.g., PositionData, RadioChannelData, SettingsData) as code identifiers and remove parenthetical synonyms to reduce ambiguity. 
+
+BalloonHunterAppFSD
+
+Remove “Do not open a new file…” from structure list
+
+That process note belongs in a contributor guide, not the FSD’s structural inventory. It distracts parsers. 
+
+BalloonHunterAppFSD
+
+Micro-edits for clarity
+
+Fix minor grammar and tighten wording in the Startup/Responsibilities block (“th state machine”, “Landed Sttes”). Keep short sentences and bullet consistency.
