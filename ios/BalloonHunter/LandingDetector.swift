@@ -151,42 +151,6 @@ struct LandingDetector {
         }
     }
 
-    /// The whole landing-display decision, as a pure value: where the landing
-    /// marker and car route should point, and whether the predicted-descent line
-    /// should still be drawn. The services only apply this — so the behaviour
-    /// through the drive and the touchdown is unit-testable end to end without
-    /// them. See FSD *How a Landing Is Determined*.
-    enum LandingTarget: Equatable {
-        case none                                              // nothing to show yet
-        case prediction                                       // the predicted landing (estimate)
-        case confirmed(latitude: Double, longitude: Double)   // the BLE-confirmed touchdown
-    }
-
-    struct LandingResolution: Equatable {
-        let target: LandingTarget
-        let showPredictionPath: Bool
-    }
-
-    /// - Parameters:
-    ///   - reason: `landingReason` for the current sample (nil while flying).
-    ///   - currentPosition: latest fix, used only to lock a confirmed touchdown.
-    ///   - hasPrediction: whether a predicted landing currently exists.
-    func resolveLanding(reason: LandingReason?,
-                        currentPosition: PositionData?,
-                        hasPrediction: Bool) -> LandingResolution {
-        // A confirmed touchdown (stationary, near ground — in practice BLE) locks
-        // the marker and route to the actual point, and the descent line is done.
-        if confirmsTouchdown(reason), let p = currentPosition {
-            return LandingResolution(target: .confirmed(latitude: p.latitude, longitude: p.longitude),
-                                     showPredictionPath: false)
-        }
-        // Flying, or landed-by-silence: the prediction is the estimate. Keep the
-        // marker, route and line on it — the last-heard-at-altitude point is never
-        // the target. Nothing to show until a prediction exists.
-        return LandingResolution(target: hasPrediction ? .prediction : .none,
-                                 showPredictionPath: hasPrediction)
-    }
-
     func landingReason(track: [BalloonTrackPoint],
                        position: PositionData?,
                        trackLanding: TrackLanding? = nil) -> LandingReason? {

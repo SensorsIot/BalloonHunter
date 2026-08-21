@@ -154,60 +154,16 @@ final class LandingSequenceTests: XCTestCase {
         XCTAssertLessThan(drift, 400, "touchdown within a few hundred m of the last APRS fix, got \(Int(drift)) m")
     }
 
-    // MARK: - Landing-display behaviour through the whole drive (pure)
+    // MARK: - What the app locks the landing point to (confirmsTouchdown)
 
-    /// The behaviour the app must show — landing marker, route target, and
-    /// whether the descent line is drawn — resolved as a pure value at each stage
-    /// of the recovery. This is the "what the app does" the services only apply.
-    func testLandingDisplay_predictionUntilBLEConfirms() throws {
-        let samples = try descent()
-        let track = samples.map { trackPoint($0, source: .ble) }
-        let last = samples.last!
-
-        // Descending on fresh telemetry: the estimate is the prediction, the line
-        // is drawn, the route points at the prediction.
-        let flying = position(last, source: .aprs, ageSeconds: 5)
-        let r1 = detector.resolveLanding(reason: detector.landingReason(track: track, position: flying),
-                                         currentPosition: flying, hasPrediction: true)
-        XCTAssertEqual(r1, .init(target: .prediction, showPredictionPath: true))
-
-        // APRS goes silent at altitude: landed-by-silence. The marker/route MUST
-        // stay on the prediction — never jump to the 389 m last-heard point — and
-        // the line stays drawn for the drive.
-        let silent = position(last, source: .aprs, ageSeconds: 300)
-        XCTAssertEqual(detector.landingReason(track: track, position: silent), .aprsStale)
-        let r2 = detector.resolveLanding(reason: .aprsStale, currentPosition: silent, hasPrediction: true)
-        XCTAssertEqual(r2, .init(target: .prediction, showPredictionPath: true),
-                       "landed-by-silence keeps the prediction; it must not lock to 389 m")
-
-        // BLE confirms the sonde fixed on the ground at the predicted landing:
-        // now the marker/route lock to the actual point and the line is dropped.
-        let onGround = PositionData(sondeName: "W4214924",
-                                    latitude: predictedLanding.lat, longitude: predictedLanding.lon,
-                                    altitude: groundAltMSL, verticalSpeed: 0, horizontalSpeed: 0, heading: 0,
-                                    temperature: 0, humidity: 0, pressure: 0,
-                                    timestamp: Date(), burstKillerTime: 0, telemetrySource: .ble)
-        let r3 = detector.resolveLanding(reason: .vectorAnalysis, currentPosition: onGround, hasPrediction: true)
-        XCTAssertEqual(r3, .init(target: .confirmed(latitude: predictedLanding.lat, longitude: predictedLanding.lon),
-                                 showPredictionPath: false),
-                       "a BLE touchdown locks to the actual point and drops the line")
-    }
-
-    func testLandingDisplay_noPredictionYet_showsNothing() {
-        let r = detector.resolveLanding(reason: nil, currentPosition: nil, hasPrediction: false)
-        XCTAssertEqual(r, .init(target: .none, showPredictionPath: false))
-    }
-
-    func testLandingDisplay_landedBySilenceWithoutAPrediction_showsNothing() throws {
-        // The regression the earlier test missed: landed-by-silence resolves to
-        // the prediction — but only if one exists. With no prediction there is
-        // nothing to show, which is why predictions MUST run in this state (see
-        // PredictionPolicy). This asserts the dependency instead of assuming it.
-        let samples = try descent()
-        let silent = position(samples.last!, source: .aprs, ageSeconds: 300)
-        let r = detector.resolveLanding(reason: .aprsStale, currentPosition: silent, hasPrediction: false)
-        XCTAssertEqual(r, .init(target: .none, showPredictionPath: false),
-                       "no prediction → nothing to show; predictions must run for landed-by-silence")
+    /// The real decision the app applies: landed-by-silence keeps the prediction,
+    /// only a confirmed touchdown locks to the actual point.
+    func testConfirmsTouchdown_onlyForGroundObservation() {
+        XCTAssertFalse(detector.confirmsTouchdown(.aprsStale),
+                       "landed-by-silence is an estimate — keep the prediction, do not lock")
+        XCTAssertFalse(detector.confirmsTouchdown(nil), "flying — no touchdown")
+        XCTAssertTrue(detector.confirmsTouchdown(.vectorAnalysis), "stationary near ground = touchdown")
+        XCTAssertTrue(detector.confirmsTouchdown(.trackLanding), "track landing = touchdown")
     }
 
     // MARK: - Predictions must run through landed-by-silence
