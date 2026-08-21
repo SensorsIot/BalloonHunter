@@ -1126,6 +1126,14 @@ does four things, in one ordered chain, each owned by one place:
 when the previous state was not `startup`, so it never re-fetches the track the
 context read just loaded. Recovery-status and the continuous poll run in parallel.
 
+The **live poll** (`fetchSondeBySerial`) fetches only a short window
+(`pollTelemetryWindow`, 30 min) because it uses just the latest frame — so it is
+cheap even for a long flight and never re-downloads the 3-day history. If that
+window is empty (a landed/stale sonde) it returns quietly; it does **not** fall
+back to the slow full streaming. The only full-history fetches are
+`readBalloonContext` (the 3-day track once per selection) and its
+`recoverPositionViaStreaming` fallback for a sonde older than 3 days.
+
 2a. **APRS track filling, deduplicated by physical position** — `fillTrackGapsFromAPRS(sondeName:forceDetection:)` fetches SondeHub telemetry and merges it with `Array.mergingByPosition` (`BalloonTrackPoint.positionKey`, rounded to ~1 m: 5 decimals of lat/lon, 1 m of altitude). A genuine gap — no point at that location — is filled; an APRS copy of a position the track already holds is dropped.
 
    Position, not timestamp, is the identity because BLE and APRS decode the *same* sonde frame and report identical GPS position, but their timestamps differ by the relay latency — BLE stamps the phone's arrival time (direct RF decode), APRS carries the sonde's frame time as recorded by SondeHub. A per-second timestamp key could not tell an APRS point was a copy of one BLE already held, and inserted both; position is immune to the skew and needs no time-window constant. Live APRS is otherwise suppressed while BLE is the active source, so APRS enters the track only through this fill.

@@ -1289,6 +1289,13 @@ final class BalloonTrackService: ObservableObject {
             }
             detectTrackBasedLanding()
         }
+        // Sonde older than the 3-day window (nothing returned, no track): fall
+        // back to the full streaming fetch so the marker/prediction still have a
+        // position. Rare — a re-hunt of a completed flight beyond SondeHub's
+        // telemetry retention.
+        if points.isEmpty && currentBalloonTrack.isEmpty {
+            await aprsService.recoverPositionViaStreaming(serial: serial)
+        }
         _ = await recovery
     }
 

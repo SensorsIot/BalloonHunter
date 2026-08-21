@@ -128,6 +128,9 @@ final class APRSDataService: ObservableObject {
 
     // MARK: - Constants
     private static let sondeHubBaseURL = "https://api.v2.sondehub.org"
+    /// Window for the live poll: only the latest frame is used, so a short window
+    /// keeps every poll cheap. The full track is loaded once by readBalloonContext.
+    private static let pollTelemetryWindow = "30m"
     private static let fastPollInterval: TimeInterval = 15.0
     private static let slowPollInterval: TimeInterval = 60.0
     private static let landedConfirmationInterval: TimeInterval = 300.0
@@ -426,15 +429,20 @@ final class APRSDataService: ObservableObject {
     private func fetchSondeBySerial(_ serial: String) async throws {
         apiCallCount += 1
 
-        // First try /sondes/telemetry?serial=X&duration=3d - fast and limited data
-        let telemetryUrl = URL(string: "\(Self.sondeHubBaseURL)/sondes/telemetry?serial=\(serial)&duration=3d")!
+        // The poll only needs the LATEST frame, so fetch a short window, not the
+        // full 3-day history — the whole track is loaded once by
+        // readBalloonContext. A short window keeps every poll cheap even for a
+        // large flight. If it is empty (a landed/stale sonde has nothing new) the
+        // poll just returns; it does NOT fall back to the slow full streaming —
+        // that is the context read's job.
+        let telemetryUrl = URL(string: "\(Self.sondeHubBaseURL)/sondes/telemetry?serial=\(serial)&duration=\(Self.pollTelemetryWindow)")!
         var telemetryRequest = URLRequest(url: telemetryUrl)
         telemetryRequest.timeoutInterval = Self.aprsApiTimeout
         telemetryRequest.setValue("application/json", forHTTPHeaderField: "Accept")
         telemetryRequest.setValue("gzip, deflate", forHTTPHeaderField: "Accept-Encoding")
         telemetryRequest.setValue("BalloonHunter iOS App", forHTTPHeaderField: "User-Agent")
 
-        appLog("APRSDataService: GET \(telemetryUrl.absoluteString) (override sonde - trying 3d first)", category: .service, level: .info)
+        appLog("APRSDataService: GET \(telemetryUrl.absoluteString) (poll - latest only)", category: .service, level: .info)
 
         let (telemetryData, telemetryResponse) = try await URLSession.shared.data(for: telemetryRequest)
 
@@ -460,9 +468,17 @@ final class APRSDataService: ObservableObject {
             return
         }
 
-        // Not found in 3-day window - try /sonde/{serial} with streaming to get just the first record
-        appLog("APRSDataService: Sonde \(serial) not in 3d window, trying /sonde/{serial} with streaming", category: .service, level: .info)
-        try await fetchSondeBySerialStreaming(serial)
+        // Nothing in the short poll window — a landed/stale sonde has no new
+        // frame. Return quietly; the position already came from the context read,
+        // and the poll must not do the slow full streaming.
+        appLog("APRSDataService: No recent frames for \(serial) in \(Self.pollTelemetryWindow) window", category: .service, level: .debug)
+    }
+
+    /// Full-history fetch for a sonde older than the poll/telemetry window, used
+    /// by the context read (readBalloonContext) as a fallback — the poll never
+    /// calls it. Publishes the latest (landing) position.
+    func recoverPositionViaStreaming(serial: String) async {
+        try? await fetchSondeBySerialStreaming(serial)
     }
 
     /// Fetch sonde data using full download with tail extraction
