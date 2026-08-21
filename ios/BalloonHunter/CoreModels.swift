@@ -18,6 +18,15 @@ enum BalloonPhase: String, Codable {
     case landed
     case unknown
 
+    /// True when the balloon is up. `unknown` is not airborne — it means the
+    /// detector could not tell, which must never be read as "still flying".
+    var isAirborne: Bool {
+        switch self {
+        case .ascending, .descendingAbove10k, .descendingBelow10k: return true
+        case .landed, .unknown: return false
+        }
+    }
+
     /// True once the balloon has burst: falling, or already down.
     ///
     /// Before burst a landing prediction rests on an *assumed* burst altitude,

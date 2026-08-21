@@ -1417,11 +1417,17 @@ A launch site commonly has several sondes aloft or recently landed. Exactly one 
 
 #### Choosing at startup (Startup step 4b)
 
-1. **Gather** the station's sondes from `/sondes/site/{id}`, discard ground tests (within 1 km of the uploader), keep the last 24 hours, sort newest first.
-2. **Classify** each by vertical speed: `isFlying == true` when `abs(vel_v) > 1.0 m/s`. Altitude cannot decide this — Payerne launches from 490 m, so a sonde resting in the hills reads higher than one still descending over the lake.
-3. **Undetermined is not landed.** iMet sondes report no `vel_v`, so `isFlying` is `nil`. Such a sonde is never auto-selected; it falls through to the picker rather than being guessed at.
-4. **Auto-select** the first sonde positively confirmed airborne, and skip the picker.
-5. **Otherwise show the picker** with the most recent pre-selected and a 5-second auto-confirm.
+1. **Gather** the station's sondes from `/sondes/site/{id}`, discard ground tests (within 1 km of the uploader), keep the last 24 hours, sort newest first. This list exists so the picker has something to offer; it is not evidence that any of it is still aloft.
+2. **Read `balloonPhase`.** `LandingDetector` has already judged the telemetry that arrived, and `BalloonPositionService` publishes its verdict. Startup performs no classification of its own — see *Balloon Phase Detection* for the priority chain and its thresholds.
+3. **Auto-select** when the phase is airborne (ascending or descending), taking the serial from the telemetry the detector judged. A sonde absent from the SondeHub list still selects, so a live decode of an unlisted sonde is not lost.
+4. **Otherwise show the picker** — landed, or `unknown` — with the most recent pre-selected and a 5-second auto-confirm. `unknown` is not airborne: the detector could not tell, and that must never be read as "still flying".
+
+**One owner for flying-versus-landed.** Startup once re-decided from the raw
+sonde list on vertical speed alone, with no notion of how old the frame was. On
+21 August 2026 that auto-selected W4214520 from a frame 6.8 h old — 2.4 seconds
+after `LandingDetector` had classified that same sonde as landed. The picker
+never appeared. The detector is the only authority; nothing else may answer
+this question.
 
 #### Choosing during a hunt (Change Sonde)
 

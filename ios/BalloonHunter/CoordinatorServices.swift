@@ -167,21 +167,31 @@ extension ServiceCoordinator {
         // Get available sondes from APRS service (sorted by datetime, most recent first)
         let sondes = balloonPositionService.aprsService.availableSondes
 
-        // Auto-select only a sonde we can positively confirm is airborne.
-        // A sonde reporting no vertical speed is undetermined, never "landed",
-        // so it falls through to the popup rather than being guessed at.
-        let flyingSonde = sondes.first { $0.isFlying == true }
-        let undetermined = sondes.filter { $0.isFlying == nil }
-        if !undetermined.isEmpty {
-            appLog("STARTUP: Step 4b - \(undetermined.count) sonde(s) report no vertical speed, cannot auto-select: \(undetermined.map { $0.serial }.joined(separator: ", "))", category: .general, level: .info)
-        }
+        // Startup performs no investigation of its own. `LandingDetector` has
+        // already judged the sonde whose telemetry arrived, and its verdict is
+        // published as `balloonPhase`; startup reads that and nothing else.
+        //
+        // It used to re-decide from the raw sonde list on vertical speed alone.
+        // That is a second implementation of a question the detector owns, and
+        // it disagreed: on 21 August 2026 it auto-selected W4214520 from a frame
+        // 6.8 h old, 2.4 seconds after the detector had classified that very
+        // sonde as landed. The picker never appeared.
+        let phase = balloonPositionService.balloonPhase
+        let selection = StartupSelection.decide(
+            phase: phase,
+            trackedSerial: balloonPositionService.currentPositionData?.sondeName)
 
-        if let flyingSonde = flyingSonde {
-            // Flying sonde found - auto-select it, skip popup
-            appLog("STARTUP: Step 4b - Flying sonde detected: '\(flyingSonde.serial)' at \(Int(flyingSonde.alt))m, vel_v=\(flyingSonde.vel_v.map { String(format: "%.1f", $0) } ?? "n/a")m/s - auto-selecting", category: .general, level: .info)
+        appLog("STARTUP: Step 4b - LandingDetector says phase=\(phase) → \(selection)", category: .general, level: .info)
+
+        if case .autoSelect(let flyingSerial) = selection {
+            // Airborne - auto-select it, skip the picker. The serial comes from
+            // the telemetry the detector judged, so a sonde absent from the
+            // SondeHub list (a live decode of an unlisted sonde) still selects.
+            let listed = sondes.first { $0.serial == flyingSerial }
+            appLog("STARTUP: Step 4b - Flying sonde '\(flyingSerial)'\(listed.map { " at \(Int($0.alt))m" } ?? " (not in SondeHub list)") - auto-selecting", category: .general, level: .info)
 
             await MainActor.run {
-                selectedSondeSerial = flyingSonde.serial
+                selectedSondeSerial = flyingSerial
                 availableSondesForSelection = sondes
             }
 
@@ -190,7 +200,11 @@ extension ServiceCoordinator {
 
         } else {
             // No flying sonde - show selection popup
-            appLog("STARTUP: Step 4b - No flying sonde, showing selection popup (\(sondes.count) available)", category: .general, level: .info)
+            let ages = sondes.map { s -> String in
+                let age = s.lastHeard.map { Int(Date().timeIntervalSince($0) / 60) }
+                return "\(s.serial) last heard \(age.map { "\($0)min" } ?? "?") ago"
+            }
+            appLog("STARTUP: Step 4b - No flying sonde, showing selection popup (\(sondes.count) available: \(ages.joined(separator: ", ")))", category: .general, level: .info)
 
             await MainActor.run {
                 availableSondesForSelection = sondes

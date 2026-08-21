@@ -29,6 +29,41 @@ import CoreLocation
 
 
 
+// MARK: - Phase 1: Which sonde is hunted?
+
+/// What startup does once the services have answered: take the sonde that is
+/// up, or ask the user.
+///
+/// Startup owns no idea of flying and landed. `LandingDetector` decides,
+/// `BalloonPositionService` publishes the verdict as `balloonPhase`, and this
+/// rule does nothing but read it. Startup once re-decided from the raw SondeHub
+/// list on vertical speed alone: on 21 August 2026 that auto-selected W4214520
+/// from a frame 6.8 h old, 2.4 seconds after the detector had classified that
+/// same sonde as landed, and the picker never appeared.
+enum StartupSelection: Equatable {
+    /// The sonde is up. Track it and skip the picker.
+    case autoSelect(serial: String)
+    /// Landed, undetermined, or nothing to name. Ask.
+    case showPicker
+
+    /// - Parameters:
+    ///   - phase: the detector's verdict, as published by the position service.
+    ///   - trackedSerial: the serial of the telemetry that verdict was reached
+    ///     on. Taken from the telemetry rather than the SondeHub list, so a live
+    ///     decode of an unlisted sonde is not lost.
+    static func decide(phase: BalloonPhase, trackedSerial: String?) -> StartupSelection {
+        // `unknown` is not airborne. It means the detector could not tell, and
+        // that must never be spent on an auto-select.
+        guard phase.isAirborne else { return .showPicker }
+
+        // Airborne, but nothing names it — there is no sonde to select.
+        guard let serial = trackedSerial,
+              !serial.trimmingCharacters(in: .whitespaces).isEmpty else { return .showPicker }
+
+        return .autoSelect(serial: serial)
+    }
+}
+
 // MARK: - Phase 1: Is this still the same hunt?
 
 struct HuntState {

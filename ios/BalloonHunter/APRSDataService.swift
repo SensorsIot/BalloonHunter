@@ -28,17 +28,23 @@ struct SondeHubSondeData: Codable {
         return tx_frequency ?? frequency ?? 0.0
     }
 
-    /// Whether the sonde is airborne, judged from vertical speed.
+    /// When this sonde was last heard, or `nil` if the timestamp is unparseable.
     ///
-    /// Altitude cannot answer this on its own: Payerne sits at 490 m, so a sonde
-    /// resting in the hills reads higher than one still descending over the lake.
-    ///
-    /// `nil` means undetermined — iMet sondes report no vertical speed. Callers
-    /// must not read that as "landed"; there is no safe way to guess, so the
-    /// sonde falls through to the selection popup instead.
-    var isFlying: Bool? {
-        guard let verticalSpeed = vel_v else { return nil }
-        return abs(verticalSpeed) > 1.0
+    /// Flying-versus-landed is deliberately *not* answered here. That decision
+    /// belongs to `LandingDetector`, which owns the priority chain and the
+    /// 120 s silence threshold; a second copy on this DTO once judged by
+    /// vertical speed alone and contradicted it. See FSD *Sonde Selection*.
+    var lastHeard: Date? {
+        SondeHubSondeData.parseISO8601(datetime)
+    }
+
+    /// ISO8601 with or without fractional seconds. SondeHub emits both.
+    static func parseISO8601(_ dateString: String) -> Date? {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = formatter.date(from: dateString) { return date }
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter.date(from: dateString)
     }
 }
 
@@ -690,16 +696,7 @@ final class APRSDataService: ObservableObject {
     }
 
     private func parseISO8601Date(_ dateString: String) -> Date? {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-
-        if let date = formatter.date(from: dateString) {
-            return date
-        }
-
-        // Fallback without fractional seconds
-        formatter.formatOptions = [.withInternetDateTime]
-        return formatter.date(from: dateString)
+        SondeHubSondeData.parseISO8601(dateString)
     }
 
     // MARK: - APRS Track Filling
