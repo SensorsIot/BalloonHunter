@@ -79,11 +79,14 @@ final class LandingSequenceTests: XCTestCase {
         XCTAssertEqual(phase, .descendingBelow10k)
     }
 
-    // The predicted landing for this flight — the last estimate logged before the
-    // feed was lost (see docs/LandingPredictionTrack-W4214924). This is where the
-    // balloon actually comes down and where the hunter drives; ~2.3 km from the
-    // last APRS point (389 m), the drift over the unobserved final descent.
-    private let predictedLanding = (lat: 47.71429, lon: 7.53771)
+    // Where the balloon actually touches down — the *final* prediction, from the
+    // last APRS fix at 389 m. Ground there is ~300 m, so the balloon was only
+    // ~90 m above ground when APRS was lost: ~20 s from landing, drifting a
+    // couple hundred metres NE, not kilometres. (An earlier prediction made from
+    // higher up put the landing ~2 km further, but by 389 m almost all that drift
+    // is already spent — the final estimate sits right by the last fix.)
+    private let predictedLanding = (lat: 47.73165, lon: 7.56680)   // ~150 m NE of the last APRS point
+    private let groundAltMSL = 300.0                                // terrain ~300 m in that area
 
     // MARK: - Losing APRS says the flight is over, not where it lies
 
@@ -110,7 +113,8 @@ final class LandingSequenceTests: XCTestCase {
         //  2. the hunter drives to that predicted landing (a telemetry gap).
         //  3. there, the MySondyGo (BLE) hears the sonde sitting fixed near the
         //     ground, vertical speed 0 — the confirmed touchdown, at the predicted
-        //     landing point.
+        //     landing point (~150 m from the last APRS fix, since the balloon was
+        //     only ~90 m above ground when APRS was lost).
         let samples = try descent()
         var track = samples.map { trackPoint($0, source: .ble) }
 
@@ -120,18 +124,17 @@ final class LandingSequenceTests: XCTestCase {
         XCTAssertEqual(detector.landingReason(track: track, position: lostInAir), .aprsStale)
 
         // 3. BLE reacquires the sonde on the ground, at the predicted landing —
-        //    fixed, near ground, vertical speed 0.
-        let groundAlt = 410.0
+        //    fixed, at ground level (~300 m MSL), vertical speed 0.
         let groundT = samples.last!.t + 1800           // half an hour later
         for i in 0..<20 {
             track.append(BalloonTrackPoint(latitude: predictedLanding.lat, longitude: predictedLanding.lon,
-                                           altitude: groundAlt,
+                                           altitude: groundAltMSL,
                                            timestamp: epoch.addingTimeInterval(groundT + Double(i)),
                                            verticalSpeed: 0, horizontalSpeed: 0, source: .ble))
         }
         let onTheGround = PositionData(sondeName: "W4214924",
                                        latitude: predictedLanding.lat, longitude: predictedLanding.lon,
-                                       altitude: groundAlt, verticalSpeed: 0, horizontalSpeed: 0, heading: 0,
+                                       altitude: groundAltMSL, verticalSpeed: 0, horizontalSpeed: 0, heading: 0,
                                        temperature: 0, humidity: 0, pressure: 0,
                                        timestamp: Date(), burstKillerTime: 0, telemetrySource: .ble)
 
@@ -140,10 +143,15 @@ final class LandingSequenceTests: XCTestCase {
         XCTAssertEqual(detector.landingReason(track: track, position: onTheGround), .vectorAnalysis,
                        "confirmed by a stationary near-ground observation, not by silence")
 
-        // The confirmed touchdown is the predicted landing, well away from where
-        // APRS was lost — the estimate held, and BLE confirmed it.
-        let dLat = abs(predictedLanding.lat - samples.last!.lat)
-        XCTAssertGreaterThan(dLat, 0.01, "touchdown is the predicted point, ~km from the last APRS fix")
+        // The touchdown is close to the last APRS fix — the balloon was ~90 m
+        // above ground (389 m MSL over ~300 m terrain) when the feed dropped, so
+        // it drifted only a couple hundred metres, not kilometres.
+        let metersPerDegLat = 111_320.0
+        let metersPerDegLon = metersPerDegLat * cos(predictedLanding.lat * .pi / 180)
+        let dNorth = (predictedLanding.lat - samples.last!.lat) * metersPerDegLat
+        let dEast = (predictedLanding.lon - samples.last!.lon) * metersPerDegLon
+        let drift = (dNorth * dNorth + dEast * dEast).squareRoot()
+        XCTAssertLessThan(drift, 400, "touchdown within a few hundred m of the last APRS fix, got \(Int(drift)) m")
     }
 
     // MARK: - Track assembly across the handoff
