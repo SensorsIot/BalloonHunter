@@ -373,12 +373,6 @@ final class BalloonPositionService: ObservableObject {
             let held = String(format: "%.1fs", timeInState)
 
             appLog("🔄 DataState: \(currentState) → \(newState) | BLE:\(inputs.bleConnectionState) APRS:\(inputs.aprsDataAvailable) Phase:\(inputs.balloonPhase) | Device:\(deviceInfo) Msg:\(msgAge) Sonde:\(sondeInfo) Alt:\(altInfo) | Startup:\(startupStatus) Held:\(held) Data:\(staleStatus) AnyData:\(inputs.bleConnectionState.hasTelemetry || inputs.aprsDataAvailable)", category: .service, level: .info)
-            TransitionLogger.shared.logStateTransition(
-                from: currentState.description, to: newState.description,
-                ble: inputs.bleConnectionState.rawValue, aprsAvailable: inputs.aprsDataAvailable,
-                phase: inputs.balloonPhase.rawValue,
-                sonde: sondeInfo, altitude: currentPositionData?.altitude,
-                source: currentPositionData?.telemetrySource.rawValue ?? "")
             transition(to: newState)
         }
 
@@ -769,12 +763,6 @@ final class BalloonPositionService: ObservableObject {
         if balloonPhase != previous {
             let reason = lastLandingReason
             appLog("BalloonPositionService: Balloon phase \(previous) → \(balloonPhase)\(reason.map { " (\($0.rawValue))" } ?? "")", category: .service, level: .info)
-            TransitionLogger.shared.logPhaseChange(
-                from: previous.rawValue, to: balloonPhase.rawValue,
-                reason: reason?.rawValue ?? "flightPhase",
-                sonde: currentPositionData?.sondeName ?? "",
-                altitude: currentPositionData?.altitude,
-                source: currentPositionData?.telemetrySource.rawValue ?? "")
         }
     }
 
@@ -1011,9 +999,6 @@ final class BalloonTrackService: ObservableObject {
         updateEffectiveDescentRate()
 
         // Landing detection now handled by BalloonPositionService
-
-        // CSV logging (all builds)
-        DebugCSVLogger.shared.logPosition(positionData)
 
         // Robust smoothed speeds update (EMA pipeline)
         if let prev = currentBalloonTrack.dropLast().last {

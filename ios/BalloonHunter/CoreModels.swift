@@ -292,15 +292,73 @@ nonisolated func appLog(_ message: String, category: LogCategory, level: OSLogTy
     formatter.dateFormat = "HH:mm:ss.SSS"
     let timestamp = formatter.string(from: Date.now)
     let timestampedMessage = "[\(timestamp)] \(message)"
-    
+
     let logger = Logger(subsystem: "com.yourcompany.BalloonHunter", category: category.rawValue)
-    
+
     switch level {
     case OSLogType.debug: logger.debug("\(timestampedMessage, privacy: .public)")
     case OSLogType.info: logger.info("\(timestampedMessage, privacy: .public)")
     case OSLogType.error: logger.error("\(timestampedMessage, privacy: .public)")
     case OSLogType.fault: logger.fault("\(timestampedMessage, privacy: .public)")
     default: logger.log("\(timestampedMessage, privacy: .public)")
+    }
+
+    // Mirror to a single on-device file — the one log we pull for diagnosis,
+    // exactly what the Xcode console shows, so there is no need for the
+    // multi-GB unified-log archive. Rotated so it never grows without bound.
+    AppLogFile.shared.write("\(timestamp),\(category.rawValue),\(levelName(level)),\(csvEscape(message))")
+}
+
+private func levelName(_ level: OSLogType) -> String {
+    switch level {
+    case .debug: return "debug"
+    case .info: return "info"
+    case .error: return "error"
+    case .fault: return "fault"
+    default: return "log"
+    }
+}
+
+private func csvEscape(_ s: String) -> String {
+    (s.contains(",") || s.contains("\"") || s.contains("\n"))
+        ? "\"" + s.replacingOccurrences(of: "\"", with: "\"\"") + "\""
+        : s
+}
+
+/// The single diagnostic log file (`balloonhunter.log.csv` in the app
+/// container): every `appLog` line, the same content as the Xcode console.
+/// Thread-safe, size-capped — when it passes the ceiling the oldest half is
+/// dropped, so it stays small and pullable without the unified-log archive.
+final class AppLogFile: @unchecked Sendable {
+    static let shared = AppLogFile()
+    private init() {}
+
+    private let queue = DispatchQueue(label: "com.balloonhunter.applogfile")
+    private let maxBytes = 512 * 1024
+    private lazy var url: URL? = FileManager.default
+        .urls(for: .documentDirectory, in: .userDomainMask).first?
+        .appendingPathComponent("balloonhunter.log.csv")
+
+    func write(_ line: String) {
+        queue.async { [self] in
+            guard let url else { return }
+            if !FileManager.default.fileExists(atPath: url.path) {
+                try? "timestamp,category,level,message\n".data(using: .utf8)?.write(to: url)
+            }
+            if let data = (line + "\n").data(using: .utf8), let h = try? FileHandle(forWritingTo: url) {
+                defer { try? h.close() }
+                _ = try? h.seekToEnd()
+                _ = try? h.write(contentsOf: data)
+            }
+            if let size = try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int,
+               size > maxBytes,
+               let content = try? String(contentsOf: url, encoding: .utf8) {
+                let lines = content.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+                guard lines.count > 3 else { return }
+                let kept = [lines.first ?? "timestamp,category,level,message"] + Array(lines.dropFirst().suffix(lines.count / 2))
+                try? kept.joined(separator: "\n").data(using: .utf8)?.write(to: url)
+            }
+        }
     }
 }
 

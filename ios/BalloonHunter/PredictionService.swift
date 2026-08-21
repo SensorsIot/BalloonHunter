@@ -463,9 +463,6 @@ final class PredictionService: ObservableObject {
            let landingService = landingPointTrackingService {
             await landingService.updateLandingPoint(landingPoint, source: .prediction)
         }
-        if let lp = predictionData.landingPoint {
-            DebugCSVLogger.shared.setLatestPredictedLanding(lp)
-        }
         
         appLog("PredictionService: Updated ServiceCoordinator with prediction results", category: .service, level: .info)
     }

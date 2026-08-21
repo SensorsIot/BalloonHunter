@@ -307,6 +307,8 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
     @Published var lastMessageTimestamp: Date? = nil
     // Diagnostic properties (private, for internal logging only)
     private var lastMessageType: String? = nil
+    /// Last time the Type-0 device-status line was logged, to space it out.
+    private var lastType0StatusLog: Date? = nil
 
     // Scan timeout tracking
     var scanStartTime: Date? = nil
@@ -732,11 +734,19 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
                 // Type 0 packets are device status only - do NOT send as position telemetry data
                 // Position data is invalid (0,0) and would override APRS telemetry
 
-                // Show all available packet data for Type 0 messages
-                let packetInfo = components.enumerated().map { (index, value) in
-                    return "[\(index)]=\(value)"
-                }.joined(separator: " ")
-                appLog("📊 BLE PARSED (Type 0): Device status - battery=\(String(format: "%.2f", status.batteryVoltage))V (\(status.batteryPercentage)%) signal=\(status.signalStrength)dBm | Raw: \(packetInfo)", category: .ble, level: .info)
+                // Type-0 is device status, sent every second even when the
+                // receiver is decoding no sonde — logging it then is pure noise.
+                // Log only while a sonde signal is actually being received
+                // (connectionState == .dataReady means a Type-1 within the last
+                // 30 s), and then no more than every 5 s.
+                if connectionState == .dataReady {
+                    let now = Date()
+                    if lastType0StatusLog == nil || now.timeIntervalSince(lastType0StatusLog!) >= 5 {
+                        lastType0StatusLog = now
+                        let packetInfo = components.enumerated().map { "[\($0)]=\($1)" }.joined(separator: " ")
+                        appLog("📊 BLE PARSED (Type 0): Device status - battery=\(String(format: "%.2f", status.batteryVoltage))V (\(status.batteryPercentage)%) signal=\(status.signalStrength)dBm | Raw: \(packetInfo)", category: .ble, level: .info)
+                    }
+                }
             } else {
                 // Show raw packet even if parsing failed
                 let packetInfo = components.enumerated().map { (index, value) in

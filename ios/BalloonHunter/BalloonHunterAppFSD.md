@@ -844,25 +844,28 @@ Discover and connect to MySondyGo devices over Bluetooth Low Energy, subscribe t
 **Stability Notes**
 
 - All CoreBluetooth errors are caught and logged without crashing the service.
-- CSV logging for each telemetry sample is handled downstream (`BalloonTrackService` → `DebugCSVLogger`).
 - Automatic settings requests happen once after the first valid packet; subsequent requests are user-driven via the settings UI.
 
-#### Transition logging (`TransitionLogger`)
+#### Diagnostic log — one file (`AppLogFile`)
 
-Every state-machine transition and every `balloonPhase` change is appended to
-`transitions.csv` in the app container, each row carrying the driving inputs —
-for a state change: BLE connection state, APRS availability, phase; for a phase
-change: the **rule that caused a landing** (`trackLanding` / `aprsStale` /
-`vectorAnalysis`, from `LandingDetector.landingReason`) — plus sonde, altitude
-and telemetry source.
+There is **one** on-device diagnostic log: `balloonhunter.log.csv` in the app
+container, written by `AppLogFile` from every `appLog` call. It is the same
+content as the Xcode console — state transitions, phase changes with the landing
+rule, prediction attempts and results, BLE and APRS events — as CSV rows
+(`timestamp,category,level,message`).
 
-This exists because the device's `os_log` ring buffer drops info-level entries
-within about an hour, so a landing decision could not be read after the fact
-(the W4214924 landing on 21 Aug 2026 could only be reconstructed indirectly).
-The file is **regularly deleted**: purged at the start of every new hunt (a fresh
-file per sonde), and size-capped at 256 KB — when it exceeds that, the oldest
-half is dropped so it cannot grow without bound the way `telemetry_log.csv` did.
-It is a black box for post-mortems, not a user-facing feature.
+It exists so a problem is diagnosed by pulling **one small file**, not the
+multi-GB device unified-log archive (whose `os_log` ring buffer also drops
+info-level entries within about an hour, losing landing decisions). It is
+**size-capped at 512 KB**: when it passes that, the oldest half is dropped, so it
+never grows without bound. It is a diagnostic black box, not a user-facing
+feature. The earlier separate `transitions.csv` and `telemetry_log.csv` are gone
+— their content is in this one log.
+
+Noisy per-second lines are suppressed at the source: the Type-0 device-status
+line is logged only while a sonde signal is actually being received
+(`connectionState == .dataReady`) and then at most every 5 s, so an idle receiver
+does not fill the log.
 
 
 
