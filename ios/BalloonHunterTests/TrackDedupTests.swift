@@ -119,4 +119,70 @@ final class TrackDedupTests: XCTestCase {
         let back = try JSONDecoder().decode(BalloonTrackPoint.self, from: data)
         XCTAssertEqual(back.source, .aprs)
     }
+
+    // MARK: - Round-trip gap fill on a real flight
+
+    /// A real SondeHub flight at 1 sample / 30 s.
+    private func flight(_ name: String) throws -> [BalloonTrackPoint] {
+        struct Sample: Decodable { let t: Double; let lat: Double; let lon: Double; let alt: Double }
+        let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: name, withExtension: "json"),
+                                "fixture \(name).json missing")
+        let samples = try JSONDecoder().decode([Sample].self, from: Data(contentsOf: url))
+        let epoch = Date(timeIntervalSince1970: 1_800_000_000)
+        return samples.map {
+            BalloonTrackPoint(latitude: $0.lat, longitude: $0.lon, altitude: $0.alt,
+                              timestamp: epoch.addingTimeInterval($0.t),
+                              verticalSpeed: 0, horizontalSpeed: 0, source: .ble)
+        }
+    }
+
+    /// Cut a consecutive slice out of a real track and let the inserter refill it
+    /// from the full flight (as an APRS backfill would). The result must equal
+    /// the original — every deleted point back, and not one duplicate of the
+    /// points that were never missing.
+    func testDeletedSliceIsRefilledExactly() throws {
+        let full = try flight("W4214915")
+        try XCTSkipIf(full.count < 40, "fixture too small")
+
+        // Remove a consecutive middle slice.
+        let lo = full.count / 3, hi = lo + full.count / 5
+        var withGap = full
+        withGap.removeSubrange(lo..<hi)
+        XCTAssertEqual(withGap.count, full.count - (hi - lo))
+
+        // The backfill offers the WHOLE flight (gap + the parts already present),
+        // simulating SondeHub returning everything. Timestamps are shifted to
+        // prove the merge keys on position, not time.
+        let backfill = full.map {
+            BalloonTrackPoint(latitude: $0.latitude, longitude: $0.longitude, altitude: $0.altitude,
+                              timestamp: $0.timestamp.addingTimeInterval(17),  // relay-latency skew
+                              verticalSpeed: 0, horizontalSpeed: 0, source: .aprs)
+        }
+
+        let merged = withGap.mergingByPosition(backfill)
+
+        // The deleted slice is back, and nothing already present was duplicated.
+        // (The count equals the original because the removed slice is a distinct,
+        // non-repeating segment; the merge drops the backfill's copies of every
+        // position that survived in `withGap`.)
+        XCTAssertEqual(merged.count, full.count,
+                       "gap refilled, nothing already present duplicated (got \(merged.count), want \(full.count))")
+        XCTAssertEqual(Set(merged.map { $0.positionKey }), Set(full.map { $0.positionKey }),
+                       "same set of positions as the original")
+        // Only the deleted slice was refilled, and it came from the APRS backfill.
+        let filled = merged.filter { $0.source == .aprs }
+        XCTAssertEqual(filled.count, hi - lo, "exactly the deleted slice was refilled from APRS")
+    }
+
+    func testNoGapMeansNoInsertions() throws {
+        // Offering the whole flight again when nothing is missing must add nothing.
+        let full = try flight("W4214915")
+        let backfill = full.map {
+            BalloonTrackPoint(latitude: $0.latitude, longitude: $0.longitude, altitude: $0.altitude,
+                              timestamp: $0.timestamp.addingTimeInterval(17),
+                              verticalSpeed: 0, horizontalSpeed: 0, source: .aprs)
+        }
+        let merged = full.mergingByPosition(backfill)
+        XCTAssertEqual(merged.count, full.count, "a complete track gains nothing from a re-offer")
+    }
 }

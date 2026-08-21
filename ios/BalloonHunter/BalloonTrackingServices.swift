@@ -1217,13 +1217,19 @@ final class BalloonTrackService: ObservableObject {
     /// Check if slot occupied, insert if empty
     /// BLE points arrive in chronological order - no sorting needed
     private func insertTrackPointIfSlotEmpty(_ point: BalloonTrackPoint, source: String) {
-        // Dedup by physical position, the same key the APRS fill uses, so a BLE
-        // point and an APRS copy of the same sonde frame collide even though
-        // their timestamps differ by the relay latency. Skips a position already
-        // present regardless of which source laid it down.
-        if currentBalloonTrack.contains(where: { $0.positionKey == point.positionKey }) {
-            return
+        // Live BLE keeps one point per second. Full rate matters here: smoothing
+        // and real-time landing detection run on this stream, and a stationary
+        // balloon on the ground must keep laying down samples so the vector and
+        // stationary-period detectors can see it has stopped. Cross-source
+        // duplication does not happen on the live path — APRS is suppressed while
+        // BLE is active — so it is handled only in the APRS backfill, by position.
+        let cal = Calendar.current
+        let sec = cal.dateComponents([.year, .month, .day, .hour, .minute, .second], from: point.timestamp)
+        let slot = cal.date(from: sec) ?? point.timestamp
+        let occupied = currentBalloonTrack.contains {
+            (cal.date(from: cal.dateComponents([.year, .month, .day, .hour, .minute, .second], from: $0.timestamp)) ?? $0.timestamp) == slot
         }
+        if occupied { return }
         currentBalloonTrack.append(point)
     }
 
