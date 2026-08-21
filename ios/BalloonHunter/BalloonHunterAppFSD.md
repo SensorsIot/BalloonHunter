@@ -1158,7 +1158,45 @@ Maintain the list of landing predictions for the active sonde, deduplicate noisy
 ### Prediction Service
 
 **Purpose**  
-Call the SondeHub prediction API on demand (manual or scheduled), cache results to avoid redundant requests, and surface landing-distance/time strings for the UI.
+Call a Tawhiri-contract prediction API on demand (manual or scheduled), cache results to avoid redundant requests, and surface landing-distance/time strings for the UI.
+
+#### Which server answers
+
+Two servers speak the same contract, and the app can use either:
+
+| | Base URL |
+|---|---|
+| **Swiss-Balloon-Predictor** (default) | `https://predictor.fabia.ch/tawhiri` |
+| SondeHub | `https://api.v2.sondehub.org/tawhiri` |
+
+The Swiss predictor serves `GET /tawhiri` with **exactly** SondeHub's query
+parameters and answers in Tawhiri's envelope, so switching is a base-URL change
+and nothing else in the app moves. See its FSD §19.4 (FR-19.7).
+
+**Requirements**
+
+- **FR-P.1** [Must] The prediction server shall be selectable in Settings →
+  Prediction, defaulting to the Swiss predictor. The URL shall be editable, so a
+  moved or renamed server needs no rebuild.
+- **FR-P.2** [Must] When the selected server fails, the app shall retry the
+  request against SondeHub and use that answer. A hunt must not lose its
+  predictions because the newer server is down or not yet deployed.
+- **FR-P.3** [Must] Every prediction shall log which server answered it, and
+  every fallback shall be logged as such. An A/B comparison is worthless if the
+  log does not say which server produced a landing point.
+- **FR-P.4** [Must] An empty or unparseable URL shall be treated as "server
+  unavailable" and take the FR-P.2 path, never crash and never silently skip the
+  prediction.
+- **FR-P.5** [Must] Only `https` URLs shall be accepted. A `http` URL is refused
+  at the point of selection rather than at the point of request: App Transport
+  Security blocks it anyway, so accepting one would turn a typo into a silent
+  fallback on every prediction for the rest of the flight.
+
+The response is decoded by `SondehubPredictionResponse`, which requires
+`metadata`, `prediction`, `request` and `request.format` **non-optionally**;
+only `warnings` is optional. Any server claiming this contract must send all
+four or the decode fails outright — the Swiss predictor's FSD records this as a
+measured constraint taken from these very structs.
 
 #### Inputs
 

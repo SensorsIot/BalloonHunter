@@ -247,7 +247,33 @@ struct DeviceSettingsView: View {
                 TextField("Station ID", text: $userSettings.stationId)
                     .keyboardType(.numberPad)
             }
+
+            Section(header: Text("Prediction Server"),
+                    footer: Text("On \(swissAccepted ? "" : "invalid input or ")failure the app falls back to SondeHub. SondeHub is used directly when this is off.")) {
+                Toggle("Swiss-Balloon-Predictor", isOn: $userSettings.useSwissPredictor)
+                if userSettings.useSwissPredictor {
+                    TextField("https://predictor.fabia.ch/tawhiri", text: $userSettings.swissPredictorURL)
+                        .keyboardType(.URL)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    HStack {
+                        Image(systemName: swissAccepted ? "checkmark.circle" : "exclamationmark.triangle")
+                            .foregroundColor(swissAccepted ? .green : .orange)
+                        Text(swissAccepted
+                             ? "Asks predictor.fabia.ch, then SondeHub if it fails"
+                             : "Not a valid https URL — SondeHub will be used")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+            }
         }
+    }
+
+    /// True when the typed URL would actually be used (https with a host).
+    private var swissAccepted: Bool {
+        PredictionEndpoint.base(useSwiss: true, swissURL: userSettings.swissPredictorURL)
+            != PredictionEndpoint.sondeHub
     }
 
     var otherSettingsTab: some View {

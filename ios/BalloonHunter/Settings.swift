@@ -10,6 +10,48 @@ extension Notification.Name {
 
 // MARK: - App and User Settings
 
+/// Which server answers a prediction request.
+///
+/// Two servers speak the same Tawhiri contract, so choosing between them is a
+/// base-URL change and nothing else in the app moves. SondeHub is the fallback
+/// whenever the chosen one cannot be used: a hunt must not lose its predictions
+/// because the newer server is down or not yet deployed.
+enum PredictionEndpoint {
+
+    static let sondeHub = URL(string: "https://api.v2.sondehub.org/tawhiri")!
+
+    /// Where a failed request is retried. Fixed, and never the server that just
+    /// failed — that would be a retry loop, not a fallback.
+    static var fallback: URL { sondeHub }
+
+    static let swissPredictorDefault = "https://predictor.fabia.ch/tawhiri"
+
+    /// The server to ask first.
+    ///
+    /// A URL that cannot work is refused here rather than at request time. Plain
+    /// HTTP is blocked by App Transport Security, so accepting one would turn a
+    /// typo into a silent fallback on every prediction for the rest of a flight.
+    static func base(useSwiss: Bool, swissURL: String) -> URL {
+        guard useSwiss else { return sondeHub }
+
+        let trimmed = swissURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let url = URL(string: trimmed),
+              url.scheme?.lowercased() == "https",
+              let host = url.host, !host.isEmpty else {
+            return sondeHub
+        }
+        return url
+    }
+
+    /// Name for the log. An A/B run is worthless if the log cannot say who
+    /// answered.
+    static func name(for url: URL) -> String {
+        url == sondeHub ? "SondeHub" : (url.host ?? url.absoluteString)
+    }
+
+    static func shouldFallBack(from url: URL) -> Bool { url != sondeHub }
+}
+
 @MainActor
 final class UserSettings: ObservableObject, Codable {
     @Published var burstAltitude: Double = 35000
@@ -17,8 +59,14 @@ final class UserSettings: ObservableObject, Codable {
     @Published var descentRate: Double = 5.0
     @Published var stationId: String = "06610" // Default to Payerne
 
+    /// Ask the Swiss-Balloon-Predictor first. SondeHub remains the fallback.
+    @Published var useSwissPredictor: Bool = true
+    /// Editable so a moved or renamed server needs no rebuild.
+    @Published var swissPredictorURL: String = PredictionEndpoint.swissPredictorDefault
+
     enum CodingKeys: CodingKey {
         case burstAltitude, ascentRate, descentRate, stationId
+        case useSwissPredictor, swissPredictorURL
     }
 
     required init(from decoder: Decoder) throws {
@@ -27,6 +75,11 @@ final class UserSettings: ObservableObject, Codable {
         ascentRate = try container.decode(Double.self, forKey: .ascentRate)
         descentRate = try container.decode(Double.self, forKey: .descentRate)
         stationId = try container.decodeIfPresent(String.self, forKey: .stationId) ?? "06610"
+        // decodeIfPresent: settings files written before the predictor switch
+        // existed must keep loading, and land on the new default.
+        useSwissPredictor = try container.decodeIfPresent(Bool.self, forKey: .useSwissPredictor) ?? true
+        swissPredictorURL = try container.decodeIfPresent(String.self, forKey: .swissPredictorURL)
+            ?? PredictionEndpoint.swissPredictorDefault
     }
 
     func encode(to encoder: Encoder) throws {
@@ -35,6 +88,8 @@ final class UserSettings: ObservableObject, Codable {
         try container.encode(ascentRate, forKey: .ascentRate)
         try container.encode(descentRate, forKey: .descentRate)
         try container.encode(stationId, forKey: .stationId)
+        try container.encode(useSwissPredictor, forKey: .useSwissPredictor)
+        try container.encode(swissPredictorURL, forKey: .swissPredictorURL)
     }
 
     init() { }

@@ -469,12 +469,45 @@ final class PredictionService: ObservableObject {
         // descent_rate is a sea-level terminal velocity and the predictor scales
         // it with altitude itself, so there is nothing for the app to adjust.
         let rateToSend = abs(measuredDescentRate)
-        let request = try buildPredictionRequest(position: position, userSettings: userSettings, descentRate: rateToSend, balloonDescends: balloonDescends)
-        
+        let chosen = PredictionEndpoint.base(useSwiss: userSettings.useSwissPredictor,
+                                             swissURL: userSettings.swissPredictorURL)
+        var request = try buildPredictionRequest(position: position, userSettings: userSettings, descentRate: rateToSend, balloonDescends: balloonDescends, baseURL: chosen)
+        var servedBy = chosen
+        appLog("PredictionService: Asking \(PredictionEndpoint.name(for: chosen))", category: .service, level: .info)
+
         do {
-            // Perform request and log response details for debugging
-            let (data, response) = try await session.data(for: request)
-            
+            // Ask the chosen server. If it cannot answer, retry once against
+            // SondeHub so a hunt does not lose its predictions to a server that
+            // is down, unreachable, or not yet deployed. Both failure shapes
+            // count: a non-200 response, and a thrown transport error (DNS,
+            // refused connection, TLS — a certificate that does not match the
+            // host throws here, which is exactly how a not-yet-provisioned
+            // vhost fails). Logged loudly: an A/B run is worthless if the log
+            // does not say which server produced a landing point.
+            func fetch(_ req: URLRequest) async throws -> (Data, URLResponse) {
+                try await session.data(for: req)
+            }
+
+            var data: Data
+            var response: URLResponse
+            do {
+                (data, response) = try await fetch(request)
+                if PredictionEndpoint.shouldFallBack(from: chosen),
+                   (response as? HTTPURLResponse)?.statusCode != 200 {
+                    let code = (response as? HTTPURLResponse).map { String($0.statusCode) } ?? "no HTTP response"
+                    appLog("PredictionService: ⚠️ \(PredictionEndpoint.name(for: chosen)) returned \(code) - falling back to SondeHub", category: .service, level: .error)
+                    servedBy = PredictionEndpoint.fallback
+                    request = try buildPredictionRequest(position: position, userSettings: userSettings, descentRate: rateToSend, balloonDescends: balloonDescends, baseURL: servedBy)
+                    (data, response) = try await fetch(request)
+                }
+            } catch {
+                guard PredictionEndpoint.shouldFallBack(from: chosen) else { throw error }
+                appLog("PredictionService: ⚠️ \(PredictionEndpoint.name(for: chosen)) unreachable (\(error.localizedDescription)) - falling back to SondeHub", category: .service, level: .error)
+                servedBy = PredictionEndpoint.fallback
+                request = try buildPredictionRequest(position: position, userSettings: userSettings, descentRate: rateToSend, balloonDescends: balloonDescends, baseURL: servedBy)
+                (data, response) = try await fetch(request)
+            }
+
             guard let httpResponse = response as? HTTPURLResponse else {
                 throw PredictionError.invalidResponse
             }
@@ -507,7 +540,7 @@ final class PredictionService: ObservableObject {
             
             let landingPointDesc = landingPoint.map { "(\($0.latitude), \($0.longitude))" } ?? "nil"
             let burstPointDesc = burstPoint.map { "(\($0.latitude), \($0.longitude))" } ?? "nil"
-            appLog("PredictionService: Sondehub v2 prediction completed - Landing: \(landingPointDesc), Burst: \(burstPointDesc)", category: .service, level: .info)
+            appLog("PredictionService: Prediction completed by \(PredictionEndpoint.name(for: servedBy)) - Landing: \(landingPointDesc), Burst: \(burstPointDesc)", category: .service, level: .info)
             
             publishHealthEvent(.healthy, message: "Prediction successful")
             return predictionData
@@ -541,8 +574,8 @@ final class PredictionService: ObservableObject {
     }
 
 
-    private func buildPredictionRequest(position: PositionData, userSettings: UserSettings, descentRate: Double, balloonDescends: Bool) throws -> URLRequest {
-        var components = URLComponents(string: "https://api.v2.sondehub.org/tawhiri")!
+    private func buildPredictionRequest(position: PositionData, userSettings: UserSettings, descentRate: Double, balloonDescends: Bool, baseURL: URL) throws -> URLRequest {
+        var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)!
         let launchTime = ISO8601DateFormatter().string(from: Date().addingTimeInterval(60))
         // FSD: Use settings burst altitude while ascending; when descending, send current altitude + 10m
         // Ensure burst altitude is always greater than current altitude (API requirement)
