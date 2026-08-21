@@ -1,5 +1,5 @@
 {
-    "name": "BalloonHunter",
+    "name": "BalloonHunter - Python Simulation",
     "build": {
         "dockerfile": "Dockerfile",
         "context": ".."
@@ -17,7 +17,10 @@
                 "terminal.integrated.defaultProfile.linux": "bash",
                 "python.defaultInterpreterPath": "/usr/local/bin/python",
                 "python.analysis.typeCheckingMode": "basic",
-                "python.testing.pytestEnabled": false,
+                "python.testing.pytestEnabled": true,
+                "python.testing.pytestArgs": [
+                    "Simulation/tests"
+                ],
                 "[python]": {
                     "editor.defaultFormatter": "charliermarsh.ruff",
                     "editor.formatOnSave": true
@@ -38,13 +41,18 @@
             "version": "latest"
         }
     },
-    "appPort": ["2229:2222"],
-    "postCreateCommand": "(grep -q /run/secrets/env ~/.bashrc || { sed -i '/Persistent claude session/i [ -r /run/secrets/env ] && . /run/secrets/env' ~/.bashrc; grep -q /run/secrets/env ~/.bashrc || echo '[ -r /run/secrets/env ] && . /run/secrets/env' >> ~/.bashrc; }) && git config --global credential.helper /usr/local/bin/git-cred-from-secrets && git config --global core.sshCommand 'ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null' && (git clone https://github.com/SensorsIot/claude.git ~/.claude 2>/dev/null || git -C ~/.claude pull --ff-only || echo 'WARNING: ~/.claude not updated (local changes or divergence) - continuing') && cp -f ~/.claude/tmux.conf ~/.tmux.conf && mkdir -p ~/.claude-data/projects && ln -sf ~/.claude-data/.credentials.json ~/.claude/.credentials.json && ln -sf ~/.claude-data/history.jsonl ~/.claude/history.jsonl && rm -rf ~/.claude/projects && ln -sf ~/.claude-data/projects ~/.claude/projects && ln -sf ~/.claude-data/.claude.json ~/.claude.json && mkdir -p ~/.npm-global && npm config set prefix ~/.npm-global && npm install -g @anthropic-ai/claude-code && echo 'alias superclaude=\"claude --dangerously-skip-permissions\"' >> ~/.bashrc && mkdir -p ~/.githooks && cp ~/.claude/githooks/pre-push ~/.githooks/pre-push && chmod +x ~/.githooks/pre-push && git config --global core.hooksPath ~/.githooks",
+    "appPort": [
+        "2229:2222",
+        "8110:8060"
+    ],
+    "postCreateCommand": "(grep -q /run/secrets/env ~/.bashrc || { sed -i '/Persistent claude session/i [ -r /run/secrets/env ] && . /run/secrets/env' ~/.bashrc; grep -q /run/secrets/env ~/.bashrc || echo '[ -r /run/secrets/env ] && . /run/secrets/env' >> ~/.bashrc; }) && git config --global credential.helper /usr/local/bin/git-cred-from-secrets && git config --global core.sshCommand 'ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null' && (git clone https://github.com/SensorsIot/claude.git ~/.claude 2>/dev/null || git -C ~/.claude pull --ff-only || echo 'WARNING: ~/.claude not updated (local changes or divergence) - continuing') && cp -f ~/.claude/tmux.conf ~/.tmux.conf && mkdir -p ~/.claude-data/projects && ln -sf ~/.claude-data/.credentials.json ~/.claude/.credentials.json && ln -sf ~/.claude-data/history.jsonl ~/.claude/history.jsonl && rm -rf ~/.claude/projects && ln -sf ~/.claude-data/projects ~/.claude/projects && ln -sf ~/.claude-data/.claude.json ~/.claude.json && mkdir -p ~/.npm-global && npm config set prefix ~/.npm-global && npm install -g @anthropic-ai/claude-code && echo 'alias superclaude=\"claude --dangerously-skip-permissions\"' >> ~/.bashrc && mkdir -p ~/.githooks && cp ~/.claude/githooks/pre-push ~/.githooks/pre-push && chmod +x ~/.githooks/pre-push && git config --global core.hooksPath ~/.githooks && pip install -r Simulation/requirements-dev.txt",
     "remoteUser": "dev",
-    "postStartCommand": "sudo /etc/init.d/ssh start",
+    "postStartCommand": "sudo /etc/init.d/ssh start && (nohup bash /workspaces/BalloonHunter/.devcontainer/sbp-serve.sh >/tmp/sbp-server.log 2>&1 & disown) || true",
     "runArgs": [
-        "--name", "balloonhunter",
-        "--restart", "unless-stopped"
+        "--name",
+        "balloonhunter",
+        "--restart",
+        "unless-stopped"
     ],
     "mounts": [
         "source=${localEnv:HOME}/.ssh/authorized_keys,target=/home/dev/.ssh/authorized_keys,type=bind,readonly",
