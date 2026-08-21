@@ -119,21 +119,39 @@ struct LandingDetector {
                        trackLanding: TrackLanding? = nil) -> BalloonPhase {
 
         guard let position else { return .unknown }
+        if landingReason(track: track, position: position, trackLanding: trackLanding) != nil {
+            return .landed
+        }
+        return flightPhase(for: position)
+    }
+
+    /// Why the balloon counts as landed, or `nil` if it does not. Same priority
+    /// chain as `classifyPhase`, exposed so a transition log can record which
+    /// rule fired — the question that took a device-log post-mortem to answer.
+    enum LandingReason: String {
+        case trackLanding      // definitive: a stationary period or blackout in the track
+        case aprsStale         // no APRS telemetry for longer than aprsLandingAge
+        case vectorAnalysis    // net speed below threshold and below the altitude ceiling
+    }
+
+    func landingReason(track: [BalloonTrackPoint],
+                       position: PositionData?,
+                       trackLanding: TrackLanding? = nil) -> LandingReason? {
+        guard let position else { return nil }
 
         // 1. Track-based landing is definitive and sticky.
-        if trackLanding != nil { return .landed }
+        if trackLanding != nil { return .trackLanding }
 
         // 2. Stale APRS telemetry means the balloon stopped transmitting.
         if position.telemetrySource == .aprs,
            Date().timeIntervalSince(position.timestamp) > thresholds.aprsLandingAge {
-            return .landed
+            return .aprsStale
         }
 
         // 3. Vector analysis over the recent track.
-        if isStoppedByVectorAnalysis(track: track) { return .landed }
+        if isStoppedByVectorAnalysis(track: track) { return .vectorAnalysis }
 
-        // 4. Still moving — derive phase from vertical speed.
-        return flightPhase(for: position)
+        return nil
     }
 
     /// Flight phase for a moving balloon, from vertical speed and altitude.

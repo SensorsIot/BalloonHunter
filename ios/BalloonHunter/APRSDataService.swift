@@ -792,7 +792,8 @@ final class APRSDataService: ObservableObject {
                     altitude: alt,
                     timestamp: timestamp,
                     verticalSpeed: point.vel_v ?? 0.0,
-                    horizontalSpeed: point.vel_h ?? 0.0
+                    horizontalSpeed: point.vel_h ?? 0.0,
+                    source: .aprs
                 )
             }
 

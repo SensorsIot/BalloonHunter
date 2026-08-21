@@ -364,6 +364,12 @@ final class BalloonPositionService: ObservableObject {
             let held = String(format: "%.1fs", timeInState)
 
             appLog("🔄 DataState: \(currentState) → \(newState) | BLE:\(inputs.bleConnectionState) APRS:\(inputs.aprsDataAvailable) Phase:\(inputs.balloonPhase) | Device:\(deviceInfo) Msg:\(msgAge) Sonde:\(sondeInfo) Alt:\(altInfo) | Startup:\(startupStatus) Held:\(held) Data:\(staleStatus) AnyData:\(inputs.bleConnectionState.hasTelemetry || inputs.aprsDataAvailable)", category: .service, level: .info)
+            TransitionLogger.shared.logStateTransition(
+                from: currentState.description, to: newState.description,
+                ble: inputs.bleConnectionState.rawValue, aprsAvailable: inputs.aprsDataAvailable,
+                phase: inputs.balloonPhase.rawValue,
+                sonde: sondeInfo, altitude: currentPositionData?.altitude,
+                source: currentPositionData?.telemetrySource.rawValue ?? "")
             transition(to: newState)
         }
 
@@ -727,15 +733,23 @@ final class BalloonPositionService: ObservableObject {
             return TrackLanding(index: 0, timestamp: when, coordinate: position, reason: .stationaryPeriod)
         }()
 
+        let track = balloonTrackService?.currentBalloonTrack ?? []
         let previous = balloonPhase
         balloonPhase = landingDetector.classifyPhase(
-            track: balloonTrackService?.currentBalloonTrack ?? [],
+            track: track,
             position: currentPositionData,
             trackLanding: trackLanding
         )
 
         if balloonPhase != previous {
-            appLog("BalloonPositionService: Balloon phase \(previous) → \(balloonPhase)", category: .service, level: .info)
+            let reason = landingDetector.landingReason(track: track, position: currentPositionData, trackLanding: trackLanding)
+            appLog("BalloonPositionService: Balloon phase \(previous) → \(balloonPhase)\(reason.map { " (\($0.rawValue))" } ?? "")", category: .service, level: .info)
+            TransitionLogger.shared.logPhaseChange(
+                from: previous.rawValue, to: balloonPhase.rawValue,
+                reason: reason?.rawValue ?? "flightPhase",
+                sonde: currentPositionData?.sondeName ?? "",
+                altitude: currentPositionData?.altitude,
+                source: currentPositionData?.telemetrySource.rawValue ?? "")
         }
     }
 
@@ -961,7 +975,8 @@ final class BalloonTrackService: ObservableObject {
             altitude: positionData.altitude,
             timestamp: positionData.timestamp,
             verticalSpeed: derivedVerticalMS ?? positionData.verticalSpeed,
-            horizontalSpeed: derivedHorizontalMS ?? positionData.horizontalSpeed
+            horizontalSpeed: derivedHorizontalMS ?? positionData.horizontalSpeed,
+            source: positionData.telemetrySource
         )
 
         // Slot-based insertion: only add if this second slot is not occupied
@@ -1163,12 +1178,6 @@ final class BalloonTrackService: ObservableObject {
         self.aprsService = aprsService
     }
 
-    /// Round timestamp to nearest second for slot-based deduplication
-    private func roundToSecond(_ date: Date) -> Date {
-        let calendar = Calendar.current
-        let components = calendar.dateComponents([.year, .month, .day, .hour, .minute, .second], from: date)
-        return calendar.date(from: components) ?? date
-    }
 
     /// Insert APRS points using slot-based deduplication (BATCH MODE)
     /// Loops through all APRS points and inserts each one if slot is empty
@@ -1177,27 +1186,15 @@ final class BalloonTrackService: ObservableObject {
     private func insertAPRSPoints(_ aprsPoints: [BalloonTrackPoint]) -> Int {
         guard !aprsPoints.isEmpty else { return 0 }
 
-        // Build occupied slots Set for O(1) lookup
-        var occupiedSlots: Set<Date> = Set()
-        for point in currentBalloonTrack {
-            occupiedSlots.insert(roundToSecond(point.timestamp))
-        }
-
-        // Work on temporary array to avoid triggering @Published on every insert
-        var updatedTrack = currentBalloonTrack
-        var pointsAdded = 0
-
-        // Check each APRS point and insert at correct chronological position if slot empty
-        for point in aprsPoints {
-            let roundedTime = roundToSecond(point.timestamp)
-            if !occupiedSlots.contains(roundedTime) {
-                // Find correct insertion position to maintain chronological order
-                let insertIndex = updatedTrack.firstIndex { $0.timestamp > point.timestamp } ?? updatedTrack.count
-                updatedTrack.insert(point, at: insertIndex)
-                occupiedSlots.insert(roundedTime)
-                pointsAdded += 1
-            }
-        }
+        // Deduplicate by physical position, not timestamp. BLE and APRS decode
+        // the same sonde frame and report identical GPS position, but their
+        // timestamps differ by the relay latency (~17 s) — so a per-second slot
+        // could not tell that an APRS point was a copy of one BLE already holds,
+        // and the gap-fill duplicated the BLE-covered tail. See CoreModels
+        // `mergingByPosition` and FSD *Track Assembly → Deduplication*.
+        let before = currentBalloonTrack.count
+        let updatedTrack = currentBalloonTrack.mergingByPosition(aprsPoints)
+        let pointsAdded = updatedTrack.count - before
 
         // Single update to @Published property (one map redraw for entire APRS batch)
         currentBalloonTrack = updatedTrack
@@ -1220,17 +1217,13 @@ final class BalloonTrackService: ObservableObject {
     /// Check if slot occupied, insert if empty
     /// BLE points arrive in chronological order - no sorting needed
     private func insertTrackPointIfSlotEmpty(_ point: BalloonTrackPoint, source: String) {
-        let roundedTime = roundToSecond(point.timestamp)
-
-        // Check if this second slot is already occupied
-        let slotOccupied = currentBalloonTrack.contains { roundToSecond($0.timestamp) == roundedTime }
-
-        if slotOccupied {
-            // Slot occupied - skip
+        // Dedup by physical position, the same key the APRS fill uses, so a BLE
+        // point and an APRS copy of the same sonde frame collide even though
+        // their timestamps differ by the relay latency. Skips a position already
+        // present regardless of which source laid it down.
+        if currentBalloonTrack.contains(where: { $0.positionKey == point.positionKey }) {
             return
         }
-
-        // Slot empty - append (BLE points are chronological)
         currentBalloonTrack.append(point)
     }
 

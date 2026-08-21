@@ -847,6 +847,23 @@ Discover and connect to MySondyGo devices over Bluetooth Low Energy, subscribe t
 - CSV logging for each telemetry sample is handled downstream (`BalloonTrackService` → `DebugCSVLogger`).
 - Automatic settings requests happen once after the first valid packet; subsequent requests are user-driven via the settings UI.
 
+#### Transition logging (`TransitionLogger`)
+
+Every state-machine transition and every `balloonPhase` change is appended to
+`transitions.csv` in the app container, each row carrying the driving inputs —
+for a state change: BLE connection state, APRS availability, phase; for a phase
+change: the **rule that caused a landing** (`trackLanding` / `aprsStale` /
+`vectorAnalysis`, from `LandingDetector.landingReason`) — plus sonde, altitude
+and telemetry source.
+
+This exists because the device's `os_log` ring buffer drops info-level entries
+within about an hour, so a landing decision could not be read after the fact
+(the W4214924 landing on 21 Aug 2026 could only be reconstructed indirectly).
+The file is **regularly deleted**: purged at the start of every new hunt (a fresh
+file per sonde), and size-capped at 256 KB — when it exceeds that, the oldest
+half is dropped so it cannot grow without bound the way `telemetry_log.csv` did.
+It is a black box for post-mortems, not a user-facing feature.
+
 
 
 ### APRS Service
@@ -1069,9 +1086,13 @@ Build the flight history, smooth velocities, detect landings, derive descent met
 #### Behavior
 
 1. **Sonde management** — When a new sonde appears, the service clears the previous track and counters, then starts fresh. At app startup, persisted track from previous session (if any) is loaded from balloontrack.json.
-2. **Track updates with slot-based deduplication** — Each telemetry sample is converted into a `BalloonTrackPoint`; if a previous point exists the service recomputes horizontal speed via great-circle distance and vertical speed via altitude delta for consistency. **Slot-based deduplication**: Track stores maximum 1 point per second (identified by rounded timestamp). Before insertion, checks if slot is occupied. BLE points (arriving chronologically) simply append if slot empty. APRS batch points check all slots, append points to empty slots only (no sorting needed - points naturally stay chronological). This prevents duplicate points when BLE and APRS report same second, with BLE naturally taking priority. Map updates immediately on each BLE point and once per APRS batch. Descent regression is updated, and observers receive `trackUpdated`.
+2. **Track updates with position-based deduplication** — Each telemetry sample is converted into a `BalloonTrackPoint`; if a previous point exists the service recomputes horizontal speed via great-circle distance and vertical speed via altitude delta for consistency. Every point also carries its `source` (`.ble` or `.aprs`), so the origin of any sample is recorded rather than inferred.
 
-2a. **APRS track filling** — `fillTrackGapsFromAPRS(sondeName:forceDetection:)` fetches SondeHub telemetry and fills gaps in the track. APRS points go only into seconds the track has no point for, so BLE data is never displaced or duplicated.
+   **Deduplication is by physical position, not timestamp** (`BalloonTrackPoint.positionKey`, rounded to ~1 m: 5 decimals of lat/lon, 1 m of altitude; the merge is the pure `Array.mergingByPosition`). BLE and APRS decode the *same* sonde frame and report identical GPS position, but their timestamps differ by the relay latency — BLE stamps the phone's arrival time (direct RF decode), APRS carries the sonde's frame time as recorded by SondeHub, ~17 s later. A per-second timestamp key therefore could not tell that an APRS point was a copy of one BLE already held, and inserted both. Position identifies a sample across sources regardless of clock; two decodes of one frame collide and only one is kept, while distinct 1 Hz descent samples (several metres apart) are all preserved. Map updates immediately on each BLE point and once per APRS batch.
+
+   > **Measured — W4214924, 21 Aug 2026.** BLE dropped, returned briefly for ~6 s near 1551 m, then dropped again. A backfill re-inserted APRS copies of those 6 BLE points 17 s later with identical lat/lon/alt, producing an interleaved sawtooth and repeated `RED TRACK JUMP` warnings. Under a 1 s timestamp key the copies landed in different slots and were not caught; position keying drops them.
+
+2a. **APRS track filling** — `fillTrackGapsFromAPRS(sondeName:forceDetection:)` fetches SondeHub telemetry and merges it by position, so a genuine gap (no point at that location) is filled while an APRS copy of a position BLE already recorded is dropped — even across BLE reconnects and the ~17 s clock skew. Live APRS is otherwise suppressed while BLE is the active source; APRS enters the track only through this fill.
 
    It runs when the state machine enters an APRS state, on a sonde change, at startup, and on returning from the background mid-flight.
 

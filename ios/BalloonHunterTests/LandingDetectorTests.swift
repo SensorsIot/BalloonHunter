@@ -299,4 +299,50 @@ final class LandingDetectorTests: XCTestCase {
         XCTAssertFalse(detector.isStoppedByVectorAnalysis(track: track))
         XCTAssertTrue(permissive.isStoppedByVectorAnalysis(track: track))
     }
+    // MARK: - Landing reason (for the transition log)
+
+    func testReason_freshDescendingAPRS_isNil() {
+        // The W4214520/W4214924 shape: a fresh APRS frame, descending. Not landed,
+        // so no reason.
+        let r = detector.landingReason(track: [], position: position(alt: 1551, verticalSpeed: -4.9, source: .aprs, age: 5))
+        XCTAssertNil(r)
+    }
+
+    func testReason_staleAPRS_isAprsStale() {
+        let r = detector.landingReason(track: [], position: position(alt: 1551, verticalSpeed: -4.9, source: .aprs, age: 200))
+        XCTAssertEqual(r, .aprsStale)
+    }
+
+    func testReason_stationaryBelow3000m_isVectorAnalysis() {
+        // Fresh BLE (never stale by age), but stopped and low: vector analysis.
+        let r = detector.landingReason(track: stationaryTrack(count: 20, alt: 500),
+                                       position: position(alt: 500, verticalSpeed: 0, source: .ble))
+        XCTAssertEqual(r, .vectorAnalysis)
+    }
+
+    func testReason_trackLandingWins() {
+        let landing = TrackLanding(index: 0, timestamp: Date(),
+                                   coordinate: .init(latitude: 46.9, longitude: 7.31),
+                                   reason: .stationaryPeriod)
+        let r = detector.landingReason(track: [], position: position(alt: 1551, verticalSpeed: -4.9, source: .aprs, age: 200),
+                                       trackLanding: landing)
+        XCTAssertEqual(r, .trackLanding, "a track landing outranks the stale-APRS rule")
+    }
+
+    func testReason_agreesWithClassifyPhase() {
+        // Whenever a reason exists, the phase is landed; when nil, it is not.
+        let cases = [
+            position(alt: 1551, verticalSpeed: -4.9, source: .aprs, age: 5),
+            position(alt: 1551, verticalSpeed: -4.9, source: .aprs, age: 200),
+            position(alt: 500, verticalSpeed: 0, source: .ble),
+        ]
+        for p in cases {
+            let track = detector.landingReason(track: stationaryTrack(count: 20, alt: p.altitude), position: p) == .vectorAnalysis
+                ? stationaryTrack(count: 20, alt: p.altitude) : []
+            let reason = detector.landingReason(track: track, position: p)
+            let phase = detector.classifyPhase(track: track, position: p)
+            XCTAssertEqual(reason != nil, phase == .landed, "reason presence must match landed phase")
+        }
+    }
+
 }

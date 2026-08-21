@@ -323,8 +323,9 @@ final class ServiceCoordinator: ObservableObject {
 
         appLog("ServiceCoordinator: === Starting to track sonde '\(name)' (was: '\(currentSonde)') ===", category: .general, level: .info)
 
-        // 1. Clear all old sonde data
+        // 1. Clear all old sonde data. A new hunt gets a fresh transition log.
         clearAllSondeData()
+        TransitionLogger.shared.purge()
 
         // 2. Set frequency sync flag
         startupFrequencySyncDone = !checkFrequencySync

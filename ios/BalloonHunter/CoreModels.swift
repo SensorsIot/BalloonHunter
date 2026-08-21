@@ -155,6 +155,42 @@ struct BalloonTrackPoint: Codable {
     let timestamp: Date
     let verticalSpeed: Double
     let horizontalSpeed: Double
+    /// Which source delivered this sample. Optional so tracks persisted before
+    /// source tracking existed still decode (as nil). Informational — dedup keys
+    /// on position, not this.
+    var source: TelemetrySource? = nil
+
+    /// Physical-position identity, used to deduplicate the track.
+    ///
+    /// BLE and APRS decode the *same* sonde frame, so they report identical
+    /// GPS position — but BLE stamps arrival time while APRS carries the sonde's
+    /// frame time, and the two differ by the relay latency (~17 s observed). So
+    /// time cannot identify a sample across sources; position can. Rounded to
+    /// ~1 m (5 decimals lat/lon, 1 m altitude): two decodes of one frame collide,
+    /// while distinct 1 Hz descent samples (several metres apart) do not.
+    /// See FSD *Track Assembly → Deduplication*.
+    var positionKey: String {
+        String(format: "%.5f,%.5f,%.0f", latitude, longitude, altitude)
+    }
+}
+
+extension Array where Element == BalloonTrackPoint {
+    /// Merge `incoming` points into this track, skipping any whose physical
+    /// position is already present, and return the result in chronological order.
+    ///
+    /// This is what makes gap-filling from APRS safe while BLE flaps in and out:
+    /// a genuine gap (no point at that position) is filled, but an APRS copy of a
+    /// point BLE already laid down is recognized by position and dropped — no
+    /// matter that its timestamp differs by the relay latency.
+    func mergingByPosition(_ incoming: [BalloonTrackPoint]) -> [BalloonTrackPoint] {
+        var occupied = Set(map { $0.positionKey })
+        var result = self
+        for point in incoming where !occupied.contains(point.positionKey) {
+            occupied.insert(point.positionKey)
+            result.append(point)
+        }
+        return result.sorted { $0.timestamp < $1.timestamp }
+    }
 }
 
 struct BalloonMotionMetrics {
