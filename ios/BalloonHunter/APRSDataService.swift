@@ -232,9 +232,25 @@ final class APRSDataService: ObservableObject {
     }
 
     /// Force immediate APRS fetch (for foreground resume or manual refresh)
-    func forceImmediateFetch() async {
-        appLog("APRSDataService: Forcing immediate APRS fetch", category: .service, level: .info)
-        await fetchLatestTelemetry()
+    /// Publish a balloon position built from a recovered track point, so the one
+    /// `readBalloonContext` fetch drives the marker/state machine/prediction — no
+    /// second fetch just for the position. (Radio/frequency continues to come
+    /// from the ongoing poll.) Used only for the context read, never mid-flight,
+    /// so it can't override a live BLE fix.
+    func publishRecoveredPosition(from point: BalloonTrackPoint, serial: String) {
+        var pos = PositionData()
+        pos.sondeName = serial
+        pos.latitude = point.latitude
+        pos.longitude = point.longitude
+        pos.altitude = point.altitude
+        pos.verticalSpeed = point.verticalSpeed
+        pos.horizontalSpeed = point.horizontalSpeed
+        pos.timestamp = point.timestamp
+        pos.telemetrySource = .aprs
+        latestPosition = pos
+        lastTelemetryUpdateTime = Date()
+        connectionStatus = .connected
+        positionDataStream.send(pos)
     }
 
     // Removed: primeStartupData - startup now uses standard startPolling() for immediate telemetry

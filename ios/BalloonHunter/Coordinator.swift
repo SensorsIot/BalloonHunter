@@ -363,11 +363,11 @@ final class ServiceCoordinator: ObservableObject {
         // landed sonde is predicted once here and does not drift.
         Task { [weak self] in
             guard let self else { return }
-            await self.balloonPositionService.aprsService.forceImmediateFetch()   // telemetry → latestPosition
-            self.balloonTrackService.fillTrackGapsFromAPRS(sondeName: name)        // full track
-            await self.balloonPositionService.aprsService.checkRecovery(serial: name)  // recovery status
+            // ① One fetch: full track + latest position (published), recovery in parallel.
+            await self.balloonTrackService.readBalloonContext(serial: name)
 
-            // Landing prediction + routing from the fetched position (flying or landed).
+            // ② track is drawn from that data. ③ prediction from the published
+            // position → ④ route. One ordered chain, no second fetch.
             if let position = self.balloonPositionService.aprsService.latestPosition {
                 await self.predictionService.triggerPredictionWithPosition(position, trigger: "sonde-context")
             }

@@ -1104,6 +1104,28 @@ Build the flight history, smooth velocities, detect landings, derive descent met
 
    **The live BLE stream keeps one point per second.** Full rate matters here: smoothing and real-time landing detection run on it, and a balloon sitting on the ground must keep laying down samples so the vector and stationary-period detectors can see it has stopped. Cross-source duplication never happens on the live path, because live APRS is suppressed while BLE is active (below). Map updates immediately on each BLE point and once per APRS batch.
 
+#### Reading a sonde: the four steps
+
+Selecting a sonde (startup **and** every new sonde go through `startTrackingSonde`)
+does four things, in one ordered chain, each owned by one place:
+
+1. **`readBalloonContext(serial)`** — *one* SondeHub fetch: load the whole track
+   and publish the latest position (its last point), with the recovery status
+   checked in parallel. This is the single data read. It replaces the old pair
+   `forceImmediateFetch` (position) + startup `fillTrackGapsFromAPRS` (track),
+   which fetched the same 3-day payload **twice** (~15 s doubled for a large
+   sonde).
+2. **track overlay** — the red track + balloon marker draw from that data
+   immediately; nothing downstream is waited on.
+3. **prediction overlay** — one prediction from the published position → the blue
+   path + landing point. Then re-prediction is flying-only (`PredictionPolicy`).
+4. **route overlay** — the green route follows from the landing point.
+
+`fillTrackGapsFromAPRS` is **no longer** the startup loader — it is demoted to
+*mid-flight gap repair* (a BLE-loss handoff), and the state machine only calls it
+when the previous state was not `startup`, so it never re-fetches the track the
+context read just loaded. Recovery-status and the continuous poll run in parallel.
+
 2a. **APRS track filling, deduplicated by physical position** — `fillTrackGapsFromAPRS(sondeName:forceDetection:)` fetches SondeHub telemetry and merges it with `Array.mergingByPosition` (`BalloonTrackPoint.positionKey`, rounded to ~1 m: 5 decimals of lat/lon, 1 m of altitude). A genuine gap — no point at that location — is filled; an APRS copy of a position the track already holds is dropped.
 
    Position, not timestamp, is the identity because BLE and APRS decode the *same* sonde frame and report identical GPS position, but their timestamps differ by the relay latency — BLE stamps the phone's arrival time (direct RF decode), APRS carries the sonde's frame time as recorded by SondeHub. A per-second timestamp key could not tell an APRS point was a copy of one BLE already held, and inserted both; position is immune to the skew and needs no time-window constant. Live APRS is otherwise suppressed while BLE is the active source, so APRS enters the track only through this fill.

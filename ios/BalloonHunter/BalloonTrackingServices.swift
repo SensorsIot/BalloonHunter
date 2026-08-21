@@ -403,12 +403,13 @@ final class BalloonPositionService: ObservableObject {
     }
 
     private func transition(to newState: DataState) {
+        let previous = currentState
         currentState = newState
         stateEntryTime = Date()
-        handleStateTransition(to: newState)
+        handleStateTransition(to: newState, from: previous)
     }
 
-    private func handleStateTransition(to state: DataState) {
+    private func handleStateTransition(to state: DataState, from previous: DataState? = nil) {
         switch state {
         case .startup:
             // Startup state - enable APRS polling to search for available data
@@ -453,15 +454,20 @@ final class BalloonPositionService: ObservableObject {
                     await predictionService.triggerPredictionWithPosition(position, trigger: "state-machine")
                 }
             }
-            // Fill track gaps from APRS when entering APRS mode
-            balloonTrackService?.fillTrackGapsFromAPRS(sondeName: currentBalloonName)
+            // Mid-flight gap repair (BLE lost → APRS). At startup the sonde-context
+            // read already loaded the whole track, so don't re-fetch it here.
+            if previous != .startup {
+                balloonTrackService?.fillTrackGapsFromAPRS(sondeName: currentBalloonName)
+            }
 
         case .aprsLanded:
             // APRS-only mode with old/stale data indicating landing
             aprsService.enablePolling()
             updateLandingPosition()
-            // Fill track gaps from APRS when entering APRS mode
-            balloonTrackService?.fillTrackGapsFromAPRS(sondeName: currentBalloonName)
+            // Mid-flight gap repair only; the startup context read owns the load.
+            if previous != .startup {
+                balloonTrackService?.fillTrackGapsFromAPRS(sondeName: currentBalloonName)
+            }
             checkRecoveryStatus()
         }
 
@@ -1260,6 +1266,32 @@ final class BalloonTrackService: ObservableObject {
     /// - Parameters:
     ///   - sondeName: Explicit sonde name (optional, uses currentBalloonName if nil)
     ///   - forceDetection: Force track-based landing detection regardless of track size (for background return scenario)
+    /// Read the whole sonde context from SondeHub in one fetch: load the full
+    /// track and publish the latest position (so the one fetch drives the map,
+    /// prediction and route), while the recovery status is checked in parallel.
+    /// This is the single data read at sonde selection — it replaces the old
+    /// `forceImmediateFetch` (position) + startup `fillTrackGapsFromAPRS` (track),
+    /// which fetched the same 3-day payload twice. `fillTrackGapsFromAPRS` is now
+    /// only mid-flight gap repair. See FSD *Reading a sonde: the four steps*.
+    func readBalloonContext(serial: String) async {
+        guard let aprsService else { return }
+        async let recovery: Void = aprsService.checkRecovery(serial: serial)   // parallel, tiny
+        let points = await aprsService.fetchAPRSTelemetryToFillGaps(serial: serial, localTrack: currentBalloonTrack)
+        await MainActor.run {
+            guard currentBalloonName == serial else { return }   // sonde changed while fetching
+            if !points.isEmpty {
+                _ = insertAPRSPoints(points)
+                trackUpdated.send()
+                saveCurrentTrack()
+            }
+            if let latest = currentBalloonTrack.last {
+                aprsService.publishRecoveredPosition(from: latest, serial: serial)
+            }
+            detectTrackBasedLanding()
+        }
+        _ = await recovery
+    }
+
     func fillTrackGapsFromAPRS(sondeName: String? = nil, forceDetection: Bool = false) {
         // Use provided sonde name or fall back to currentBalloonName
         guard let effectiveSondeName = sondeName ?? currentBalloonName else {
