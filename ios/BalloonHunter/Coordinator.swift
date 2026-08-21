@@ -235,8 +235,7 @@ final class ServiceCoordinator: ObservableObject {
 
     /// Handle state changes to control prediction timer
     private func handleStateChangeForPredictionTimer(_ state: DataState) {
-        if PredictionPolicy.shouldPredict(state: state,
-                                          confirmedTouchdown: balloonPositionService.landingConfirmedByBLE) {
+        if PredictionPolicy.shouldPredict(state: state) {
             startPredictionTimer()
         } else {
             stopPredictionTimer()

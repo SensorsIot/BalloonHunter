@@ -166,29 +166,17 @@ final class LandingSequenceTests: XCTestCase {
         XCTAssertTrue(detector.confirmsTouchdown(.trackLanding), "track landing = touchdown")
     }
 
-    // MARK: - Predictions must run through landed-by-silence
+    // MARK: - Predictions run only while flying
 
-    func testPredictionPolicy_runsThroughLandedBySilence() {
-        // This is the test whose absence let the blank-map regression through:
-        // landed-by-silence must keep predicting so there is a landing to route to.
-        XCTAssertTrue(PredictionPolicy.shouldPredict(state: .aprsLanded, confirmedTouchdown: false),
-                      "landed-by-silence must keep predicting")
-        XCTAssertTrue(PredictionPolicy.shouldPredict(state: .liveBLELanded, confirmedTouchdown: false))
-    }
-
-    func testPredictionPolicy_stopsOnConfirmedTouchdown() {
-        for state in [DataState.aprsLanded, .liveBLELanded, .aprsFlying, .liveBLEFlying] {
-            XCTAssertFalse(PredictionPolicy.shouldPredict(state: state, confirmedTouchdown: true),
-                           "a confirmed touchdown ends predictions in \(state)")
-        }
-    }
-
-    func testPredictionPolicy_runsWhileFlying_stopsWithoutBasis() {
-        XCTAssertTrue(PredictionPolicy.shouldPredict(state: .liveBLEFlying, confirmedTouchdown: false))
-        XCTAssertTrue(PredictionPolicy.shouldPredict(state: .aprsFlying, confirmedTouchdown: false))
-        for state in [DataState.startup, .waitingForAPRS, .noTelemetry] {
-            XCTAssertFalse(PredictionPolicy.shouldPredict(state: state, confirmedTouchdown: false),
-                           "\(state) has no basis for a prediction")
+    func testPredictionPolicy_predictsOnlyWhileFlying() {
+        XCTAssertTrue(PredictionPolicy.shouldPredict(state: .liveBLEFlying))
+        XCTAssertTrue(PredictionPolicy.shouldPredict(state: .aprsFlying))
+        // Landed — by silence or touchdown — needs no new prediction: the last
+        // estimate is the landing, and re-predicting a fixed position only makes
+        // it drift (and asks for GFS data an old sonde no longer has).
+        for state in [DataState.aprsLanded, .liveBLELanded, .startup, .waitingForAPRS, .noTelemetry] {
+            XCTAssertFalse(PredictionPolicy.shouldPredict(state: state),
+                           "\(state) must not trigger a new prediction")
         }
     }
 

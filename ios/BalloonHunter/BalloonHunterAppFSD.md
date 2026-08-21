@@ -1780,11 +1780,19 @@ knowing where the balloon lies:**
   observation** — in practice close-range BLE — detected by `vectorAnalysis` or
   the track-based stationary/blackout rules. That is when the marker locks to the
   actual point and prediction stops.
-- **Predictions keep running through landed-by-silence** (`PredictionPolicy`):
-  there has to be a predicted landing to show and route to, so the timer runs in
-  `aprsLanded`/`liveBLELanded` exactly as in flight, and stops only on a confirmed
-  touchdown or a no-data state. (Regression guarded: when this stopped in
-  `aprsLanded`, the map went blank — no landing point, no route.)
+- **Predictions run only while flying** (`PredictionPolicy.shouldPredict`).
+  Once landed — by touchdown or by silence — no new prediction is made: the last
+  estimate from while it was flying *is* the landing, and it is retained
+  (`currentLandingPoint` is not cleared, and `updateLandingPosition` does not
+  overwrite it for landed-by-silence), so the marker and route stay put. Two
+  reasons not to re-predict a landed balloon: the position is fixed, so a fresh
+  prediction only makes the landing **drift** as the wind forecast for "now"
+  advances (observed ~240 m per foreground resume); and for an old sonde the
+  predictor no longer has GFS data for that time and the request hangs.
+- **The prediction is anchored to the sonde's telemetry time, not "now."**
+  `launch_datetime` is `position.timestamp` and the cache is bucketed by it, so a
+  live balloon predicts with current winds while a just-stale one yields the same
+  cached result (no drift). This mirrors the landing-*time* anchoring above.
 - The distinguishing datum is **vertical speed**: the last APRS frame has one
   (descending, still in the air when lost); the confirming BLE frames do not
   (sitting still on the ground). Altitude alone cannot decide it — Payerne
