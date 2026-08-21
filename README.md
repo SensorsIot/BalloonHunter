@@ -15,13 +15,6 @@ A cross-platform mobile application for tracking and recovering weather balloons
 | 🍎 **iOS** | App Store Pending | [ios/README.md](ios/README.md) |
 | 🤖 **Android** | In Development | [android/README.md](android/README.md) |
 
-> 🐍 **The Simulation package has moved.** The Radiosonde Descent Collector now
-> lives in [Swiss-Balloon-Predictor](https://github.com/SensorsIot/Swiss-Balloon-Predictor)
-> as `testing/collector/`, where it serves as that project's evidence harness.
-> It was built here to measure the `descent_rate` error described below, and
-> that motivation still stands — it is the same error in both projects. This
-> repository is now the iOS and Android apps.
-
 ## ✨ Key Features
 
 ### 🔗 Dual Connectivity
@@ -58,12 +51,6 @@ cd android
 ./gradlew assembleDebug
 ```
 Requirements: Android Studio, JDK 17+, Google Maps API key
-
-### 🐍 Sonde collector
-Moved to [Swiss-Balloon-Predictor](https://github.com/SensorsIot/Swiss-Balloon-Predictor):
-```bash
-python testing/collect.py --serial W3821271
-```
 
 ## 📡 API Integration
 
