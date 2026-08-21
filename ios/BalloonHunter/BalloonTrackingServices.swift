@@ -109,6 +109,15 @@ final class BalloonPositionService: ObservableObject {
     private var lockedLandingPosition: CLLocationCoordinate2D? = nil
     private let landingPositionUpdateThreshold: CLLocationDistance = 50.0 // meters
 
+    /// Why the balloon currently counts as landed (nil while flying), and whether
+    /// that is a confirmed touchdown. Landed-by-silence (`aprsStale`) leaves the
+    /// landing point on the prediction; only a confirmed touchdown locks it to the
+    /// actual position. See *How a Landing Is Determined* in the FSD.
+    private var lastLandingReason: LandingDetector.LandingReason? = nil
+    /// Published so MapPresenter keeps the predicted-descent line visible during a
+    /// landed-by-silence drive and drops it only on a confirmed touchdown.
+    @Published private(set) var landingConfirmedByBLE: Bool = false
+
     /// Owns the three landing algorithms and their priority chain.
     private let landingDetector = LandingDetector()
 
@@ -472,6 +481,17 @@ final class BalloonPositionService: ObservableObject {
     private func updateLandingPosition() {
         guard let position = currentPositionData else { return }
 
+        // Only a confirmed touchdown (stationary, near ground — in practice BLE)
+        // locks the landing point to the balloon's position. Landed-by-silence
+        // (APRS went quiet while descending) leaves the landing point on the
+        // prediction, so the marker and route stay on the predicted landing and
+        // never jump to the last-heard-at-altitude point. See FSD *How a Landing
+        // Is Determined*.
+        guard landingConfirmedByBLE else {
+            appLog("BalloonPositionService: Landed by silence (\(lastLandingReason?.rawValue ?? "?")) - keeping predicted landing, not locking to \(Int(position.altitude))m position", category: .service, level: .info)
+            return
+        }
+
         let currentCoord = CLLocationCoordinate2D(latitude: position.latitude, longitude: position.longitude)
 
         if let locked = lockedLandingPosition {
@@ -741,8 +761,13 @@ final class BalloonPositionService: ObservableObject {
             trackLanding: trackLanding
         )
 
+        // Keep the current landing reason available for the landing-point and
+        // path-visibility decisions (see updateLandingPosition / MapPresenter).
+        lastLandingReason = landingDetector.landingReason(track: track, position: currentPositionData, trackLanding: trackLanding)
+        landingConfirmedByBLE = landingDetector.confirmsTouchdown(lastLandingReason)
+
         if balloonPhase != previous {
-            let reason = landingDetector.landingReason(track: track, position: currentPositionData, trackLanding: trackLanding)
+            let reason = lastLandingReason
             appLog("BalloonPositionService: Balloon phase \(previous) → \(balloonPhase)\(reason.map { " (\($0.rawValue))" } ?? "")", category: .service, level: .info)
             TransitionLogger.shared.logPhaseChange(
                 from: previous.rawValue, to: balloonPhase.rawValue,

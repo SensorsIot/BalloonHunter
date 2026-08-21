@@ -168,9 +168,12 @@ final class MapPresenter: ObservableObject {
         case .liveBLEFlying, .aprsFlying:
             return true
         case .liveBLELanded, .aprsLanded:
-            return false
+            // Landed-by-silence (APRS quiet while descending) keeps the predicted
+            // descent line for the drive; only a confirmed BLE touchdown drops it.
+            // See FSD *How a Landing Is Determined*.
+            return !balloonPositionService.landingConfirmedByBLE
         case .waitingForAPRS:
-            return balloonPositionService.balloonPhase != .landed
+            return !balloonPositionService.landingConfirmedByBLE
         }
     }
 
