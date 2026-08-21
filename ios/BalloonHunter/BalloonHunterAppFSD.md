@@ -1735,6 +1735,52 @@ Sending the raw instantaneous rate is a category error: at 20 km a sonde falls a
 
 **Open, and deliberately not specified yet:** how early the two failure modes can be told apart. Measured on one slow flight against one normal control, the ratio-based estimates were indistinguishable 5-10 minutes after burst (3.46 vs 3.68) and only separated after roughly 20-25 minutes. Two flights and one control cannot support a threshold. A prospective data collection across Payerne flights is planned to settle it.
 
+### How a Landing Is Determined
+
+This is foundational, and easy to get wrong: **losing the APRS signal is not a
+landing.**
+
+**APRS coverage almost always ends while the balloon is still in the air.**
+SondeHub is fed by ground receivers with line-of-sight to the sonde; as the
+balloon descends behind terrain the network loses it, typically several hundred
+metres up. The last APRS frame therefore carries a **non-zero descent rate — the
+balloon is still falling** when the feed stops. On W4214924 (21 Aug 2026) the
+final SondeHub frame was 389 m, −4.3 m/s; on W4214915, 1 173 m, still descending.
+So for nearly every flight there is **no touchdown in the APRS data at all.**
+
+**Only a close-range BLE receiver sees the real touchdown.** The hunter's own
+MySondyGo hears the sonde down to the ground when near enough, and a landed sonde
+shows a **fixed position, near ground level, with vertical speed ≈ 0.** That —
+not the disappearance of APRS — is what confirms where the balloon actually came
+to rest.
+
+**Two kinds of "landed" the app must not confuse — the flight being over, versus
+knowing where the balloon lies:**
+
+| condition | `landingReason` | what it means | landing position | route |
+|---|---|---|---|---|
+| APRS silent > `aprsLandingAge`, last frame **at altitude, descending** | `aprsStale` | the flight is over — the balloon has reached the ground — but *where* is only estimated | the **prediction** | to the predicted landing, **as always** |
+| BLE at close range: a **fixed point, near ground, vertical speed ≈ 0** | `vectorAnalysis` (or track-based) | the **confirmed touchdown** | the **actual BLE position** | to the actual point |
+
+**Consequences that follow and must hold:**
+
+- `aprsStale` says the flight is over, not where the balloon is. So a landing
+  reached this way keeps the **prediction** as the landing point and the car route
+  target — **the last-heard-at-altitude position is never the destination**, and
+  the predicted-landing marker and its connecting line stay visible for the whole
+  drive. (The original defect was the app locking the landing point to the
+  last-heard position and hiding the prediction — freezing a marker at altitude
+  with the real estimate elsewhere and no line between them.)
+- The **confirmed touchdown position comes only from a fixed, near-ground
+  observation** — in practice close-range BLE — detected by `vectorAnalysis` or
+  the track-based stationary/blackout rules. That is when the marker locks to the
+  actual point and prediction stops.
+- The distinguishing datum is **vertical speed**: the last APRS frame has one
+  (descending, still in the air when lost); the confirming BLE frames do not
+  (sitting still on the ground). Altitude alone cannot decide it — Payerne
+  launches from ~490 m, and a sonde in the hills can rest higher than one still
+  falling over the lake.
+
 ### Phase 4 - On Foot
 
 The hunter is out of the car, walking, with the receiver in one hand and the

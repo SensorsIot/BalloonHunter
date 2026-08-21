@@ -142,7 +142,14 @@ struct LandingDetector {
         // 1. Track-based landing is definitive and sticky.
         if trackLanding != nil { return .trackLanding }
 
-        // 2. Stale APRS telemetry means the balloon stopped transmitting.
+        // 2. Stale APRS telemetry means the flight is over: a balloon silent for
+        // longer than aprsLandingAge has reached the ground. But APRS coverage
+        // almost always ends while the balloon is still descending, so this tells
+        // us *that* it landed, not *where* — the position is only an estimate (the
+        // prediction). The confirmed touchdown position comes from a fixed,
+        // near-ground observation (rule 3, in practice close-range BLE). The
+        // caller distinguishes the two by `landingReason`. See FSD *How a Landing
+        // Is Determined*.
         if position.telemetrySource == .aprs,
            Date().timeIntervalSince(position.timestamp) > thresholds.aprsLandingAge {
             return .aprsStale

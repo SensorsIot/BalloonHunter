@@ -79,41 +79,71 @@ final class LandingSequenceTests: XCTestCase {
         XCTAssertEqual(phase, .descendingBelow10k)
     }
 
-    // MARK: - What actually ends the flight
+    // The predicted landing for this flight — the last estimate logged before the
+    // feed was lost (see docs/LandingPredictionTrack-W4214924). This is where the
+    // balloon actually comes down and where the hunter drives; ~2.3 km from the
+    // last APRS point (389 m), the drift over the unobserved final descent.
+    private let predictedLanding = (lat: 47.71429, lon: 7.53771)
 
-    func testStaleAPRSAfterHandoff_landsByStaleRule() throws {
-        // The real failure: after the switch, telemetry stops arriving. A frame
-        // older than the 120 s threshold is what makes the detector say landed —
-        // and its reason is aprsStale, not the switch.
+    // MARK: - Losing APRS says the flight is over, not where it lies
+
+    func testStaleAPRSAtAltitude_landsByStaleRule_positionIsEstimate() throws {
+        // APRS coverage ends at 389 m, still falling. Silence past the threshold
+        // means the flight is over (the balloon reached the ground) — so the phase
+        // is landed with reason aprsStale. But this says *that* it landed, not
+        // *where*: the position is only the estimate (the prediction), never the
+        // last-heard-at-altitude point. See FSD *How a Landing Is Determined*.
         let samples = try descent()
         let track = samples.map { trackPoint($0, source: .ble) }
-        let last = samples.last!
-        let phase = detector.classifyPhase(track: track, position: position(last, source: .aprs, ageSeconds: 200))
-        XCTAssertEqual(phase, .landed)
-        XCTAssertEqual(detector.landingReason(track: track, position: position(last, source: .aprs, ageSeconds: 200)),
-                       .aprsStale)
+        let pos = position(samples.last!, source: .aprs, ageSeconds: 200)
+        XCTAssertEqual(detector.classifyPhase(track: track, position: pos), .landed)
+        XCTAssertEqual(detector.landingReason(track: track, position: pos), .aprsStale,
+                       "landed-by-silence: the flight is over, position is the prediction")
     }
 
-    func testGenuineGroundSit_landsByVectorAnalysis() throws {
-        // Complete the sequence the lost feed never showed: the balloon settles
-        // at its last point and keeps transmitting, stationary, below 3000 m.
-        // That must be detected as landed by vector analysis.
+    // MARK: - The confirmed touchdown: the hunter closes in on BLE
+
+    func testFullRecovery_APRSLostThenBLEConfirmsAtPredictedLanding() throws {
+        // The whole recovery, end to end:
+        //  1. APRS descent to 389 m, still falling — feed lost. Landed-by-silence:
+        //     the flight is over, the estimate is the predicted landing.
+        //  2. the hunter drives to that predicted landing (a telemetry gap).
+        //  3. there, the MySondyGo (BLE) hears the sonde sitting fixed near the
+        //     ground, vertical speed 0 — the confirmed touchdown, at the predicted
+        //     landing point.
         let samples = try descent()
         var track = samples.map { trackPoint($0, source: .ble) }
-        let rest = samples.last!
-        let groundT = samples.last!.t
-        for i in 1...25 {   // 25 samples sitting still, ~1/10 s cadence
-            track.append(BalloonTrackPoint(latitude: rest.lat, longitude: rest.lon, altitude: rest.alt,
-                                           timestamp: epoch.addingTimeInterval(groundT + Double(i) * 10),
+
+        // 1. Last APRS frame, stale → landed by silence; reason is aprsStale, i.e.
+        //    the position is the estimate, not this 389 m point.
+        let lostInAir = position(samples.last!, source: .aprs, ageSeconds: 300)
+        XCTAssertEqual(detector.landingReason(track: track, position: lostInAir), .aprsStale)
+
+        // 3. BLE reacquires the sonde on the ground, at the predicted landing —
+        //    fixed, near ground, vertical speed 0.
+        let groundAlt = 410.0
+        let groundT = samples.last!.t + 1800           // half an hour later
+        for i in 0..<20 {
+            track.append(BalloonTrackPoint(latitude: predictedLanding.lat, longitude: predictedLanding.lon,
+                                           altitude: groundAlt,
+                                           timestamp: epoch.addingTimeInterval(groundT + Double(i)),
                                            verticalSpeed: 0, horizontalSpeed: 0, source: .ble))
         }
-        let settled = PositionData(sondeName: "W4214924", latitude: rest.lat, longitude: rest.lon,
-                                   altitude: rest.alt, verticalSpeed: 0, horizontalSpeed: 0, heading: 0,
-                                   temperature: 0, humidity: 0, pressure: 0,
-                                   timestamp: Date(), burstKillerTime: 0, telemetrySource: .ble)
-        let phase = detector.classifyPhase(track: track, position: settled)
-        XCTAssertEqual(phase, .landed, "a stationary balloon below 3000 m has landed")
-        XCTAssertEqual(detector.landingReason(track: track, position: settled), .vectorAnalysis)
+        let onTheGround = PositionData(sondeName: "W4214924",
+                                       latitude: predictedLanding.lat, longitude: predictedLanding.lon,
+                                       altitude: groundAlt, verticalSpeed: 0, horizontalSpeed: 0, heading: 0,
+                                       temperature: 0, humidity: 0, pressure: 0,
+                                       timestamp: Date(), burstKillerTime: 0, telemetrySource: .ble)
+
+        let phase = detector.classifyPhase(track: track, position: onTheGround)
+        XCTAssertEqual(phase, .landed, "a fixed, near-ground BLE fix is the confirmed touchdown")
+        XCTAssertEqual(detector.landingReason(track: track, position: onTheGround), .vectorAnalysis,
+                       "confirmed by a stationary near-ground observation, not by silence")
+
+        // The confirmed touchdown is the predicted landing, well away from where
+        // APRS was lost — the estimate held, and BLE confirmed it.
+        let dLat = abs(predictedLanding.lat - samples.last!.lat)
+        XCTAssertGreaterThan(dLat, 0.01, "touchdown is the predicted point, ~km from the last APRS fix")
     }
 
     // MARK: - Track assembly across the handoff
