@@ -257,6 +257,14 @@ struct BalloonHunterApp: App {
             appLog("BalloonHunterApp: Step 4 - State changed: \(previousState) → \(currentState)", category: .lifecycle, level: .info)
         }
 
+        // Recovery status (radiosondy.info finds via SondeHub) — check on start and
+        // on every foreground resume once the balloon is landed. The 5-minute timer
+        // (ServiceCoordinator) covers the interval while it stays open.
+        if appServices.balloonPositionService.balloonPhase == .landed,
+           let serial = appServices.balloonPositionService.currentBalloonName {
+            await appServices.balloonPositionService.aprsService.checkRecovery(serial: serial)
+        }
+
         // State machine now controls all service activation based on current state
         appLog("BalloonHunterApp: === Foreground Resume Complete - State Machine in Control ===", category: .lifecycle, level: .info)
     }

@@ -204,6 +204,37 @@ final class LandingSequenceTests: XCTestCase {
         XCTAssertEqual(staleLanding.timeIntervalSince(stale), 90, accuracy: 0.5)
     }
 
+    // MARK: - Recovery status (radiosondy.info finds via SondeHub)
+
+    private func report(_ recovered: Bool, at datetime: String) -> RecoveryReport {
+        RecoveryReport(serial: "W4214924", datetime: datetime, recovered: recovered,
+                       recovered_by: "DO2MIB", description: "test")
+    }
+
+    func testRecoveryStatus_foundProblemNone() {
+        XCTAssertEqual(RecoveryStatus.latest(from: []), .none, "no report → none (landed marker stays blue)")
+        XCTAssertEqual(RecoveryStatus.latest(from: [report(true, at: "2026-08-21T15:28:05")]), .found)
+        XCTAssertEqual(RecoveryStatus.latest(from: [report(false, at: "2026-08-21T15:28:05")]), .problem)
+    }
+
+    func testRecoveryStatus_usesLatestReport() {
+        // Newest datetime wins: an early "not recovered" then a later "found".
+        let reports = [report(false, at: "2026-08-21T14:00:00"),
+                       report(true, at: "2026-08-21T15:28:05")]
+        XCTAssertEqual(RecoveryStatus.latest(from: reports), .found)
+        XCTAssertEqual(RecoveryStatus.latest(from: reports.reversed()), .found, "order-independent")
+    }
+
+    func testRecoveryReport_decodesRealSondeHubJSON() throws {
+        // The exact shape returned by api.v2.sondehub.org/recovered for W4214924.
+        let json = #"[{"datetime":"2026-08-21T15:28:05","serial":"W4214924","lat":0.0,"lon":0.0,"recovered":true,"recovered_by":"DO2MIB","description":"Saubere Landung [via Radiosondy.info]","recovery_software":"SondeHub radiosondy.info Importer","position":[0.0,0.0]}]"#
+        let reports = try JSONDecoder().decode([RecoveryReport].self, from: Data(json.utf8))
+        XCTAssertEqual(reports.count, 1)
+        XCTAssertTrue(reports[0].recovered)
+        XCTAssertEqual(reports[0].recovered_by, "DO2MIB")
+        XCTAssertEqual(RecoveryStatus.latest(from: reports), .found)
+    }
+
     // MARK: - Track assembly across the handoff
 
     func testBackfillOfTheHandoffMinuteDoesNotDuplicate() throws {

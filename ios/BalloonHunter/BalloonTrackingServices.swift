@@ -434,6 +434,7 @@ final class BalloonPositionService: ObservableObject {
             // BLE telemetry active, balloon landed
             aprsService.disablePolling()
             updateLandingPosition()
+            checkRecoveryStatus()
 
         case .waitingForAPRS:
             // BLE lost - start APRS polling and wait for response
@@ -461,6 +462,7 @@ final class BalloonPositionService: ObservableObject {
             updateLandingPosition()
             // Fill track gaps from APRS when entering APRS mode
             balloonTrackService?.fillTrackGapsFromAPRS(sondeName: currentBalloonName)
+            checkRecoveryStatus()
         }
 
         // Update staleness thresholds based on expected telemetry source
@@ -503,6 +505,15 @@ final class BalloonPositionService: ObservableObject {
         Task {
             await landingPointTrackingService?.updateLandingPoint(currentCoord, source: .currentPosition)
         }
+    }
+
+    /// Ask SondeHub whether the current sonde has been recovered (radiosondy.info
+    /// finds). Drives the landed balloon colour (green found / orange problem).
+    /// Fired on entering a landed state — which includes startup once the state
+    /// machine settles on landed — and periodically by the coordinator.
+    func checkRecoveryStatus() {
+        guard let name = currentBalloonName, !name.isEmpty else { return }
+        Task { await aprsService.checkRecovery(serial: name) }
     }
 
     // MARK: - Prediction Integration

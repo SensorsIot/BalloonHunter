@@ -105,6 +105,11 @@ final class APRSDataService: ObservableObject {
     @Published var bleSerialName: String? = nil
     @Published var aprsSerialName: String? = nil
 
+    /// Recovery outcome for the current sonde (from SondeHub's `/recovered`
+    /// endpoint, which ingests radiosondy.info finds). Drives the landed balloon
+    /// colour: green found, orange problem.
+    @Published var recoveryStatus: RecoveryStatus = .none
+
     // Available sondes from station (for selection popup)
     @Published var availableSondes: [SondeHubSondeData] = []
 
@@ -376,6 +381,31 @@ final class APRSDataService: ObservableObject {
     }
 
     /// Fetch telemetry for a specific sonde by serial
+    /// Check whether the sonde has been recovered (SondeHub `/recovered`, which
+    /// ingests radiosondy.info finds). Updates `recoveryStatus`; never throws —
+    /// a failed check just leaves the status unchanged.
+    func checkRecovery(serial: String) async {
+        guard !serial.isEmpty else { return }
+        guard let url = URL(string: "\(Self.sondeHubBaseURL)/recovered?serial=\(serial)") else { return }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = Self.apiTimeout
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("BalloonHunter iOS App", forHTTPHeaderField: "User-Agent")
+        do {
+            let (data, response) = try await session.data(for: request)
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { return }
+            let reports = try JSONDecoder().decode([RecoveryReport].self, from: data)
+            let status = RecoveryStatus.latest(from: reports)
+            if status != recoveryStatus {
+                recoveryStatus = status
+                let by = reports.max(by: { $0.datetime < $1.datetime })?.recovered_by ?? ""
+                appLog("APRSDataService: Recovery status for \(serial): \(status.rawValue)\(by.isEmpty ? "" : " by \(by)")", category: .service, level: .info)
+            }
+        } catch {
+            // Silent — a failed recovery check must not disturb tracking.
+        }
+    }
+
     /// First tries /sondes/telemetry (3-day limit), then falls back to /sonde/{serial} with streaming (for older sondes)
     private func fetchSondeBySerial(_ serial: String) async throws {
         apiCallCount += 1

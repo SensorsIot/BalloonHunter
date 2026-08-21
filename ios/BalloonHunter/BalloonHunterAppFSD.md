@@ -1825,6 +1825,31 @@ For a sonde lost near the ground the line is short — target and last fix only 
 couple hundred metres apart — but it is drawn; for a flight caught higher it is
 the full descent curve.)
 
+### Recovery status — is it found?
+
+Once landed, the balloon marker's colour reports whether anyone has recovered the
+sonde, from **SondeHub's `/recovered` endpoint, which ingests radiosondy.info
+finds** (same host the app already uses — no scraping, no separate API key). The
+report carries `recovered` (the finder's outcome), `recovered_by`, and a
+description; `RecoveryStatus.latest` takes the newest report and maps it:
+
+| recovery | balloon colour (landed) |
+|---|---|
+| `recovered: true` — **found** | green |
+| `recovered: false` — reported not recovered (**problem**) | orange |
+| no report yet | **blue** |
+
+(While flying the colour is still phase-based: green ascending, orange
+descending >10 km, red descending <10 km, grey unknown.)
+
+`APRSDataService.checkRecovery(serial:)` fetches and publishes `recoveryStatus`;
+it never throws, so a failed check just leaves the colour unchanged. It is
+triggered **on entering a landed state** (which covers app startup once the state
+machine settles on landed), on **foreground resume** when landed, **every 5
+minutes** while landed (`ServiceCoordinator` timer), and **whenever a new sonde is
+selected** (reset to none, then checked — a freshly chosen sonde may already have
+been found). No check runs while flying.
+
 ### Phase 4 - On Foot
 
 The hunter is out of the car, walking, with the receiver in one hand and the

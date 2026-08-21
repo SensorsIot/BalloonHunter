@@ -31,6 +31,10 @@ final class MapPresenter: ObservableObject {
     @Published private(set) var isWithin200mOfBalloon: Bool = false
     @Published private(set) var userLocation: LocationData?
     @Published private(set) var balloonPhase: BalloonPhase = .unknown
+    /// Recovery outcome for the landed balloon (radiosondy.info finds via
+    /// SondeHub). Colours the landed marker: green found, orange problem, blue
+    /// when there is no report yet.
+    @Published private(set) var recoveryStatus: RecoveryStatus = .none
     @Published private(set) var region: MKCoordinateRegion?
     @Published private(set) var cameraUpdatesSuspended: Bool = false
 
@@ -499,6 +503,14 @@ final class MapPresenter: ObservableObject {
         coordinator.balloonPositionService.$balloonPhase
             .sink { [weak self] (phase: BalloonPhase) in
                 self?.balloonPhase = phase
+                self?.refreshAnnotations()
+            }
+            .store(in: &cancellables)
+
+        aprsService.$recoveryStatus
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] status in
+                self?.recoveryStatus = status
                 self?.refreshAnnotations()
             }
             .store(in: &cancellables)

@@ -229,6 +229,33 @@ enum LandingPredictionSource: String, Codable {
     case manual
 }
 
+/// A recovery report from SondeHub's `/recovered` endpoint, which ingests
+/// radiosondy.info finds. `recovered` is the outcome the finder set: true =
+/// found, false = reported but not recovered (lost/destroyed).
+struct RecoveryReport: Codable {
+    let serial: String
+    let datetime: String
+    let recovered: Bool
+    let recovered_by: String?
+    let description: String?
+}
+
+/// The recovery outcome shown on the balloon marker once landed: green found,
+/// orange problem, or no report yet (leave the landed colour).
+enum RecoveryStatus: String, Equatable {
+    case none
+    case found
+    case problem
+
+    /// Outcome of the most recent report (ISO-8601 datetimes sort lexically).
+    /// `found` if the latest says recovered, `problem` if it says not, `none`
+    /// when there is no report.
+    static func latest(from reports: [RecoveryReport]) -> RecoveryStatus {
+        guard let latest = reports.max(by: { $0.datetime < $1.datetime }) else { return .none }
+        return latest.recovered ? .found : .problem
+    }
+}
+
 struct LandingPredictionPoint: Codable, Equatable {
     let latitude: Double
     let longitude: Double

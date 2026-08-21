@@ -62,6 +62,10 @@ final class ServiceCoordinator: ObservableObject {
     // 60-second prediction timer (as referenced in comments)
     private var predictionTimer: Timer? = nil
 
+    // 5-minute recovery-status timer: while landed, ask SondeHub (radiosondy
+    // finds) whether the sonde has been recovered, to colour the balloon.
+    private var recoveryTimer: Timer? = nil
+
     init(
         bleCommunicationService: BLECommunicationService,
         currentLocationService: CurrentLocationService,
@@ -186,6 +190,16 @@ final class ServiceCoordinator: ObservableObject {
         // Phase 3: Prediction timer will be controlled by state machine
         appLog("STARTUP: Prediction timer will be controlled by state machine", category: .general, level: .info)
 
+        // Recovery status: every 5 minutes, if the balloon is landed, check whether
+        // it has been found (radiosondy.info via SondeHub). Cheap — one request per
+        // 5 min, and only when landed. Startup and sonde-selection are covered
+        // separately (entering a landed state, and startTrackingSonde).
+        recoveryTimer = Timer.scheduledTimer(withTimeInterval: 300.0, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self, self.balloonPositionService.balloonPhase == .landed else { return }
+                self.balloonPositionService.checkRecoveryStatus()
+            }
+        }
 
         // Services initialized - startup sequence will be triggered by BalloonHunterApp
     }
@@ -340,6 +354,13 @@ final class ServiceCoordinator: ObservableObject {
 
         // 4. Set APRS override (works even if sonde not in APRS)
         balloonPositionService.aprsService.overrideSondeSerial = name
+
+        // Reset recovery status for the new sonde and check it immediately — a
+        // freshly selected sonde may already have been found and reported.
+        balloonPositionService.aprsService.recoveryStatus = .none
+        Task { [weak self] in
+            await self?.balloonPositionService.aprsService.checkRecovery(serial: name)
+        }
 
         // 5. Fetch APRS data, fill track, check frequency sync
         Task { [weak self] in

@@ -190,7 +190,15 @@ struct TrackingMapView: View {
                             case .ascending: return ("balloon.fill", .green)
                             case .descendingAbove10k: return ("balloon.fill", .orange)
                             case .descendingBelow10k: return ("balloon.fill", .red)
-                            case .landed: return ("balloon.fill", .purple)
+                            case .landed:
+                                // Once landed, colour by recovery (radiosondy.info finds
+                                // via SondeHub): green found, orange problem, blue when
+                                // there is no report yet.
+                                switch mapPresenter.recoveryStatus {
+                                case .found: return ("balloon.fill", .green)
+                                case .problem: return ("balloon.fill", .orange)
+                                case .none: return ("balloon.fill", .blue)
+                                }
                             case .unknown: return ("balloon.fill", .gray)
                             }
                         }()
