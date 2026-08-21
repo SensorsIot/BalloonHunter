@@ -465,7 +465,6 @@ struct SondeRowView: View {
         guard let sondeDate = date else { return dateString }
 
         let calendar = Calendar.current
-        let now = Date()
 
         if calendar.isDateInToday(sondeDate) {
             let timeFormatter = DateFormatter()
