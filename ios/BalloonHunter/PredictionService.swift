@@ -438,17 +438,11 @@ final class PredictionService: ObservableObject {
 
 
     private func createCacheKey(_ position: PositionData) -> String {
-        // Bucket by the sonde's telemetry time, not now. A stale balloon (landed
-        // by silence) has a fixed timestamp, so its key never changes — the same
-        // prediction is served from cache and the landing point stays put instead
-        // of wandering ~240 m every 5-minute bucket. A live balloon's timestamp
-        // advances, so it still re-predicts with fresh data. See FSD *How a
-        // Landing Is Determined*.
         return PredictionCache.makeKey(
             balloonID: position.sondeName,
             coordinate: CLLocationCoordinate2D(latitude: position.latitude, longitude: position.longitude),
             altitude: position.altitude,
-            timeBucket: position.timestamp
+            timeBucket: Date()
         )
     }
 
@@ -590,12 +584,11 @@ final class PredictionService: ObservableObject {
 
     private func buildPredictionRequest(position: PositionData, userSettings: UserSettings, descentRate: Double, balloonDescends: Bool, baseURL: URL) throws -> URLRequest {
         var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)!
-        // Anchor the launch to the sonde's telemetry time, not now+60s. For a live
-        // balloon that is ~now; for a stale one (landed by silence) it is the past
-        // moment it was actually at this position, so the predictor uses the winds
-        // from *then* — giving the correct descent and a landing that does not
-        // drift as real time advances. See FSD *How a Landing Is Determined*.
-        let launchTime = ISO8601DateFormatter().string(from: position.timestamp)
+        // Predictions run only while flying (PredictionPolicy), so the balloon is
+        // moving now and we forecast forward: launch just ahead of now. (A landed
+        // balloon isn't re-predicted, so there is no stale-launch case to anchor
+        // to telemetry time.)
+        let launchTime = ISO8601DateFormatter().string(from: Date().addingTimeInterval(60))
         // FSD: Use settings burst altitude while ascending; when descending, send current altitude + 10m
         // Ensure burst altitude is always greater than current altitude (API requirement)
         // Determine burst altitude based on whether balloon is descending
