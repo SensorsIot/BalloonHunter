@@ -164,6 +164,16 @@ actor PredictionCache {
 
 @MainActor
 final class PredictionService: ObservableObject {
+
+    /// Landing time anchored to the sonde's real telemetry, not the request's
+    /// fictional launch. `launch`/`landing` are the predictor's trajectory
+    /// datetimes; their difference is the flight duration, which added to the
+    /// telemetry time gives the true landing time (in the future for a live
+    /// descent, in the past for a sonde that already came down). Pure and
+    /// `nonisolated` so it is unit-testable. See FSD *How a Landing Is Determined*.
+    nonisolated static func anchoredLandingTime(telemetryTime: Date, launch: Date, landing: Date) -> Date {
+        telemetryTime.addingTimeInterval(landing.timeIntervalSince(launch))
+    }
     // MARK: - API Dependencies
     private let session: URLSession
     private var serviceHealth: ServiceHealth = .healthy
@@ -531,8 +541,9 @@ final class PredictionService: ObservableObject {
             // Parse the Sondehub v2 response
             let sondehubResponse = try JSONDecoder().decode(SondehubPredictionResponse.self, from: data)
             
-            // Convert to our internal PredictionData format
-            let predictionData = try convertSondehubToPredictionData(sondehubResponse)
+            // Convert to our internal PredictionData format. Anchor the landing
+            // time to this telemetry sample's timestamp, not the request's launch.
+            let predictionData = try convertSondehubToPredictionData(sondehubResponse, telemetryTime: position.timestamp)
 
             
             let landingPoint = predictionData.landingPoint
@@ -608,7 +619,7 @@ final class PredictionService: ObservableObject {
 
     /// Three-channel architecture: Build prediction request using PositionData
     
-    private func convertSondehubToPredictionData(_ response: SondehubPredictionResponse) throws -> PredictionData {
+    private func convertSondehubToPredictionData(_ response: SondehubPredictionResponse, telemetryTime: Date) throws -> PredictionData {
         // Extract ascent/descent trajectories and derive burst/landing points
         let stages = response.prediction
         let ascent = stages.first(where: { $0.stage.lowercased() == "ascent" })
@@ -629,13 +640,28 @@ final class PredictionService: ObservableObject {
         let burstPoint = ascentLast.map { CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude) }
         let landingPoint = descentLast.map { CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude) }
         
-        // Parse landing time robustly (handle fractional seconds)
+        // Landing time, anchored to the sonde's actual last-heard time — NOT the
+        // request's fictional launch. We send launch_datetime = now+60s, so the
+        // predictor's absolute landing datetime is always in the future; using it
+        // directly makes a balloon that landed hours ago read as "lands in a few
+        // minutes." Instead take the predicted *duration* (launch → landing) and
+        // add it to the telemetry timestamp: for a fresh descent that is
+        // now + remaining fall; for a stale/landed sonde it is correctly in the
+        // past. See FSD *How a Landing Is Determined*.
+        func parse(_ dt: String?) -> Date? {
+            guard let dt else { return nil }
+            return isoWithFrac.date(from: dt) ?? isoNoFrac.date(from: dt)
+        }
+        let launchDatetime = parse(ascent!.trajectory.first?.datetime)
+        let predictedLandingDatetime = parse(descentLast?.datetime)
         let landingTimeParsed: Date? = {
-            guard let dt = descentLast?.datetime else { return nil }
-            if let d = isoWithFrac.date(from: dt) { return d }
-            if let d = isoNoFrac.date(from: dt) { return d }
-            appLog("PredictionService: Unable to parse landing datetime '\(dt)'", category: .service, level: .error)
-            return nil
+            guard let launch = launchDatetime, let land = predictedLandingDatetime else {
+                if descentLast?.datetime != nil {
+                    appLog("PredictionService: Unable to parse trajectory datetimes for landing time", category: .service, level: .error)
+                }
+                return nil
+            }
+            return Self.anchoredLandingTime(telemetryTime: telemetryTime, launch: launch, landing: land)
         }()
 
         let predictionData = PredictionData(

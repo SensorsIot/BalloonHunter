@@ -236,6 +236,30 @@ final class LandingSequenceTests: XCTestCase {
         }
     }
 
+    // MARK: - Landing time is anchored to telemetry, not the request launch
+
+    func testLandingTime_anchoredToTelemetryNotLaunch() {
+        // The predictor is asked with launch_datetime = now+60s, so its absolute
+        // landing datetime is always in the future. The app must anchor to the
+        // sonde's real telemetry time instead.
+        let launch = Date(timeIntervalSince1970: 1_800_000_000)          // request launch
+        let landing = launch.addingTimeInterval(90)                      // predictor: +90 s fall
+
+        // A live descent heard just now → lands ~90 s from now.
+        let fresh = Date()
+        let freshLanding = PredictionService.anchoredLandingTime(telemetryTime: fresh, launch: launch, landing: landing)
+        XCTAssertEqual(freshLanding.timeIntervalSince(fresh), 90, accuracy: 0.5)
+        XCTAssertGreaterThan(freshLanding.timeIntervalSinceNow, 0, "a live descent lands in the future")
+
+        // The W4214924 case: last heard 7.5 h ago → landing is in the PAST, not
+        // "in a few minutes". This is the bug the anchoring fixes.
+        let stale = Date().addingTimeInterval(-7.5 * 3600)
+        let staleLanding = PredictionService.anchoredLandingTime(telemetryTime: stale, launch: launch, landing: landing)
+        XCTAssertLessThan(staleLanding.timeIntervalSinceNow, 0,
+                          "a sonde last heard 7.5 h ago landed in the past, not the future")
+        XCTAssertEqual(staleLanding.timeIntervalSince(stale), 90, accuracy: 0.5)
+    }
+
     // MARK: - Track assembly across the handoff
 
     func testBackfillOfTheHandoffMinuteDoesNotDuplicate() throws {
