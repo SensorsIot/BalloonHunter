@@ -225,6 +225,15 @@ final class LandingSequenceTests: XCTestCase {
         XCTAssertEqual(RecoveryStatus.latest(from: reports.reversed()), .found, "order-independent")
     }
 
+    func testRecoveryReport_decodesNativeSondeHubJSON() throws {
+        // W4150389: native SondeHub recovery (fractional seconds + offset, extra
+        // fields planned/alt/recovery_software).
+        let json = #"[{"serial":"W4150389","lat":47.17759,"lon":7.94028,"alt":0,"recovered":true,"planned":false,"recovered_by":"MCH","description":"","recovery_software":"Sondehub Tracker","datetime":"2026-08-19T23:51:48.990646+00:00","position":[7.94028,47.17759]}]"#
+        let reports = try JSONDecoder().decode([RecoveryReport].self, from: Data(json.utf8))
+        XCTAssertEqual(reports.count, 1)
+        XCTAssertEqual(RecoveryStatus.latest(from: reports), .found)
+    }
+
     func testRecoveryReport_decodesRealSondeHubJSON() throws {
         // The exact shape returned by api.v2.sondehub.org/recovered for W4214924.
         let json = #"[{"datetime":"2026-08-21T15:28:05","serial":"W4214924","lat":0.0,"lon":0.0,"recovered":true,"recovered_by":"DO2MIB","description":"Saubere Landung [via Radiosondy.info]","recovery_software":"SondeHub radiosondy.info Importer","position":[0.0,0.0]}]"#

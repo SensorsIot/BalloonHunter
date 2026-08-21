@@ -247,9 +247,12 @@ enum RecoveryStatus: String, Equatable {
     case found
     case problem
 
-    /// Outcome of the most recent report (ISO-8601 datetimes sort lexically).
-    /// `found` if the latest says recovered, `problem` if it says not, `none`
-    /// when there is no report.
+    /// Outcome of the most recent report. `found` if the latest says recovered,
+    /// `problem` if it says not, `none` when there is no report. SondeHub returns
+    /// UTC datetimes in two shapes (native `…:48.990646+00:00`, radiosondy import
+    /// bare `…T15:28:05z`); both sort correctly as strings — the
+    /// `YYYY-MM-DDTHH:MM:SS` prefix is directly comparable and any suffix only
+    /// tie-breaks within the same second.
     static func latest(from reports: [RecoveryReport]) -> RecoveryStatus {
         guard let latest = reports.max(by: { $0.datetime < $1.datetime }) else { return .none }
         return latest.recovered ? .found : .problem

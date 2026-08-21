@@ -1791,15 +1791,17 @@ knowing where the balloon lies:**
   observation** — in practice close-range BLE — detected by `vectorAnalysis` or
   the track-based stationary/blackout rules. That is when the marker locks to the
   actual point and prediction stops.
-- **Predictions run only while flying** (`PredictionPolicy.shouldPredict`).
-  Once landed — by touchdown or by silence — no new prediction is made: the last
-  estimate from while it was flying *is* the landing, and it is retained
-  (`currentLandingPoint` is not cleared, and `updateLandingPosition` does not
-  overwrite it for landed-by-silence), so the marker and route stay put. Two
-  reasons not to re-predict a landed balloon: the position is fixed, so a fresh
-  prediction only makes the landing **drift** as the wind forecast for "now"
-  advances (observed ~240 m per foreground resume); and for an old sonde the
-  predictor no longer has GFS data for that time and the request hangs.
+- **One prediction on sonde selection, then flying-only.** `startTrackingSonde`
+  is the single place that reads the whole SondeHub context — telemetry, track
+  (`fillTrackGapsFromAPRS`) and recovery — and then makes **one** prediction to
+  establish the landing point and route, flying or landed. Startup and every new
+  sonde come through here, so a landed sonde selected cold still gets a landing
+  and a route (without this it had neither). After that first estimate,
+  re-prediction is **flying-only** (`PredictionPolicy.shouldPredict`): a landed
+  balloon is never re-predicted, so its landing does not **drift** (re-predicting
+  a fixed position wandered ~240 m per foreground resume as the "now" forecast
+  advanced), and a mid-session landing simply keeps the last flying estimate
+  (`currentLandingPoint` is not cleared).
 - **`launch_datetime` must be in the future** — SondeHub's Tawhiri rejects a past
   launch, so it is never the sonde's telemetry time. Because predictions run only
   while flying, the balloon is moving *now*, so the request launches just ahead of
@@ -1843,12 +1845,12 @@ description; `RecoveryStatus.latest` takes the newest report and maps it:
 descending >10 km, red descending <10 km, grey unknown.)
 
 `APRSDataService.checkRecovery(serial:)` fetches and publishes `recoveryStatus`;
-it never throws, so a failed check just leaves the colour unchanged. It is
-triggered **on entering a landed state** (which covers app startup once the state
-machine settles on landed), on **foreground resume** when landed, **every 5
-minutes** while landed (`ServiceCoordinator` timer), and **whenever a new sonde is
-selected** (reset to none, then checked — a freshly chosen sonde may already have
-been found). No check runs while flying.
+it never throws, so a failed check just leaves the colour unchanged. It is part of
+the `startTrackingSonde` context read (startup and every new sonde — reset to
+none, then checked, since a freshly chosen sonde may already have been found),
+runs again **on entering a landed state** (a mid-session landing), on **foreground
+resume** when landed, and **every 5 minutes** while landed (`ServiceCoordinator`
+timer). No check runs while flying.
 
 ### Phase 4 - On Foot
 

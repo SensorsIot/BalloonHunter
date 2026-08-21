@@ -354,27 +354,29 @@ final class ServiceCoordinator: ObservableObject {
 
         // 4. Set APRS override (works even if sonde not in APRS)
         balloonPositionService.aprsService.overrideSondeSerial = name
+        balloonPositionService.aprsService.recoveryStatus = .none  // reset for the new sonde
 
-        // Reset recovery status for the new sonde and check it immediately — a
-        // freshly selected sonde may already have been found and reported.
-        balloonPositionService.aprsService.recoveryStatus = .none
+        // 5. Read the entire sonde context from SondeHub — telemetry, track and
+        // recovery — then establish the landing prediction and route from it. This
+        // is the one place it happens; startup and every new sonde come through
+        // here. Ongoing re-prediction is flying-only (PredictionPolicy), so a
+        // landed sonde is predicted once here and does not drift.
         Task { [weak self] in
-            await self?.balloonPositionService.aprsService.checkRecovery(serial: name)
-        }
+            guard let self else { return }
+            await self.balloonPositionService.aprsService.forceImmediateFetch()   // telemetry → latestPosition
+            self.balloonTrackService.fillTrackGapsFromAPRS(sondeName: name)        // full track
+            await self.balloonPositionService.aprsService.checkRecovery(serial: name)  // recovery status
 
-        // 5. Fetch APRS data, fill track, check frequency sync
-        Task { [weak self] in
-            await self?.balloonPositionService.aprsService.forceImmediateFetch()
-            self?.balloonTrackService.fillTrackGapsFromAPRS(sondeName: name)
+            // Landing prediction + routing from the fetched position (flying or landed).
+            if let position = self.balloonPositionService.aprsService.latestPosition {
+                await self.predictionService.triggerPredictionWithPosition(position, trigger: "sonde-context")
+            }
 
             // Check frequency sync if requested and BLE connected
             if checkFrequencySync {
-                await MainActor.run {
-                    if let self = self,
-                       self.bleCommunicationService.connectionState.canReceiveCommands,
-                       let aprsRadio = self.balloonPositionService.aprsService.latestRadioChannel {
-                        self.checkStartupFrequencySync(aprsRadio: aprsRadio)
-                    }
+                if self.bleCommunicationService.connectionState.canReceiveCommands,
+                   let aprsRadio = self.balloonPositionService.aprsService.latestRadioChannel {
+                    self.checkStartupFrequencySync(aprsRadio: aprsRadio)
                 }
             }
         }
