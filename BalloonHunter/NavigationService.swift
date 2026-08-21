@@ -11,6 +11,11 @@ final class NavigationService: ObservableObject {
 
     private let userSettings: UserSettings
     private let routeCalculationService: RouteCalculationService
+
+    /// Decides when a changed drive is worth interrupting the hunter for.
+    private let handoff = NavigationHandoff()
+    private var travelTimeAtLastNotification: TimeInterval?
+    private var lastNotificationAt: Date?
     var lastLandingPoint: CLLocationCoordinate2D?  // Internal access for coordinator to clear on sonde change
 
     init(userSettings: UserSettings, routeCalculationService: RouteCalculationService) {
@@ -42,40 +47,63 @@ final class NavigationService: ObservableObject {
             MKLaunchOptionsDirectionsModeKey: directionsMode
         ]
 
-        mapItem.openInMaps(launchOptions: launchOptions)
-        appLog("NavigationService: Opened Apple Maps navigation to landing point", category: .general, level: .info)
+        // Route from where the hunter is now to the new landing point.
+        //
+        // The two-item call is deliberate. Handing Maps only a destination while a
+        // route is already running makes it offer to *add a stop*, turning the
+        // stale landing point into a waypoint - so the hunter would drive to where
+        // the balloon was predicted to land before continuing to where it is
+        // predicted now. Supplying an explicit source avoids that.
+        //
+        // It still cannot replace an active route: Maps prompts, and the hunter
+        // must end the current navigation first. No API, Shortcuts action or Siri
+        // path exists to do that for them. Measured on device, 21 Aug 2026.
+        let source = MKMapItem.forCurrentLocation()
+        MKMapItem.openMaps(with: [source, mapItem], launchOptions: launchOptions)
+        appLog("NavigationService: Handed Apple Maps a route from current position to the landing point", category: .general, level: .info)
     }
 
     // MARK: - Navigation Update Notifications
 
+    /// Decide whether the moved landing point is worth telling the hunter about.
+    ///
+    /// This used to fire whenever the point moved more than 300 m. During a
+    /// descent the prediction moves that far every minute, and distance is the
+    /// wrong measure anyway: 300 m along the same motorway changes nothing, while
+    /// 300 m across a ridge can add half an hour. What matters is the drive.
+    ///
+    /// The cost of asking is real. Apple Maps will not replace a route it is
+    /// already following, so every notification the hunter acts on means ending
+    /// the current route by hand before the new one will start.
     func checkForNavigationUpdate(newLandingPoint: CLLocationCoordinate2D) {
-        // Check if we have a previous landing point to compare against
-        guard let previousPoint = lastLandingPoint else {
-            // First landing point - store it and no notification needed
-            lastLandingPoint = newLandingPoint
-            return
-        }
+        defer { lastLandingPoint = newLandingPoint }
+        guard lastLandingPoint != nil else { return }
+        guard let route = routeCalculationService.currentRoute else { return }
 
-        // Calculate distance between old and new landing points
-        let oldLocation = CLLocation(latitude: previousPoint.latitude, longitude: previousPoint.longitude)
-        let newLocation = CLLocation(latitude: newLandingPoint.latitude, longitude: newLandingPoint.longitude)
-        let distanceChange = oldLocation.distance(from: newLocation)
+        let decision = handoff.decide(.init(
+            currentTravelTime: route.expectedTravelTime,
+            travelTimeAtLastHandover: travelTimeAtLastNotification,
+            lastOfferedAt: lastNotificationAt,
+            distanceToLanding: route.distance
+        ))
 
-        // Trigger update notification if change is significant (>300m)
-        if distanceChange > 300 {
-            appLog("NavigationService: Landing point changed by \(Int(distanceChange))m - sending navigation update notification", category: .general, level: .info)
-            sendNavigationUpdateNotification(newDestination: newLandingPoint, distanceChange: distanceChange)
-        }
+        guard case .offer(let delta) = decision else { return }
 
-        // Update stored landing point
-        lastLandingPoint = newLandingPoint
+        appLog(String(format: "NavigationService: Drive changed by %.0f min - notifying", delta / 60),
+               category: .general, level: .info)
+        lastNotificationAt = Date()
+        travelTimeAtLastNotification = route.expectedTravelTime
+        sendNavigationUpdateNotification(newDestination: newLandingPoint, travelTimeDelta: delta)
     }
 
-    private func sendNavigationUpdateNotification(newDestination: CLLocationCoordinate2D, distanceChange: Double) {
-        // Simple notification for navigation update
+    private func sendNavigationUpdateNotification(newDestination: CLLocationCoordinate2D, travelTimeDelta: TimeInterval) {
+        let minutes = Int(abs(travelTimeDelta) / 60)
+        let direction = travelTimeDelta > 0 ? "longer" : "shorter"
+
         let content = UNMutableNotificationContent()
         content.title = "Landing Prediction Updated"
-        content.body = "Balloon moved \(Int(distanceChange))m. Tap to open Apple Maps with new location."
+        // Says what changed about the drive, and what it will cost to act on it.
+        content.body = "The drive is now \(minutes) min \(direction). End the route in Maps, then tap to re-route from here."
         content.sound = .default
 
         // Store destination for when user taps notification
