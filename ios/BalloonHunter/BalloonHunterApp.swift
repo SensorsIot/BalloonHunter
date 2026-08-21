@@ -201,9 +201,17 @@ struct BalloonHunterApp: App {
                 appLog("BalloonHunterApp: App became inactive, saved data.", category: .lifecycle, level: .info)
             }
 
+            if newScenePhase == .background {
+                // Foreground-only: stop continuous hunter-position tracking so there
+                // is no background-location footprint.
+                appServices.currentLocationService.stopForegroundTracking()
+            }
+
             if newScenePhase == .active && (oldScenePhase == .background || oldScenePhase == .inactive) {
                 // App returned to foreground - refresh services and state
                 appLog("BalloonHunterApp: App became active, refreshing services.", category: .lifecycle, level: .info)
+                // Resume continuous hunter-position tracking.
+                appServices.currentLocationService.startForegroundTracking()
 
                 Task {
                     await handleForegroundResume()

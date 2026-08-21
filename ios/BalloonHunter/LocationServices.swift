@@ -64,17 +64,34 @@ final class CurrentLocationService: NSObject, ObservableObject, CLLocationManage
     func enableHeadingMode() {
         guard !isHeadingModeActive else { return }
         isHeadingModeActive = true
-
-        appLog("CurrentLocationService: Enabling precision mode for heading view", category: .service, level: .info)
-        precisionLocationManager.startUpdatingLocation()
+        // Heading mode is a map-rotation flag (the map follows heading). Location
+        // already streams from continuous foreground tracking, so nothing to start.
+        appLog("CurrentLocationService: Heading mode on", category: .service, level: .info)
     }
 
     func disableHeadingMode() {
         guard isHeadingModeActive else { return }
         isHeadingModeActive = false
+        // Do NOT stop location — continuous foreground tracking keeps the hunter
+        // position current whether or not the map is following heading.
+        appLog("CurrentLocationService: Heading mode off", category: .service, level: .info)
+    }
 
-        appLog("CurrentLocationService: Disabling precision mode", category: .service, level: .info)
+    /// Continuously update the hunter's position while the app is in the
+    /// foreground — best accuracy, 2 m filter (smooth). Foreground-only: stopped
+    /// on background (`stopForegroundTracking`), so there is no background-location
+    /// footprint and no "Always" permission needed. Only the hunter marker and the
+    /// distance/route triggers depend on this; BLE, APRS and predictions are
+    /// unaffected. See FSD *Current Location Service*.
+    func startForegroundTracking() {
+        guard isLocationPermissionGranted else { return }
+        precisionLocationManager.startUpdatingLocation()
+        appLog("CurrentLocationService: Continuous foreground tracking started (best accuracy, 2 m)", category: .service, level: .info)
+    }
+
+    func stopForegroundTracking() {
         precisionLocationManager.stopUpdatingLocation()
+        appLog("CurrentLocationService: Continuous foreground tracking stopped (backgrounded)", category: .service, level: .info)
     }
 
     /// Request a single location update (used for on-demand location fetching)
@@ -95,12 +112,14 @@ final class CurrentLocationService: NSObject, ObservableObject, CLLocationManage
         switch status {
         case .authorizedWhenInUse:
             isLocationPermissionGranted = true
-            // On-demand location only - fetch when app is active
+            // Begin continuous foreground tracking now that we may (the app is in
+            // the foreground when authorization is granted).
+            startForegroundTracking()
             publishHealthEvent(.healthy, message: "Location permission granted (when in use)")
 
         case .authorizedAlways:
             isLocationPermissionGranted = true
-            // On-demand location only - no background updates needed
+            startForegroundTracking()
             publishHealthEvent(.healthy, message: "Location permission granted (always)")
 
         case .denied, .restricted:

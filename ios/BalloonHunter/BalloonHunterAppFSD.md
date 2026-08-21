@@ -943,13 +943,24 @@ This mechanism ensures users see the complete balloon flight path even if they c
 ### Current Location Service
 
 **Purpose**  
-Keep track of the iPhone’s location and heading, swap automatically between low-power background tracking and precise “heading mode,” detect meaningful movement, and publish the raw distance to the balloon so the UI can render the overlay.
+Keep the iPhone’s location current, detect meaningful movement, and publish the raw distance to the balloon so the UI can render the overlay.
+
+**The hunter position updates continuously while the app is in the foreground** —
+best accuracy, 2 m distance filter (smooth) — so the marker is always current
+while driving and walking. It is **foreground-only**: `startForegroundTracking()`
+on becoming active (and on authorization), `stopForegroundTracking()` on entering
+background, so there is no background-location footprint and only “When In Use” is
+needed. This is the same footprint as a foreground navigation app and within
+Apple’s policy; the scrutinised case is *background* location, which the app does
+not use. Only the hunter marker and the distance/route triggers depend on this —
+BLE, APRS and predictions run on their own cadences, unaffected. Heading mode is
+now just a map-rotation flag (the map follows heading); it no longer starts or
+stops location, since tracking already runs.
 
 #### When it runs
 
 - Whenever the user changes location permissions.
-- Whenever iOS delivers new location updates (background mode roughly every 30 s, precision mode every few meters/seconds).
-- Whenever the compass heading changes.
+- Continuously in the foreground (best accuracy, 2 m filter); stopped in background.
 - Whenever the presenter/coordinator provides an updated balloon position.
 
 #### What it listens to
@@ -967,9 +978,9 @@ Keep track of the iPhone’s location and heading, swap automatically between lo
 
 #### How it behaves
 
-- Creates two location managers: one for background updates (10 m filter + 30 s timer) and one for heading mode (best accuracy, 2 m filter).
-- Requests “When In Use,” then “Always,” and begins monitoring significant movement once permitted.
-- `enableHeadingMode()` / `disableHeadingMode()` switch managers and log the change so diagnostics stay clear.
+- Two location managers: the precision manager (best accuracy, 2 m filter) runs continuously in the foreground as the hunter tracker; the other serves one-shot `requestCurrentLocation()` fetches.
+- Requests “When In Use” and begins monitoring significant movement once permitted; continuous tracking starts on the grant.
+- `enableHeadingMode()` / `disableHeadingMode()` only toggle the map-rotation flag; they no longer start or stop location.
 - Every location callback builds a new `LocationData`, throttles precision updates to at least 1 s apart, logs movement jumps (>20 m), updates the significant-movement marker, and recomputes both distance-to-balloon and the 200 m proximity flag.
 - Heading callbacks keep the last known direction so future `LocationData` includes it.
 - `updateDistanceToBalloon()` computes the raw meters from user to balloon; formatting (e.g., “123 m” vs “1.2 km”) is handled by the view.
