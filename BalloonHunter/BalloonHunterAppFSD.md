@@ -1763,7 +1763,7 @@ A row for Buttons is placed above the map. It is fixed and covers the entire wid
 
 * **Settings Button**: Gear icon that opens device configuration interface and requests current device parameters via BLE.
 
-* **Transport Mode Picker**: Segmented control with car/bicycle icons for selecting navigation mode (affects routing calculations and Apple Maps integration).
+* **Transport Mode Toggle**: A single button showing the mode in use, car or bicycle, swapping on tap. Changing it recalculates the route. It replaced a segmented control that spent about 100 points on a choice between two things.
 
 * **Point/All/Cancel Button**: Dynamic button functionality:
   - When **no landing point** exists: Shows "Point" button to enter manual landing point selection mode

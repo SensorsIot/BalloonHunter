@@ -76,10 +76,6 @@ struct TrackingMapView: View {
         isIPad ? 0.75 : 0.7
     }
 
-    private var pickerWidth: CGFloat {
-        isIPad ? 120 : 100
-    }
-
     var body: some View {
         GeometryReader { geometry in
             VStack(spacing: 0) {
@@ -409,16 +405,18 @@ struct TrackingMapView: View {
         .background(.ultraThinMaterial)
         .cornerRadius(8)
 
-        // Transport mode picker
-        Picker("Mode", selection: Binding(
-            get: { mapPresenter.transportMode },
-            set: { newValue in mapPresenter.setTransportMode(newValue) }
-        )) {
-            Image(systemName: "car.fill").tag(TransportationMode.car)
-            Image(systemName: "bicycle").tag(TransportationMode.bike)
+        // Transport mode. A segmented control spent about 100 points on a choice
+        // between two things; this shows the mode in use and swaps on tap.
+        Button {
+            mapPresenter.setTransportMode(mapPresenter.transportMode == .car ? .bike : .car)
+        } label: {
+            Image(systemName: mapPresenter.transportMode == .car ? "car.fill" : "bicycle")
+                .imageScale(.large)
+                .padding(8)
         }
-        .pickerStyle(.segmented)
-        .frame(width: pickerWidth)
+        .background(.ultraThinMaterial)
+        .cornerRadius(8)
+        .accessibilityLabel(mapPresenter.transportMode == .car ? "Driving. Tap for cycling." : "Cycling. Tap for driving.")
 
         // Show All button - always functional
         Button("All") {
