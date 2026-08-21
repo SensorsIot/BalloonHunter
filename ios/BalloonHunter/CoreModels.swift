@@ -17,6 +17,18 @@ enum BalloonPhase: String, Codable {
     case descendingBelow10k
     case landed
     case unknown
+
+    /// True once the balloon has burst: falling, or already down.
+    ///
+    /// Before burst a landing prediction rests on an *assumed* burst altitude,
+    /// so successive estimates are guesswork rather than convergence. Anything
+    /// that reads meaning into how the estimates move has to wait for this.
+    var isAfterBurst: Bool {
+        switch self {
+        case .descendingAbove10k, .descendingBelow10k, .landed: return true
+        case .ascending, .unknown: return false
+        }
+    }
 }
 
 enum TelemetrySource: String, Codable {

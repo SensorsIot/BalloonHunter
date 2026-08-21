@@ -1643,6 +1643,15 @@ final class LandingPointTrackingService: ObservableObject {
             return
         }
 
+        // The trail of landing estimates starts at burst. Before then the
+        // prediction rests on an assumed burst altitude, so the estimates wander
+        // for a reason that says nothing about where the balloon will come down,
+        // and drawing them buries the convergence that follows.
+        guard balloonTrackService.balloonPositionService.balloonPhase.isAfterBurst else {
+            appLog("LandingPointTrackingService: Before burst - not recording landing estimate", category: .service, level: .debug)
+            return
+        }
+
         let newPoint = LandingPredictionPoint(coordinate: coordinate, predictedAt: predictedAt, landingEta: landingEta, source: source)
 
         if let last = landingHistory.last, last.distance(from: newPoint) < deduplicationThreshold {

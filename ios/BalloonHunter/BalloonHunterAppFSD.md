@@ -1004,7 +1004,7 @@ UserSettings(
 * **User Settings:** Forecast parameters (burstAltitude, ascentRate, descentRate, stationId) persist across sessions so users don't re-enter them.
 * **Sonde Name:** Current sonde name - must always correspond to the track data in balloontrack.json.
 * **Current Track:** A single sonde's track points with timestamps, stored **together with the serial they belong to** (`{ sondeName, points }`). Binding the two in one file is what makes the association verifiable: `BalloonTrackPoint` carries no serial, so a track holding two sondes' points is otherwise indistinguishable from a clean one. On load, a track naming a different sonde is discarded, as is one in the older bare-array format that names no owner and therefore cannot be vouched for. Batched saves during a run survive a forced close.
-* **Landing Predictions:** Single sonde's landing prediction history for map display. Each new landing point saved immediately.
+* **Landing Predictions:** Single sonde's landing prediction history for map display. Each new landing point saved immediately. **The trail starts at burst.** Before then the prediction rests on an assumed burst altitude, so successive estimates wander for reasons that say nothing about the landing; drawing them buries the convergence that follows. Gated on `BalloonPhase.isAfterBurst`.
 
 ### Balloon Position Service
 

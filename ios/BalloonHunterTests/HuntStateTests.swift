@@ -120,3 +120,40 @@ final class HuntStateTests: XCTestCase {
         }
     }
 }
+
+/// When the trail of landing estimates may start being drawn.
+///
+/// Before burst the prediction rests on an assumed burst altitude, so the
+/// estimates wander for reasons that say nothing about where the balloon will
+/// land. Drawing them buries the convergence that follows.
+final class BurstPhaseTests: XCTestCase {
+
+    func testStillClimbing_noTrailYet() {
+        XCTAssertFalse(BalloonPhase.ascending.isAfterBurst)
+    }
+
+    func testNothingKnownYet_noTrail() {
+        XCTAssertFalse(BalloonPhase.unknown.isAfterBurst)
+    }
+
+    func testFallingFromAltitude_trailStarts() {
+        XCTAssertTrue(BalloonPhase.descendingAbove10k.isAfterBurst)
+    }
+
+    func testFallingNearTheGround_trailContinues() {
+        XCTAssertTrue(BalloonPhase.descendingBelow10k.isAfterBurst)
+    }
+
+    func testDown_trailRemains() {
+        // The trail is the record of how the estimate converged, so it stays
+        // visible after landing.
+        XCTAssertTrue(BalloonPhase.landed.isAfterBurst)
+    }
+
+    func testEveryPhaseIsDecided() {
+        // A new phase must be classified deliberately rather than defaulting.
+        let before: [BalloonPhase] = [.ascending, .unknown]
+        let after: [BalloonPhase] = [.descendingAbove10k, .descendingBelow10k, .landed]
+        XCTAssertEqual(before.count + after.count, 5, "a phase was added without deciding its side of burst")
+    }
+}
