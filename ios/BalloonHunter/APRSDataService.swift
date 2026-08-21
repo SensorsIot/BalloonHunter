@@ -498,7 +498,7 @@ final class APRSDataService: ObservableObject {
         let decoder = JSONDecoder()
         let sondeData = try decoder.decode(SondeHubSondeData.self, from: lastObjectData)
 
-        appLog("APRSDataService: Extracted last record for old sonde \(serial) from \(sondeData.datetime ?? "unknown") at [\(sondeData.lat), \(sondeData.lon)]", category: .service, level: .info)
+        appLog("APRSDataService: Extracted last record for old sonde \(serial) from \(sondeData.datetime) at [\(sondeData.lat), \(sondeData.lon)]", category: .service, level: .info)
         try await publishSondeData(sondeData)
     }
 
