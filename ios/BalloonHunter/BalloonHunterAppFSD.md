@@ -1789,12 +1789,13 @@ knowing where the balloon lies:**
   prediction only makes the landing **drift** as the wind forecast for "now"
   advances (observed ~240 m per foreground resume); and for an old sonde the
   predictor no longer has GFS data for that time and the request hangs.
-- **A flight forecasts forward from now.** Because predictions run only while
-  flying, the balloon is moving *now*, so `launch_datetime` is just ahead of now
-  (forecast forward with current winds) — not the telemetry time. The drift was
-  cured by not re-predicting a landed balloon, so no launch-time anchoring is
-  needed; the displayed landing *time* is still anchored to the telemetry
-  timestamp (`anchoredLandingTime`).
+- **`launch_datetime` must be in the future** — SondeHub's Tawhiri rejects a past
+  launch, so it is never the sonde's telemetry time. Because predictions run only
+  while flying, the balloon is moving *now*, so the request launches just ahead of
+  now and forecasts forward with current winds. The landing drift was cured by not
+  re-predicting a landed balloon, so no launch-time anchoring is needed; the
+  displayed landing *time* is still anchored to the telemetry timestamp
+  (`anchoredLandingTime`).
 - The distinguishing datum is **vertical speed**: the last APRS frame has one
   (descending, still in the air when lost); the confirming BLE frames do not
   (sitting still on the ground). Altitude alone cannot decide it — Payerne

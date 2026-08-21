@@ -584,10 +584,11 @@ final class PredictionService: ObservableObject {
 
     private func buildPredictionRequest(position: PositionData, userSettings: UserSettings, descentRate: Double, balloonDescends: Bool, baseURL: URL) throws -> URLRequest {
         var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)!
-        // Predictions run only while flying (PredictionPolicy), so the balloon is
-        // moving now and we forecast forward: launch just ahead of now. (A landed
-        // balloon isn't re-predicted, so there is no stale-launch case to anchor
-        // to telemetry time.)
+        // launch_datetime MUST be in the future — SondeHub's Tawhiri rejects a
+        // past launch, so this can never be the sonde's telemetry time. Predictions
+        // run only while flying (PredictionPolicy), so the balloon is moving now
+        // and we forecast forward from just ahead of now. A landed balloon is not
+        // re-predicted, so there is no stale case that would tempt a past launch.
         let launchTime = ISO8601DateFormatter().string(from: Date().addingTimeInterval(60))
         // FSD: Use settings burst altitude while ascending; when descending, send current altitude + 10m
         // Ensure burst altitude is always greater than current altitude (API requirement)
