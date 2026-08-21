@@ -438,26 +438,27 @@ struct TrackingMapView: View {
         .background(.ultraThinMaterial)
         .cornerRadius(8)
 
-        // Buzzer mute toggle (hidden but keeps space when BLE not connected)
-        Button {
-            let newMuteState = !mapPresenter.isBuzzerMuted
-            mapPresenter.setMuteState(newMuteState)
+        // Buzzer mute toggle. Only present while the receiver is connected: it
+        // used to stay in the layout at zero opacity, which left a hole between
+        // the surrounding buttons.
+        if mapPresenter.connectionStatus == .connected {
+            Button {
+                let newMuteState = !mapPresenter.isBuzzerMuted
+                mapPresenter.setMuteState(newMuteState)
 
-            // Haptic feedback
-            let impactFeedback = UIImpactFeedbackGenerator(style: .medium)
-            impactFeedback.impactOccurred()
+                // Haptic feedback
+                let impactFeedback = UIImpactFeedbackGenerator(style: .medium)
+                impactFeedback.impactOccurred()
 
-            appLog("🔇 Mute button pressed: \(newMuteState ? "MUTED" : "UNMUTED")", category: .ui, level: .info)
-        } label: {
-            Image(systemName: mapPresenter.isBuzzerMuted ? "speaker.slash.fill" : "speaker.2.fill")
-                .imageScale(.large)
-                .padding(8)
+                appLog("🔇 Mute button pressed: \(newMuteState ? "MUTED" : "UNMUTED")", category: .ui, level: .info)
+            } label: {
+                Image(systemName: mapPresenter.isBuzzerMuted ? "speaker.slash.fill" : "speaker.2.fill")
+                    .imageScale(.large)
+                    .padding(8)
+            }
+            .background(.ultraThinMaterial)
+            .cornerRadius(8)
         }
-        .background(.ultraThinMaterial)
-        .cornerRadius(8)
-        .opacity(mapPresenter.connectionStatus == .connected ? 1.0 : 0.0)
-        .disabled(mapPresenter.connectionStatus != .connected)
-
 
         // Apple Maps navigation button (only show when landing point available)
         if shouldShowNavigationButton {
