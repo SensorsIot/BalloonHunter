@@ -40,7 +40,7 @@ import CoreLocation
 /// list on vertical speed alone: on 21 August 2026 that auto-selected W4214520
 /// from a frame 6.8 h old, 2.4 seconds after the detector had classified that
 /// same sonde as landed, and the picker never appeared.
-enum StartupSelection: Equatable {
+nonisolated enum StartupSelection: Equatable {
     /// The sonde is up. Track it and skip the picker.
     case autoSelect(serial: String)
     /// Landed, undetermined, or nothing to name. Ask.
@@ -66,7 +66,7 @@ enum StartupSelection: Equatable {
 
 // MARK: - Phase 1: Is this still the same hunt?
 
-struct HuntState {
+nonisolated struct HuntState {
 
     /// How long a hunt stays current once nothing is arriving.
     let staleAfter: TimeInterval
@@ -134,7 +134,7 @@ struct HuntState {
 
 // MARK: - Phase 2: When to leave
 
-struct DepartureTime {
+nonisolated struct DepartureTime {
 
     /// When to set off, and how long until then.
     struct Plan: Equatable {
@@ -165,7 +165,7 @@ struct DepartureTime {
 
 // MARK: - Phase 3: When to re-point Apple Maps
 
-struct NavigationHandoff {
+nonisolated struct NavigationHandoff {
 
     /// How much the drive must change before it is worth interrupting.
     ///
@@ -232,7 +232,7 @@ struct NavigationHandoff {
 
 // MARK: - Phase 4: How far, and which way
 
-struct CloseRangeGuidance {
+nonisolated struct CloseRangeGuidance {
 
     /// Where a position came from. Only one of these is trusted on foot.
     enum PositionSource: Equatable {
