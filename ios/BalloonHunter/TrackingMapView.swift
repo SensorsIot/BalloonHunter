@@ -48,8 +48,6 @@ struct TrackingMapView: View {
     @State private var isSatelliteView = false  // Toggle between standard and satellite view
 
     // MARK: - Flight State Computed Properties
-    private var isFlying: Bool { mapPresenter.isFlying }
-
     private var shouldShowNavigationButton: Bool {
         return mapPresenter.landingPoint != nil
     }
@@ -115,9 +113,14 @@ struct TrackingMapView: View {
                             .stroke(.red, lineWidth: 2)
                     }
 
-                    // 2. Balloon Predicted Path: Thick blue line (flying mode only)
-                    if isFlying,
-                       let predictionPath = mapPresenter.predictionPath {
+                    // 2. Balloon Predicted Path: thick blue line. Drawn whenever the
+                    // presenter has published a path — it already decides visibility
+                    // (predictionPathVisible sets the path to nil when it must be
+                    // hidden, e.g. a confirmed touchdown), and that decision keeps
+                    // the descent line through landed-by-silence. An extra isFlying
+                    // gate here wrongly hid it once the state went aprsLanded. See
+                    // FSD *How a Landing Is Determined*.
+                    if let predictionPath = mapPresenter.predictionPath {
                         MapPolyline(predictionPath)
                             .stroke(.blue, lineWidth: 4)
                     }
