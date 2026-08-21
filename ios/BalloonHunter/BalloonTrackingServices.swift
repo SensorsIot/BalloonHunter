@@ -789,7 +789,15 @@ final class BalloonPositionService: ObservableObject {
 @MainActor
 final class BalloonTrackService: ObservableObject {
     @Published var currentBalloonTrack: [BalloonTrackPoint] = []
-    @Published var currentBalloonName: String?
+
+    /// The hunted sonde, read from the one place it is stored.
+    ///
+    /// This service used to keep its own copy, written only when telemetry
+    /// arrived. Between selecting a sonde and its first frame the copy read
+    /// `nil`, and `fillTrackGapsFromAPRS` compares the serial it fetched against
+    /// this — so a fill that finished first was thrown away. Getter-only by
+    /// design: a mirror that can be assigned is a mirror that can lag.
+    var currentBalloonName: String? { balloonPositionService.currentBalloonName }
     var currentEffectiveDescentRate: Double?
     var trackUpdated = PassthroughSubject<Void, Never>()
     @Published var motionMetrics: BalloonMotionMetrics = BalloonMotionMetrics(
@@ -866,7 +874,6 @@ final class BalloonTrackService: ObservableObject {
         }
 
         self.currentBalloonTrack = track
-        self.currentBalloonName = sondeName
 
         if let sondeName = sondeName {
             appLog("BalloonTrackService: Injected persisted track for '\(sondeName)' with \(track.count) points", category: .service, level: .info)
@@ -907,11 +914,8 @@ final class BalloonTrackService: ObservableObject {
     }
     
     func processPositionData(_ positionData: PositionData) {
-        // Sonde name now comes from BalloonPositionService (single source of truth)
-        // BalloonPositionService handles sonde change detection and name updates
-        if currentBalloonName == nil {
-            currentBalloonName = balloonPositionService.currentBalloonName
-        }
+        // The sonde name is read straight from BalloonPositionService; there is
+        // no local copy to keep in step.
 
 
         // Only record track points when we have valid telemetry states
@@ -1508,9 +1512,10 @@ final class BalloonTrackService: ObservableObject {
         currentAPRSFillTask?.cancel()
         currentAPRSFillTask = nil
 
-        // Clear all track data from memory
+        // Clear all track data from memory. The sonde name is not cleared here:
+        // it is owned by BalloonPositionService, whose own clearAllData() resets
+        // it as part of the same sonde change.
         currentBalloonTrack = []
-        currentBalloonName = nil
         currentEffectiveDescentRate = nil
         landingPosition = nil
         trackBasedLandingDetected = false

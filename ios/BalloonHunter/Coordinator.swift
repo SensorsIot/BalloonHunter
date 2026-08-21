@@ -329,9 +329,8 @@ final class ServiceCoordinator: ObservableObject {
         // 2. Set frequency sync flag
         startupFrequencySyncDone = !checkFrequencySync
 
-        // 3. Set sonde name in services
+        // 3. Set the sonde name. One stored copy; BalloonTrackService reads it.
         balloonPositionService.currentBalloonName = name
-        balloonTrackService.injectPersistedData(sondeName: name, track: [])
 
         // Tell the receiver which sonde this hunt follows, so telemetry for any
         // other one is dropped before it enters the app.

@@ -1059,7 +1059,8 @@ Build the flight history, smooth velocities, detect landings, derive descent met
 
 #### Publishes
 
-- `currentBalloonTrack`, `currentBalloonName`, `currentEffectiveDescentRate`.
+- `currentBalloonTrack`, `currentEffectiveDescentRate`.
+- `currentBalloonName` is **not** published here. It is a read-only view of `BalloonPositionService.currentBalloonName`, which is the only place the hunted serial is stored — see *One name for the hunted sonde* below.
 - `trackUpdated` (Combine subject), `landingPosition`, `balloonPhase`.
 - `trackBasedLandingDetected` (Bool), `trackBasedLandingTime` (Date?) — NEW: Flags for track-based landing detection.
 - `motionMetrics` struct (raw horizontal/vertical speeds, smoothed horizontal/vertical speeds, adjusted descent rate).
@@ -1138,7 +1139,7 @@ Maintain the list of landing predictions for the active sonde, deduplicate noisy
 #### Inputs
 
 - Landing predictions (coordinate, prediction time, optional ETA) produced by `PredictionService` / coordinator.
-- `BalloonTrackService.$currentBalloonName` to detect sonde changes.
+- `BalloonTrackService.currentBalloonName` to detect sonde changes (a read-only view of the position service's value).
 - `PersistenceService` for load/save operations (single-sonde snapshot).
 
 #### Publishes
@@ -1443,6 +1444,16 @@ Every selection path funnels through one method, so tracking setup exists in exa
 4. Set the APRS override, fetch immediately, and fill track gaps.
 5. Check frequency sync, unless the sonde came from BLE and the receiver is already tuned to it.
 6. Trigger state evaluation.
+
+**One name for the hunted sonde.** `BalloonPositionService.currentBalloonName`
+is the only stored copy. `BalloonTrackService` exposes it read-only rather than
+keeping its own, because a mirror that lags the original silently discards work:
+it was written only from arriving telemetry, so between selecting a sonde and the
+first frame it read `nil`, and the APRS fill guard — which compares the fetched
+serial against it — threw the fetch away. On 21 August 2026 that discarded 11 121
+points and cancelled the retry, leaving the hunter with an empty track. Whether it
+happened at all depended on which arrived first, so the same selection sometimes
+worked.
 
 #### Rejecting foreign telemetry
 
