@@ -29,6 +29,31 @@ import CoreLocation
 
 
 
+// MARK: - When predictions run
+
+/// Whether the 60-second prediction timer should run in a given state.
+///
+/// Pure so it is testable without the coordinator — the gap that let a real
+/// regression through: landed-by-silence stopped predicting, so there was no
+/// predicted landing to show or route to, and the map went blank.
+///
+/// Predictions run through the whole flight **and** through landed-by-silence:
+/// the balloon came down near the predicted point, which is the route target
+/// for the drive. Only a confirmed touchdown (BLE, stationary near ground) ends
+/// the flight and stops them; states with no basis for a prediction (startup,
+/// waiting, no telemetry) also stop. See FSD *How a Landing Is Determined*.
+enum PredictionPolicy {
+    static func shouldPredict(state: DataState, confirmedTouchdown: Bool) -> Bool {
+        if confirmedTouchdown { return false }
+        switch state {
+        case .liveBLEFlying, .aprsFlying, .aprsLanded, .liveBLELanded:
+            return true
+        case .startup, .waitingForAPRS, .noTelemetry:
+            return false
+        }
+    }
+}
+
 // MARK: - Phase 1: Which sonde is hunted?
 
 /// What startup does once the services have answered: take the sonde that is

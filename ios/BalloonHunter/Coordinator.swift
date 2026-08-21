@@ -235,12 +235,10 @@ final class ServiceCoordinator: ObservableObject {
 
     /// Handle state changes to control prediction timer
     private func handleStateChangeForPredictionTimer(_ state: DataState) {
-        switch state {
-        case .liveBLEFlying, .aprsFlying:
-            // Flying states: start 60-second prediction timer
+        if PredictionPolicy.shouldPredict(state: state,
+                                          confirmedTouchdown: balloonPositionService.landingConfirmedByBLE) {
             startPredictionTimer()
-        case .startup, .liveBLELanded, .waitingForAPRS, .aprsLanded, .noTelemetry:
-            // Non-flying states: stop timer to save API quota
+        } else {
             stopPredictionTimer()
         }
     }
@@ -250,8 +248,13 @@ final class ServiceCoordinator: ObservableObject {
         // Don't start if already running
         guard predictionTimer == nil else { return }
 
-        appLog("ServiceCoordinator: Starting 60-second prediction timer for flying state", category: .service, level: .info)
+        appLog("ServiceCoordinator: Starting 60-second prediction timer", category: .service, level: .info)
         predictionService.startAutomaticPredictions()
+
+        // Fire once immediately so the predicted landing (and route) appears now,
+        // not after the first 60 s — matters when entering landed-by-silence,
+        // where the last-heard frame is the only basis and no further data comes.
+        predictionTimerFired()
 
         predictionTimer = Timer.scheduledTimer(withTimeInterval: 60.0, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in

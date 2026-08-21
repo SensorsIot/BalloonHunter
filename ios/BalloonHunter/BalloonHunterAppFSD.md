@@ -1775,6 +1775,11 @@ knowing where the balloon lies:**
   observation** — in practice close-range BLE — detected by `vectorAnalysis` or
   the track-based stationary/blackout rules. That is when the marker locks to the
   actual point and prediction stops.
+- **Predictions keep running through landed-by-silence** (`PredictionPolicy`):
+  there has to be a predicted landing to show and route to, so the timer runs in
+  `aprsLanded`/`liveBLELanded` exactly as in flight, and stops only on a confirmed
+  touchdown or a no-data state. (Regression guarded: when this stopped in
+  `aprsLanded`, the map went blank — no landing point, no route.)
 - The distinguishing datum is **vertical speed**: the last APRS frame has one
   (descending, still in the air when lost); the confirming BLE frames do not
   (sitting still on the ground). Altitude alone cannot decide it — Payerne

@@ -198,6 +198,44 @@ final class LandingSequenceTests: XCTestCase {
         XCTAssertEqual(r, .init(target: .none, showPredictionPath: false))
     }
 
+    func testLandingDisplay_landedBySilenceWithoutAPrediction_showsNothing() throws {
+        // The regression the earlier test missed: landed-by-silence resolves to
+        // the prediction — but only if one exists. With no prediction there is
+        // nothing to show, which is why predictions MUST run in this state (see
+        // PredictionPolicy). This asserts the dependency instead of assuming it.
+        let samples = try descent()
+        let silent = position(samples.last!, source: .aprs, ageSeconds: 300)
+        let r = detector.resolveLanding(reason: .aprsStale, currentPosition: silent, hasPrediction: false)
+        XCTAssertEqual(r, .init(target: .none, showPredictionPath: false),
+                       "no prediction → nothing to show; predictions must run for landed-by-silence")
+    }
+
+    // MARK: - Predictions must run through landed-by-silence
+
+    func testPredictionPolicy_runsThroughLandedBySilence() {
+        // This is the test whose absence let the blank-map regression through:
+        // landed-by-silence must keep predicting so there is a landing to route to.
+        XCTAssertTrue(PredictionPolicy.shouldPredict(state: .aprsLanded, confirmedTouchdown: false),
+                      "landed-by-silence must keep predicting")
+        XCTAssertTrue(PredictionPolicy.shouldPredict(state: .liveBLELanded, confirmedTouchdown: false))
+    }
+
+    func testPredictionPolicy_stopsOnConfirmedTouchdown() {
+        for state in [DataState.aprsLanded, .liveBLELanded, .aprsFlying, .liveBLEFlying] {
+            XCTAssertFalse(PredictionPolicy.shouldPredict(state: state, confirmedTouchdown: true),
+                           "a confirmed touchdown ends predictions in \(state)")
+        }
+    }
+
+    func testPredictionPolicy_runsWhileFlying_stopsWithoutBasis() {
+        XCTAssertTrue(PredictionPolicy.shouldPredict(state: .liveBLEFlying, confirmedTouchdown: false))
+        XCTAssertTrue(PredictionPolicy.shouldPredict(state: .aprsFlying, confirmedTouchdown: false))
+        for state in [DataState.startup, .waitingForAPRS, .noTelemetry] {
+            XCTAssertFalse(PredictionPolicy.shouldPredict(state: state, confirmedTouchdown: false),
+                           "\(state) has no basis for a prediction")
+        }
+    }
+
     // MARK: - Track assembly across the handoff
 
     func testBackfillOfTheHandoffMinuteDoesNotDuplicate() throws {
