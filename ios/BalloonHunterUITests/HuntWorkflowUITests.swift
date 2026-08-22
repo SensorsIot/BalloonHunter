@@ -22,8 +22,7 @@ final class HuntWorkflowUITests: XCTestCase {
 
     // MARK: - Rig
 
-    @discardableResult
-    private func launch() -> XCUIApplication {
+    private func makeApp() -> XCUIApplication {
         let app = XCUIApplication()
         // Permission dialogs would otherwise stall the run on a fresh simulator.
         addUIInterruptionMonitor(withDescription: "system permission") { alert in
@@ -33,7 +32,30 @@ final class HuntWorkflowUITests: XCTestCase {
             }
             return false
         }
+        return app
+    }
+
+    /// A cold start, for the one workflow whose subject is the cold start.
+    @discardableResult
+    private func coldLaunch() -> XCUIApplication {
+        let app = makeApp()
+        app.terminate()
         app.launch()
+        return app
+    }
+
+    /// Take over the app as the hunter left it, without restarting it.
+    ///
+    /// `launch()` terminates whatever is running and starts fresh, which is a
+    /// startup test wearing another name: it throws away the hunt in progress that
+    /// these workflows declare as their start_state, and hands them an app in
+    /// `noTelemetry` with an empty track instead of the settled one they are about
+    /// to make claims about. `activate()` brings the running instance forward, and
+    /// launches only if nothing is running.
+    @discardableResult
+    private func attach() -> XCUIApplication {
+        let app = makeApp()
+        app.activate()
         return app
     }
 
@@ -117,7 +139,7 @@ final class HuntWorkflowUITests: XCTestCase {
     /// A sonde is settled on before anything sonde-specific is shown - through the
     /// picker, or automatically when one is demonstrably airborne.
     func testStartupSettlesOnASondeBeforeShowingAnySondeData() {
-        let app = launch()
+        let app = coldLaunch()
 
         switch waitForStartupToSettle(app) {
         case .picker:
@@ -146,7 +168,7 @@ final class HuntWorkflowUITests: XCTestCase {
 
     /// Going away and coming back is not a new hunt: no second picker, no reset.
     func testReturningFromBackgroundKeepsTheHunt() {
-        let app = launch()
+        let app = attach()
         if waitForStartupToSettle(app) == .picker { selectSonde(in: app) }
         waitForTrackingView(app)
 
@@ -173,13 +195,27 @@ final class HuntWorkflowUITests: XCTestCase {
         // must_not: the picker returning, which would mean the hunt was lost.
         XCTAssertFalse(app.staticTexts["picker.title"].waitForExistence(timeout: 10),
                        "The picker reappeared on resume - the hunt was not kept")
+
+        // Coming back is not finished when the fetch is issued. The claim is that
+        // the position, the track, the landing point and the route are all current
+        // again, and the last three take a fetch, a prediction and a route request
+        // to become so. Ending the test at the resume line kills the app mid-catch-up
+        // and leaves that unproven, so the test stays and watches.
+        let settle = TimeInterval(ProcessInfo.processInfo.environment["SETTLE_SECONDS"] ?? "") ?? 5
+        if settle > 0 {
+            let catchingUp = expectation(description: "catching up for \(Int(settle))s")
+            catchingUp.isInverted = true
+            wait(for: [catchingUp], timeout: settle)
+        }
+        XCTAssertTrue(app.buttons["map.settings"].exists,
+                      "The app did not survive the catch-up after resuming")
     }
 
     // MARK: - W-SONDE-CHANGE
 
     /// Changing sonde reopens the picker and hands the app a different hunt.
     func testChangingSondeGoesBackThroughThePicker() {
-        let app = launch()
+        let app = attach()
         let selected = waitForStartupToSettle(app) == .picker ? selectSonde(in: app) : nil
         waitForTrackingView(app)
 

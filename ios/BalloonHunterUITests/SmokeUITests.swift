@@ -10,7 +10,9 @@ final class SmokeUITests: XCTestCase {
 
     func testHarnessCanLaunchTheAppAndSeeIt() throws {
         let app = XCUIApplication()
-        app.launch()
+        // The smoke test asks whether the harness can drive the app at all, so it
+        // takes what is running rather than restarting it.
+        app.activate()
 
         XCTAssertTrue(app.wait(for: .runningForeground, timeout: 30),
                       "The app did not reach the foreground")

@@ -1,0 +1,343 @@
+14:25:15.504,Service,debug,PersistenceService: UserSettings loaded
+14:25:15.509,Service,info,PersistenceService: Initialized - settings and the BLE hunt tail; the flight itself is not stored
+14:25:15.510,BLE,info,BLE: Initializing CBCentralManager
+14:25:15.516,Service,info,APRSDataService: Initialized with station ID 06610
+14:25:15.517,Service,info,CurrentLocationService: Initialized with dual-mode architecture (on-demand mode)
+14:25:15.518,Service,info,PredictionService: LandingPointTrackingService configured for service chain
+14:25:15.518,Service,info,BalloonPositionService: LandingPointTrackingService configured
+14:25:15.518,Service,info,LandingPointTrackingService: RouteCalculationService configured
+14:25:15.518,Service,info,LandingPointTrackingService: NavigationService configured
+14:25:15.518,Service,info,PredictionService: ServiceCoordinator configured
+14:25:15.518,Service,info,PredictionService: BalloonPositionService configured
+14:25:15.518,Service,info,BalloonPositionService: ServiceCoordinator configured
+14:25:15.519,UI,info,"🗺️ MAP: Route hidden - state=startup, within200m=false"
+14:25:15.520,General,info,MapPresenter: Received EMPTY track update - clearing all track points
+14:25:15.634,Service,info,"CurrentLocationService: Continuous foreground tracking started (best accuracy, 2 m)"
+14:25:15.635,Service,info,"CurrentLocationService: Continuous foreground tracking started (best accuracy, 2 m)"
+14:25:15.643,General,debug,AppSettings: Transport mode saved to UserDefaults: car
+14:25:15.643,General,debug,AppSettings: Loaded transport mode from UserDefaults: car
+14:25:15.673,Service,info,AppServices: Services initialized and ready
+14:25:15.673,General,debug,ServiceCoordinator: AppSettings reference set
+14:25:15.673,General,info,========================================
+14:25:15.673,General,info,STARTUP: Prediction timer will be controlled by state machine
+14:25:15.684,Lifecycle,info,BalloonHunterApp: Notification permissions granted
+14:25:15.691,BLE,info,🟢 BLE: Bluetooth powered on
+14:25:15.691,BLE,info,BLE: Starting scan for MySondyGo devices
+14:25:15.691,General,info,STARTUP: Step 1 - Settings only; no sonde data until one is chosen
+14:25:15.697,General,info,"STARTUP: Step 2 - Services initialized, requesting location"
+14:25:15.697,Service,debug,CurrentLocationService: Requesting current location (on-demand)
+14:25:15.699,General,info,STARTUP: Step 3 - Nothing injected; the hunted serial comes from selection alone
+14:25:15.700,General,info,STARTUP: Step 4 - Starting BLE and APRS services
+14:25:15.701,BLE,info,BLE: Starting scan for MySondyGo devices
+14:25:15.701,General,info,Step 2: BLE scanning started
+14:25:15.701,Service,info,APRSDataService: Starting APRS polling every 15s for station 06610
+14:25:15.701,Service,debug,APRSDataService: GET https://api.v2.sondehub.org/sondes/site/06610
+14:25:15.723,Service,info,"Initial user location [PRECISION]: lat=47.474680591360624, lon=7.7673912883373655"
+14:25:15.763,BLE,info,🔍 BLE: Discovered device 'MySondyGO-509A9EDAD4D4' (RSSI: -97dBm)
+14:25:15.788,BLE,info,🎯 BLE: Found MySondyGo device: MySondyGO-509A9EDAD4D4
+14:25:16.075,BLE,info,🟢 BLE: SUCCESSFULLY CONNECTED to MySondyGO-509A9EDAD4D4
+14:25:16.764,BLE,info,"🟢 BLE: Found UART service, discovering characteristics"
+14:25:16.884,BLE,info,🔍 BLE: didDiscoverCharacteristics called for service 53797269-614D-6972-6B6F-44616C6D6F6E
+14:25:16.884,BLE,info,🟢 BLE: TX characteristic configured - waiting for first BLE packet
+14:25:17.004,BLE,info,🟢 BLE: Ready for commands - first valid BLE packet received (Type 1)
+14:25:17.004,BLE,info,🟢 BLE: Data ready - Type 1 packet received
+14:25:17.004,Service,info,BLECommunicationService: First packet - Type 1 telemetry packet received
+14:25:17.004,BLE,info,"📡 BLE (1, every 5th): RS41 W4140048 lat=46.96925 lon=7.86688 alt=22394.7m v=4.2m/s h=21.5m/s RSSI=-123.5dBm bat=89%"
+14:25:17.008,Service,debug,PersistenceService: radioSettings updated in memory: freq=403.50MHz type=RS41
+14:25:17.010,Service,info,BalloonPositionService: Balloon phase unknown → ascending
+14:25:17.011,Service,info,"BalloonPositionService: Display position now follows the live position [46.96925, 7.86688]"
+14:25:17.013,Service,info,BalloonTrackService: State startup - not recording track point
+14:25:18.023,BLE,info,📊 BLE PARSED (Type 0): Device status - battery=3827.00V (89%) signal=-127dBm | Raw: [0]=0 [1]=RS41 [2]=403.500 [3]=127.5 [4]=89 [5]=3827 [6]=0 [7]=3.10 [8]=o
+14:25:18.109,Service,debug,"APRSDataService: Telemetry data: W4214536: lat=47.08300, lon=8.69981, alt=2013m, v_v=-5.7m/s, v_h=7.3m/s, freq=403.50/tx=403.50/eff=403.50MHz, type=RS41, time=2026-08-22T01:43:55.003000Z | W4140048: lat=46.99095, lon=7.82390, alt=26471m, v_v=5.9m/s, v_h=13.0m/s, freq=403.50/tx=0.00/eff=403.50MHz, type=RS41, time=2026-08-22T12:25:30.000Z"
+14:25:18.109,Service,debug,APRSDataService: Received data for 2 sondes
+14:25:18.115,Service,info,"APRSDataService: 2 sondes available (last 24h): W4140048, W4214536"
+14:25:18.116,Service,info,"APRSDataService: Published telemetry for sonde W4140048 at 46.99095, 7.82390"
+14:25:18.120,General,info,STARTUP: Both services provided definitive answers
+14:25:18.121,General,info,"STARTUP: Step 4b - LandingDetector says phase=ascending → autoSelect(serial: ""W4140048"")"
+14:25:18.121,General,info,STARTUP: Step 4b - Flying sonde 'W4140048' at 26471m - auto-selecting
+14:25:18.127,General,info,ServiceCoordinator: === Starting to track sonde 'W4140048' (was: 'W4140048') ===
+14:25:18.128,General,info,"ServiceCoordinator: Same sonde as restored/current - keeping its track, nothing to clear"
+14:25:18.129,General,info,ServiceCoordinator: === Now tracking 'W4140048' ===
+14:25:18.129,General,info,"STARTUP: Step 4c - BLE connected, checking frequency sync"
+14:25:18.129,General,info,STARTUP: Step 4d - Reading balloon context for 'W4140048' from SondeHub (have 0 points)
+14:25:18.130,Service,debug,BalloonTrackService: Context read for W4140048 already in flight - joining it
+14:25:18.131,General,info,STARTUP: Step 5 - Completing startup and handing control to state machine
+14:25:18.131,Service,info,BalloonPositionService: Startup marked as complete - evaluating final state
+14:25:18.131,Service,info,🔄 DataState: startup → liveBLEFlying | BLE:dataReady APRS:false Phase:ascending | Device:connected Msg:0s Sonde:W4140048 Alt:22394m | Startup:✅ Held:2.6s Data:✅fresh AnyData:true
+14:25:18.131,Service,info,APRSDataService: Stopped APRS polling (BLE telemetry resumed)
+14:25:18.132,Service,info,"BalloonTrackService: Context read for W4140048 - never fetched -> duration=3d, holding 0 points"
+14:25:18.132,Service,info,APRSDataService: Fetching telemetry for W4140048 (duration: 30m)
+14:25:18.134,Service,info,ServiceCoordinator: Starting 60-second prediction timer
+14:25:18.134,Service,info,PredictionService: Running; coordinator owns 60s timer
+14:25:18.134,General,info,STARTUP: Complete ✅ Control handed to state machine (2.4s total)
+14:25:18.135,Service,debug,"PredictionService: performPrediction start (trigger=state-machine, sinceLast=N/As)"
+14:25:18.135,Service,info,PredictionService: Prediction cancelled (trigger=state-machine) - likely due to sonde change
+14:25:18.135,Service,debug,"PredictionService: performPrediction start (trigger=60s-timer, sinceLast=N/As)"
+14:25:18.135,Service,info,PredictionService: Balloon descending: false (verticalSpeed: 4.2 m/s)
+14:25:18.135,Service,debug,PredictionService: Trigger=60s-timer cacheKey=W4140048-46.97-7.87-22395-5958005
+14:25:18.136,Service,debug,"PredictionService: API call #1 (trigger=60s-timer, key=W4140048-46.97-7.87-22395-5958005)"
+14:25:18.136,Service,debug,PredictionService: API request lat=46.9693 lon=7.8669 alt=22395m ↑5.0 ↓5.0 burst=35000m
+14:25:18.136,Service,info,PredictionService: Asking predictor.fabia.ch
+14:25:18.231,UI,debug,DataPanelView: predicted landing time string updated -> --:--
+14:25:18.231,UI,debug,DataPanelView: remaining flight time string updated -> --:--
+14:25:18.231,General,info,🔍 ZOOM: TrackingMapView first appearance - preserving startup zoom
+14:25:18.247,General,info,MapPresenter: Startup framing open for 8s - map will fit each overlay as it arrives
+14:25:18.247,General,info,"MapPresenter: Camera fit with 3 coordinates: annotations=2, user=true, prediction=false, route=false"
+14:25:18.247,General,info,"🔍 ZOOM: MapPresenter updateCameraToShowAllAnnotations - 78km (0.708°) at [47.2220, 7.8171]"
+14:25:18.247,General,info,"🔍 ZOOM: Map camera changed by user - 65km (0.590°) at [47.2366, 7.8171]"
+14:25:18.247,General,info,"🔍 ZOOM: Map camera changed by user - 65km (0.590°) at [47.2366, 7.8171]"
+14:25:18.252,General,info,"🔍 ZOOM: Map camera changed by user - 65km (0.590°) at [47.2366, 7.8171]"
+14:25:18.514,BLE,info,BLECommunicationService: Telemetry GAINED: Valid telemetry received within last 30 seconds
+14:25:18.717,Service,debug,PredictionService: HTTP 200 OK (length=113222 bytes)
+14:25:18.717,Service,debug,"PredictionService: Response JSON snippet (first 512B): {""metadata"": {""start_datetime"": ""2026-08-22T12:26:18Z"", ""complete_datetime"": ""2026-08-22T13:55:53Z""}, ""request"": {""launch_latitude"": 46.9693, ""launch_longitude"": 7.866899999999987, ""launch_altitude"": 22394.7, ""launch_datetime"": ""2026-08-22T12:26:18Z"", ""ascent_rate"": 5.0, ""burst_altitude"": 35000.0, ""descent_rate"": 5.0, ""profile"": ""standard_profile"", ""format"": ""json"", ""dataset"": ""2026-08-22T06:00:00Z""}, ""prediction"": [{""stage"": ""ascent"", ""trajectory"": [{""datetime"": ""2026-08-22T12:26:18Z"", ""latitude"": 46.9693,"
+14:25:18.719,Service,debug,"PredictionService: Trajectories — ascent=506, descent=571, last descent datetime=2026-08-22T13:55:53Z"
+14:25:18.720,General,info,"MapPresenter: Camera fit with 1080 coordinates: annotations=2, user=true, prediction=true, route=false"
+14:25:18.721,General,info,"🔍 ZOOM: MapPresenter updateCameraToShowAllAnnotations - 78km (0.708°) at [47.2220, 7.9212]"
+14:25:18.721,UI,debug,DataPanelView: predicted landing time string updated -> 15:54
+14:25:18.721,Service,debug,PredictionService: Predicted landing time string set to 15:54
+14:25:18.721,UI,debug,DataPanelView: remaining flight time string updated -> 01:29
+14:25:18.721,Service,debug,PredictionService: Remaining flight time string set to 01:29
+14:25:18.721,Service,debug,"PredictionService: Prediction and time calculations updated (landing=15:54, flight=01:29)"
+14:25:18.721,Service,info,"PredictionService: Prediction completed by predictor.fabia.ch - Landing: (47.070352, 8.187446), Burst: (46.988357, 7.678867)"
+14:25:18.721,Cache,debug,PredictionCache: Set key W4140048-46.97-7.87-22395-5958005 with version 0
+14:25:18.727,General,info,"🔍 ZOOM: Map camera changed by user - 74km (0.668°) at [47.2385, 7.9212]"
+14:25:18.729,General,info,"MapPresenter: Camera fit with 1082 coordinates: annotations=4, user=true, prediction=true, route=false"
+14:25:18.729,General,info,"🔍 ZOOM: MapPresenter updateCameraToShowAllAnnotations - 78km (0.708°) at [47.2220, 7.9212]"
+14:25:18.729,UI,debug,DataPanelView: predicted landing time string updated -> 15:54
+14:25:18.730,Service,debug,PredictionService: Predicted landing time string set to 15:54
+14:25:18.730,UI,debug,DataPanelView: remaining flight time string updated -> 01:29
+14:25:18.730,Service,debug,PredictionService: Remaining flight time string set to 01:29
+14:25:18.730,Service,debug,"PredictionService: Prediction and time calculations updated (landing=15:54, flight=01:29)"
+14:25:18.730,Service,info,PredictionService: Prediction completed successfully from 60s-timer
+14:25:18.730,Service,debug,LandingPointTrackingService: Before burst - not recording landing estimate
+14:25:18.730,Service,info,"LandingPointTrackingService: Triggering route calculation to [47.0704, 8.1874]"
+14:25:18.730,Service,info,"RouteCalculationService: calculateRoute called to destination [47.0704, 8.1874]"
+14:25:18.730,Service,info,"RouteCalculationService: Renewing route - landing point moved: no, hunter moved 0m"
+14:25:18.730,Service,info,PredictionService: Updated ServiceCoordinator with prediction results
+14:25:18.730,Service,info,RouteCalculationService: Starting route calculation with transport mode: car
+14:25:18.733,General,info,"🔍 ZOOM: Map camera changed by user - 74km (0.668°) at [47.2385, 7.9212]"
+14:25:19.054,General,info,"🔍 ZOOM: Map camera changed by user - 74km (0.668°) at [47.2385, 7.9212]"
+14:25:19.206,UI,info,🗺️ MAP: Route visible
+14:25:19.207,General,info,"MapPresenter: Camera fit with 1922 coordinates: annotations=4, user=true, prediction=true, route=true"
+14:25:19.208,General,info,"🔍 ZOOM: MapPresenter updateCameraToShowAllAnnotations - 78km (0.708°) at [47.2221, 7.9524]"
+14:25:19.208,Service,info,"RouteCalculationService: Route calculated successfully - distance: 74934.0m, time: 2843s, 840 points"
+14:25:19.213,General,info,"🔍 ZOOM: Map camera changed by user - 82km (0.746°) at [47.2405, 7.9524]"
+14:25:20.219,Service,info,APRSDataService: Added 1802 points (total received: 1802)
+14:25:20.241,General,info,"🔴 RED TRACK: 1802 pts | first=46.92984,7.81591 t=2026-08-22 11:55:18 +0000 | last=46.99005,7.82497 t=2026-08-22 12:25:19 +0000 | longest leg #306 18m over 1s"
+14:25:20.244,General,info,"MapPresenter: Camera fit with 1963 coordinates: annotations=4, user=true, prediction=true, route=true"
+14:25:20.244,General,info,"🔍 ZOOM: MapPresenter updateCameraToShowAllAnnotations - 84km (0.763°) at [47.2024, 7.9524]"
+14:25:20.245,Service,info,"📍 TRACK EXTENT [APRS +1802 → 1802 pts]: lat 46.92984…46.99005 lon 7.81591…7.87414 | first=46.92984,7.81591 last=46.99005,7.82497"
+14:25:20.245,Service,info,BalloonTrackService: Position published from the recent slice - overlays need not wait for the history
+14:25:20.245,Service,info,APRSDataService: Fetching telemetry for W4140048 (duration: 3d)
+14:25:20.248,General,info,"🔍 ZOOM: Map camera changed by user - 82km (0.746°) at [47.2209, 7.9524]"
+14:25:20.252,General,info,"🔍 ZOOM: Map camera changed by user - 82km (0.746°) at [47.2209, 7.9524]"
+14:25:20.474,General,info,ServiceCoordinator: Showing sonde selection for manual change (2 available)
+14:25:20.478,General,info,"🔍 ZOOM: Map camera changed by user - 82km (0.746°) at [47.2209, 7.9524]"
+14:25:20.479,Service,debug,APRSDataService: GET https://api.v2.sondehub.org/sondes/site/06610
+14:25:20.583,Service,debug,"APRSDataService: Telemetry data: W4214536: lat=47.08300, lon=8.69981, alt=2013m, v_v=-5.7m/s, v_h=7.3m/s, freq=403.50/tx=403.50/eff=403.50MHz, type=RS41, time=2026-08-22T01:43:55.003000Z | W4140048: lat=46.99095, lon=7.82390, alt=26471m, v_v=5.9m/s, v_h=13.0m/s, freq=403.50/tx=0.00/eff=403.50MHz, type=RS41, time=2026-08-22T12:25:30.000Z"
+14:25:20.583,Service,debug,APRSDataService: Received data for 2 sondes
+14:25:20.583,Service,info,"APRSDataService: Refreshed sonde list - 2 in last 24h: W4140048, W4214536"
+14:25:20.583,General,info,ServiceCoordinator: Sonde list refreshed (2 available)
+14:25:20.587,General,info,"🔍 ZOOM: Map camera changed by user - 82km (0.746°) at [47.2209, 7.9524]"
+14:25:21.131,General,info,"🔍 ZOOM: Map camera changed by user - 82km (0.746°) at [47.2209, 7.9524]"
+14:25:22.121,General,info,"🔍 ZOOM: Map camera changed by user - 82km (0.746°) at [47.2209, 7.9524]"
+14:25:22.772,General,debug,ServiceCoordinator: User started editing - countdown cancelled
+14:25:22.775,General,info,"🔍 ZOOM: Map camera changed by user - 82km (0.746°) at [47.2209, 7.9524]"
+14:25:23.128,BLE,info,📊 BLE PARSED (Type 0): Device status - battery=3937.00V (79%) signal=-123dBm | Raw: [0]=0 [1]=RS41 [2]=403.500 [3]=123.5 [4]=79 [5]=3937 [6]=0 [7]=3.10 [8]=o
+14:25:23.131,General,info,"🔍 ZOOM: Map camera changed by user - 82km (0.746°) at [47.2209, 7.9524]"
+14:25:23.255,General,info,ServiceCoordinator: === Starting to track sonde 'W4214536' (was: 'W4140048') ===
+14:25:23.255,Service,info,🎈 ServiceCoordinator: Clearing all old sonde data
+14:25:23.255,Service,info,BalloonPositionService: All data cleared for new sonde
+14:25:23.255,General,info,MapPresenter: Received EMPTY track update - clearing all track points
+14:25:23.255,General,info,"MapPresenter: Camera fit with 1919 coordinates: annotations=1, user=true, prediction=true, route=true"
+14:25:23.257,General,info,"🔍 ZOOM: MapPresenter updateCameraToShowAllAnnotations - 78km (0.708°) at [47.2221, 7.9524]"
+14:25:23.257,Service,debug,PersistenceService: No BLE hunt tail to save (APRS holds everything)
+14:25:23.257,Service,info,BalloonTrackService: All data cleared for new sonde
+14:25:23.257,Service,info,LandingPointTrackingService: All data cleared for new sonde
+14:25:23.257,Service,info,PredictionService: All data cleared for new sonde (cancelled in-flight prediction)
+14:25:23.257,UI,info,🗺️ MAP: Route hidden - no route calculated yet
+14:25:23.257,General,info,"MapPresenter: Camera fit with 1 coordinates: annotations=0, user=true, prediction=false, route=false"
+14:25:23.257,General,info,"🔍 ZOOM: MapPresenter updateCameraToShowAllAnnotations - 11km (0.100°) at [47.4747, 7.7674]"
+14:25:23.258,Service,info,RouteCalculationService: All data cleared for new sonde (cancelled in-flight route calculation)
+14:25:23.258,General,info,NavigationService: All data cleared for new sonde
+14:25:23.258,Service,info,✅ ServiceCoordinator: All old sonde data cleared
+14:25:23.258,General,info,ServiceCoordinator: === Now tracking 'W4214536' ===
+14:25:23.258,UI,debug,DataPanelView: predicted landing time string updated -> --:--
+14:25:23.258,UI,debug,DataPanelView: remaining flight time string updated -> --:--
+14:25:23.264,General,info,"🔍 ZOOM: Map camera changed by user - 0km (0.000°) at [47.4747, 7.7674]"
+14:25:23.272,Cache,info,PredictionCache: Purged all entries for new sonde
+14:25:23.272,Service,error,"APRSDataService: Fetch error: Error Domain=NSURLErrorDomain Code=-999 ""cancelled"" UserInfo={NSErrorFailingURLStringKey=https://api.v2.sondehub.org/sondes/telemetry?serial=W4140048&duration=3d, NSErrorFailingURLKey=https://api.v2.sondehub.org/sondes/telemetry?serial=W4140048&duration=3d, _NSURLErrorRelatedURLSessionTaskErrorKey=(
+14:25:23.272,Service,info,"BalloonTrackService: Context read for W4214536 - never fetched -> duration=3d, holding 0 points"
+14:25:23.272,Service,info,APRSDataService: Fetching telemetry for W4214536 (duration: 30m)
+14:25:23.272,Cache,info,RoutingCache: Purged all entries for new sonde
+14:25:23.459,Service,info,APRSDataService: Added 0 points (total received: 0)
+14:25:23.459,Service,info,APRSDataService: Fetching telemetry for W4214536 (duration: 3d)
+14:25:23.549,Service,debug,"PredictionService: performPrediction start (trigger=sonde-context, sinceLast=N/As)"
+14:25:23.549,Service,info,PredictionService: Balloon descending: false (verticalSpeed: 4.44186 m/s)
+14:25:23.549,Service,debug,PredictionService: Trigger=sonde-context cacheKey=W4140048-46.99-7.82-26410-5958005
+14:25:23.553,Service,debug,"PredictionService: API call #2 (trigger=sonde-context, key=W4140048-46.99-7.82-26410-5958005)"
+14:25:23.553,Service,debug,PredictionService: API request lat=46.9900 lon=7.8250 alt=26410m ↑5.0 ↓5.0 burst=35000m
+14:25:23.553,Service,info,PredictionService: Asking predictor.fabia.ch
+14:25:24.056,Service,debug,PredictionService: HTTP 200 OK (length=96372 bytes)
+14:25:24.056,Service,debug,"PredictionService: Response JSON snippet (first 512B): {""metadata"": {""start_datetime"": ""2026-08-22T12:26:23Z"", ""complete_datetime"": ""2026-08-22T13:42:33Z""}, ""request"": {""launch_latitude"": 46.99, ""launch_longitude"": 7.824999999999989, ""launch_altitude"": 26410.5, ""launch_datetime"": ""2026-08-22T12:26:23Z"", ""ascent_rate"": 5.0, ""burst_altitude"": 35000.0, ""descent_rate"": 5.0, ""profile"": ""standard_profile"", ""format"": ""json"", ""dataset"": ""2026-08-22T06:00:00Z""}, ""prediction"": [{""stage"": ""ascent"", ""trajectory"": [{""datetime"": ""2026-08-22T12:26:23Z"", ""latitude"": 46.99, ""lo"
+14:25:24.063,Service,debug,"PredictionService: Trajectories — ascent=345, descent=571, last descent datetime=2026-08-22T13:42:33Z"
+14:25:24.065,General,info,"MapPresenter: Camera fit with 917 coordinates: annotations=0, user=true, prediction=true, route=false"
+14:25:24.067,General,info,"🔍 ZOOM: MapPresenter updateCameraToShowAllAnnotations - 75km (0.684°) at [47.2303, 7.9121]"
+14:25:24.068,UI,debug,DataPanelView: predicted landing time string updated -> 15:41
+14:25:24.068,Service,debug,PredictionService: Predicted landing time string set to 15:41
+14:25:24.068,UI,debug,DataPanelView: remaining flight time string updated -> 01:16
+14:25:24.069,Service,debug,PredictionService: Remaining flight time string set to 01:16
+14:25:24.069,Service,debug,"PredictionService: Prediction and time calculations updated (landing=15:41, flight=01:16)"
+14:25:24.069,Service,info,"PredictionService: Prediction completed by predictor.fabia.ch - Landing: (47.073994, 8.179613), Burst: (46.991885, 7.669084)"
+14:25:24.069,Cache,debug,PredictionCache: Set key W4140048-46.99-7.82-26410-5958005 with version 0
+14:25:24.084,General,info,"🔍 ZOOM: Map camera changed by user - 74km (0.671°) at [47.2468, 7.9121]"
+14:25:24.088,General,info,"MapPresenter: Camera fit with 918 coordinates: annotations=1, user=true, prediction=true, route=false"
+14:25:24.088,General,info,"🔍 ZOOM: MapPresenter updateCameraToShowAllAnnotations - 75km (0.684°) at [47.2303, 7.9121]"
+14:25:24.089,UI,debug,DataPanelView: predicted landing time string updated -> 15:41
+14:25:24.089,Service,debug,PredictionService: Predicted landing time string set to 15:41
+14:25:24.089,UI,debug,DataPanelView: remaining flight time string updated -> 01:16
+14:25:24.089,Service,debug,PredictionService: Remaining flight time string set to 01:16
+14:25:24.089,Service,debug,"PredictionService: Prediction and time calculations updated (landing=15:41, flight=01:16)"
+14:25:24.089,Service,info,PredictionService: Prediction completed successfully from sonde-context
+14:25:24.089,Service,debug,LandingPointTrackingService: Before burst - not recording landing estimate
+14:25:24.090,Service,info,"LandingPointTrackingService: Triggering route calculation to [47.0740, 8.1796]"
+14:25:24.090,Service,info,"RouteCalculationService: calculateRoute called to destination [47.0740, 8.1796]"
+14:25:24.090,Service,info,"RouteCalculationService: Renewing route - landing point moved: no, hunter moved 0m"
+14:25:24.090,Service,info,PredictionService: Updated ServiceCoordinator with prediction results
+14:25:24.095,General,info,"🔍 ZOOM: Map camera changed by user - 74km (0.671°) at [47.2468, 7.9121]"
+14:25:24.097,Service,info,RouteCalculationService: Starting route calculation with transport mode: car
+14:25:24.153,General,info,"🔍 ZOOM: Map camera changed by user - 74km (0.671°) at [47.2468, 7.9121]"
+14:25:25.111,UI,info,🗺️ MAP: Route visible
+14:25:25.112,General,info,"MapPresenter: Camera fit with 1790 coordinates: annotations=1, user=true, prediction=true, route=true"
+14:25:25.114,General,info,"🔍 ZOOM: MapPresenter updateCameraToShowAllAnnotations - 75km (0.685°) at [47.2304, 7.9473]"
+14:25:25.114,Service,info,"RouteCalculationService: Route calculated successfully - distance: 76124.0m, time: 3209s, 872 points"
+14:25:25.120,General,info,"🔍 ZOOM: Map camera changed by user - 84km (0.759°) at [47.2490, 7.9473]"
+14:25:25.199,General,info,"🔍 ZOOM: Map camera changed by user - 84km (0.759°) at [47.2490, 7.9473]"
+14:25:26.199,General,info,"🔍 ZOOM: Map camera changed by user - 84km (0.759°) at [47.2490, 7.9473]"
+14:25:27.924,BLE,info,🟡 BLE: Downgraded to readyForCommands - no Type 1 telemetry for 10s (receiving Type 0 only)
+14:25:27.927,Service,info,🔄 DataState: liveBLEFlying → waitingForAPRS | BLE:readyForCommands APRS:false Phase:unknown | Device:connected Msg:0s Sonde:none Alt:none | Startup:✅ Held:9.8s Data:✅fresh AnyData:false
+14:25:27.927,Service,info,APRSDataService: Starting APRS polling every 15s for station 06610
+14:25:27.927,Service,info,BalloonPositionService: Starting APRS polling - waiting for telemetry response
+14:25:27.928,Service,info,ServiceCoordinator: Stopping prediction timer
+14:25:27.928,Service,info,PredictionService: Stopped automatic predictions
+14:25:27.928,Service,info,APRSDataService: GET https://api.v2.sondehub.org/sondes/telemetry?serial=W4214536&duration=30m (poll - latest only)
+14:25:27.940,General,info,"🔍 ZOOM: Map camera changed by user - 84km (0.759°) at [47.2490, 7.9473]"
+14:25:27.953,Service,debug,APRSDataService: No recent frames for W4214536 in 30m window
+14:25:28.958,General,info,"🔍 ZOOM: Map camera changed by user - 84km (0.759°) at [47.2490, 7.9473]"
+14:25:29.588,Service,debug,PersistenceService: No BLE hunt tail to save (APRS holds everything)
+14:25:29.588,Lifecycle,info,BalloonHunterApp: Entered background - hunt tail persisted
+14:25:29.589,Service,info,CurrentLocationService: Continuous foreground tracking stopped (backgrounded)
+14:25:29.589,Service,info,APRSDataService: App backgrounded - polling stopped and refused until it returns
+14:25:29.589,Service,info,APRSDataService: Stopped APRS polling (BLE telemetry resumed)
+14:25:29.998,General,info,"🔍 ZOOM: Map camera changed by user - 84km (0.759°) at [47.2490, 7.9473]"
+14:25:30.995,General,info,"🔍 ZOOM: Map camera changed by user - 84km (0.759°) at [47.2490, 7.9473]"
+14:25:34.405,Service,info,APRSDataService: Added 10218 points (total received: 10218)
+14:25:34.467,General,info,"🔴 RED TRACK: 9747 pts | first=46.81255,6.94340 t=2026-08-21 22:42:42 +0000 | last=47.08300,8.69981 t=2026-08-22 01:43:55 +0000 | longest leg #9745 103m over 14s"
+14:25:34.484,General,debug,MapPresenter: Startup framing window closed
+14:25:34.488,Service,info,"📍 TRACK EXTENT [APRS +9747 → 9747 pts]: lat 46.81249…47.08496 lon 6.94326…8.69981 | first=46.81255,6.94340 last=47.08300,8.69981"
+14:25:34.488,Service,info,"BalloonTrackService: Track has 9747 points over 181min, using window size 1075 for 20-minute detection"
+14:25:34.490,Service,info,BalloonTrackService: Burst point found at index 7038 with altitude 36903m
+14:25:34.490,Service,info,BalloonTrackService: Searching for landing from index 8113 to 9747
+14:25:34.816,Service,debug,BalloonTrackService: Track-based landing detection complete - no stationary period found
+14:25:34.820,General,info,"🔍 ZOOM: Map camera changed by user - 244km (2.204°) at [47.1973, 7.8216]"
+14:25:34.822,Service,info,BalloonPositionService: APRS position received for W4214536 - BLE available: false
+14:25:34.822,Service,info,BalloonPositionService: Balloon phase unknown → landed (aprsStale)
+14:25:34.822,Service,info,BalloonPositionService: APRS data received - transitioning to APRS mode
+14:25:34.822,Service,info,🔄 DataState: waitingForAPRS → aprsLanded | BLE:readyForCommands APRS:true Phase:landed | Device:connected Msg:0s Sonde:W4214536 Alt:2012m | Startup:✅ Held:6.9s Data:✅fresh AnyData:true
+14:25:34.822,Service,debug,APRSDataService: Start request refused - the app is in the background
+14:25:34.822,Service,info,"BalloonPositionService: Landed by silence (aprsStale) - keeping predicted landing, not locking to 2012m position"
+14:25:34.828,General,info,"🔍 ZOOM: Map camera changed by user - 244km (2.204°) at [47.1973, 7.8216]"
+14:25:34.829,Service,info,BalloonTrackService: State aprsLanded - not recording track point
+14:25:34.831,General,info,"🔍 ZOOM: Map camera changed by user - 244km (2.204°) at [47.1973, 7.8216]"
+14:25:34.833,Service,info,"BalloonTrackService: Context read for W4214536 - 0s since last fetch -> duration=30m, holding 9747 points"
+14:25:34.833,Service,info,APRSDataService: Fetching telemetry for W4214536 (duration: 30m)
+14:25:34.861,Service,info,APRSDataService: Added 0 points (total received: 0)
+14:25:34.861,Service,info,"BalloonTrackService: Track has 9747 points over 181min, using window size 1075 for 20-minute detection"
+14:25:34.863,Service,info,BalloonTrackService: Burst point found at index 7038 with altitude 36903m
+14:25:34.863,Service,info,BalloonTrackService: Searching for landing from index 8113 to 9747
+14:25:35.181,Service,debug,BalloonTrackService: Track-based landing detection complete - no stationary period found
+14:25:35.181,Service,info,BalloonPositionService: APRS position received for W4214536 - BLE available: false
+14:25:35.184,General,info,"🔍 ZOOM: Map camera changed by user - 244km (2.204°) at [47.1973, 7.8216]"
+14:25:35.186,Service,info,BalloonTrackService: State aprsLanded - not recording track point
+14:25:35.189,General,info,"🔍 ZOOM: Map camera changed by user - 244km (2.204°) at [47.1973, 7.8216]"
+14:25:35.191,General,info,"🔍 ZOOM: Map camera changed by user - 244km (2.204°) at [47.1973, 7.8216]"
+14:25:36.941,General,info,"🔍 ZOOM: Map camera changed by user - 244km (2.204°) at [47.1973, 7.8216]"
+14:25:37.963,General,info,"🔍 ZOOM: Map camera changed by user - 244km (2.204°) at [47.1973, 7.8216]"
+14:25:38.985,General,info,"🔍 ZOOM: Map camera changed by user - 244km (2.204°) at [47.1973, 7.8216]"
+14:25:40.033,General,info,"🔍 ZOOM: Map camera changed by user - 244km (2.204°) at [47.1973, 7.8216]"
+14:25:41.050,General,info,"🔍 ZOOM: Map camera changed by user - 244km (2.204°) at [47.1973, 7.8216]"
+14:25:42.040,General,info,"🔍 ZOOM: Map camera changed by user - 244km (2.204°) at [47.1973, 7.8216]"
+14:25:44.202,General,info,"🔍 ZOOM: Map camera changed by user - 244km (2.204°) at [47.1973, 7.8216]"
+14:25:44.923,General,info,"🔍 ZOOM: Map camera changed by user - 244km (2.204°) at [47.1973, 7.8216]"
+14:25:45.942,General,info,"🔍 ZOOM: Map camera changed by user - 244km (2.204°) at [47.1973, 7.8216]"
+14:25:46.993,General,info,"🔍 ZOOM: Map camera changed by user - 244km (2.204°) at [47.1973, 7.8216]"
+14:25:48.516,BLE,info,BLECommunicationService: Telemetry LOST: No valid telemetry for more than 30 seconds
+14:25:49.188,General,info,"🔍 ZOOM: Map camera changed by user - 244km (2.204°) at [47.1973, 7.8216]"
+14:25:51.315,General,info,"🔍 ZOOM: Map camera changed by user - 244km (2.204°) at [47.1973, 7.8216]"
+14:25:51.972,General,info,"🔍 ZOOM: Map camera changed by user - 244km (2.204°) at [47.1973, 7.8216]"
+14:25:52.994,General,info,"🔍 ZOOM: Map camera changed by user - 244km (2.204°) at [47.1973, 7.8216]"
+14:25:55.186,General,info,"🔍 ZOOM: Map camera changed by user - 244km (2.204°) at [47.1973, 7.8216]"
+14:25:57.374,General,info,"🔍 ZOOM: Map camera changed by user - 244km (2.204°) at [47.1973, 7.8216]"
+14:25:57.975,General,info,"🔍 ZOOM: Map camera changed by user - 244km (2.204°) at [47.1973, 7.8216]"
+14:25:59.985,General,info,"🔍 ZOOM: Map camera changed by user - 244km (2.204°) at [47.1973, 7.8216]"
+14:26:01.024,General,info,"🔍 ZOOM: Map camera changed by user - 244km (2.204°) at [47.1973, 7.8216]"
+14:26:03.163,General,info,"🔍 ZOOM: Map camera changed by user - 244km (2.204°) at [47.1973, 7.8216]"
+14:26:04.931,General,info,"🔍 ZOOM: Map camera changed by user - 244km (2.204°) at [47.1973, 7.8216]"
+14:26:05.951,General,info,"🔍 ZOOM: Map camera changed by user - 244km (2.204°) at [47.1973, 7.8216]"
+14:26:08.145,General,info,"🔍 ZOOM: Map camera changed by user - 244km (2.204°) at [47.1973, 7.8216]"
+14:26:10.302,General,info,"🔍 ZOOM: Map camera changed by user - 244km (2.204°) at [47.1973, 7.8216]"
+14:26:10.962,General,info,"🔍 ZOOM: Map camera changed by user - 244km (2.204°) at [47.1973, 7.8216]"
+14:26:13.150,General,info,"🔍 ZOOM: Map camera changed by user - 244km (2.204°) at [47.1973, 7.8216]"
+14:26:15.314,General,info,"🔍 ZOOM: Map camera changed by user - 244km (2.204°) at [47.1973, 7.8216]"
+14:26:17.473,General,info,"🔍 ZOOM: Map camera changed by user - 244km (2.204°) at [47.1973, 7.8216]"
+14:26:19.661,General,info,"🔍 ZOOM: Map camera changed by user - 244km (2.204°) at [47.1973, 7.8216]"
+14:26:21.825,General,info,"🔍 ZOOM: Map camera changed by user - 244km (2.204°) at [47.1973, 7.8216]"
+14:26:24.045,General,info,"🔍 ZOOM: Map camera changed by user - 244km (2.204°) at [47.1973, 7.8216]"
+14:26:25.004,General,info,"🔍 ZOOM: Map camera changed by user - 244km (2.204°) at [47.1973, 7.8216]"
+14:26:27.135,General,info,"🔍 ZOOM: Map camera changed by user - 244km (2.204°) at [47.1973, 7.8216]"
+14:26:29.325,General,info,"🔍 ZOOM: Map camera changed by user - 244km (2.204°) at [47.1973, 7.8216]"
+14:26:30.942,General,info,"🔍 ZOOM: Map camera changed by user - 244km (2.204°) at [47.1973, 7.8216]"
+14:26:31.967,General,info,"🔍 ZOOM: Map camera changed by user - 244km (2.204°) at [47.1973, 7.8216]"
+14:26:32.926,General,info,"🔍 ZOOM: Map camera changed by user - 244km (2.204°) at [47.1973, 7.8216]"
+14:26:35.083,General,info,"🔍 ZOOM: Map camera changed by user - 244km (2.204°) at [47.1973, 7.8216]"
+14:26:35.953,General,info,"🔍 ZOOM: Map camera changed by user - 244km (2.204°) at [47.1973, 7.8216]"
+14:26:36.974,General,info,"🔍 ZOOM: Map camera changed by user - 244km (2.204°) at [47.1973, 7.8216]"
+14:26:38.025,General,info,"🔍 ZOOM: Map camera changed by user - 244km (2.204°) at [47.1973, 7.8216]"
+14:26:40.250,Lifecycle,info,"BalloonHunterApp: App became active, refreshing services."
+14:26:40.250,Service,info,"CurrentLocationService: Continuous foreground tracking started (best accuracy, 2 m)"
+14:26:40.252,Lifecycle,info,BalloonHunterApp: === Foreground Resume Sequence Started ===
+14:26:40.252,Lifecycle,info,BalloonHunterApp: Step 1 - Requesting current user location
+14:26:40.252,Service,debug,CurrentLocationService: Requesting current location (on-demand)
+14:26:40.252,Lifecycle,info,BalloonHunterApp: Step 1b - Resuming APRS polling
+14:26:40.252,Service,info,APRSDataService: App in foreground - polling allowed again
+14:26:40.252,Service,info,APRSDataService: Starting APRS polling every 15s for station 06610
+14:26:40.252,Lifecycle,info,BalloonHunterApp: Step 2 - Triggering state machine evaluation
+14:26:40.253,Lifecycle,info,BalloonHunterApp: Step 3 - Reading balloon context for 'W4214536' (state aprsLanded) to fill the gap while away
+14:26:40.253,Lifecycle,info,"BalloonHunterApp: Step 4 - State unchanged (aprsLanded), refreshing service configuration"
+14:26:40.253,Service,info,BalloonPositionService: Refreshing current state (aprsLanded) service configuration
+14:26:40.253,Service,info,"BalloonPositionService: Landed by silence (aprsStale) - keeping predicted landing, not locking to 2012m position"
+14:26:40.253,Service,info,APRSDataService: GET https://api.v2.sondehub.org/sondes/telemetry?serial=W4214536&duration=30m (poll - latest only)
+14:26:40.253,Service,debug,BalloonTrackService: Context read for W4214536 already in flight - joining it
+14:26:40.253,Service,info,CurrentLocationService: Off-route detected (219m from route) - triggering recalculation
+14:26:40.253,Service,info,"RouteCalculationService: calculateRoute called to destination [47.0740, 8.1796]"
+14:26:40.253,Service,debug,"RouteCalculationService: Route still current - landing point steady, hunter moved 0m - keeping it"
+14:26:40.259,Service,info,"BalloonTrackService: Context read for W4214536 - 65s since last fetch -> duration=30m, holding 9747 points"
+14:26:40.259,Service,info,APRSDataService: Fetching telemetry for W4214536 (duration: 30m)
+14:26:40.271,Service,info,CurrentLocationService: Off-route detected (219m from route) - triggering recalculation
+14:26:40.271,Service,info,"RouteCalculationService: calculateRoute called to destination [47.0740, 8.1796]"
+14:26:40.271,Service,debug,"RouteCalculationService: Route still current - landing point steady, hunter moved 0m - keeping it"
+14:26:40.497,Service,info,APRSDataService: Added 0 points (total received: 0)
+14:26:40.497,Service,debug,APRSDataService: No recent frames for W4214536 in 30m window
+14:26:40.497,Service,info,"BalloonTrackService: Track has 9747 points over 181min, using window size 1075 for 20-minute detection"
+14:26:40.499,Service,info,BalloonTrackService: Burst point found at index 7038 with altitude 36903m
+14:26:40.500,Service,info,BalloonTrackService: Searching for landing from index 8113 to 9747
+14:26:40.822,Service,debug,BalloonTrackService: Track-based landing detection complete - no stationary period found
+14:26:40.822,Service,info,BalloonPositionService: APRS position received for W4214536 - BLE available: false
+14:26:40.822,Lifecycle,info,BalloonHunterApp: === Foreground Resume Complete - State Machine in Control ===
+14:26:40.827,Service,info,BalloonTrackService: State aprsLanded - not recording track point
+14:26:55.254,Service,info,APRSDataService: GET https://api.v2.sondehub.org/sondes/telemetry?serial=W4214536&duration=30m (poll - latest only)
+14:26:55.279,Service,debug,APRSDataService: No recent frames for W4214536 in 30m window
+14:27:10.254,Service,info,APRSDataService: GET https://api.v2.sondehub.org/sondes/telemetry?serial=W4214536&duration=30m (poll - latest only)
+14:27:10.280,Service,debug,APRSDataService: No recent frames for W4214536 in 30m window
+14:27:25.254,Service,info,APRSDataService: GET https://api.v2.sondehub.org/sondes/telemetry?serial=W4214536&duration=30m (poll - latest only)
+14:27:25.278,Service,debug,APRSDataService: No recent frames for W4214536 in 30m window

@@ -1,0 +1,34 @@
+
+=== C-3-BURST-AND-DESCENT  detected 13:48:32, phase from 13:48:18.642 ===
+campaign: C-3-BURST-AND-DESCENT, log from 13:48:18.642 (35 lines)
+  hunted: W4140048
+  MISSING the burst was detected
+  MISSING the vertical speed turned negative
+  MISSING the route follows the landing point
+  ok      not seen: a landing was declared during the descent
+  ok      not seen: a landing was declared while telemetry was arriving
+  ASK     Does the descent rate in the panel match the log, and does the predicted-descent line stay drawn?
+campaign: C-3-BURST-AND-DESCENT does NOT hold - see FAIL and MISSING above.
+
+=== C-3-BURST-AND-DESCENT  detected 13:51:52, phase from 13:42:21.938 ===
+campaign: C-3-BURST-AND-DESCENT, log from 13:42:21.938 (2427 lines)
+  hunted: W4140048
+  MISSING the detector turned the flight to descending
+  ok      the vertical speed turned negative
+          13:50:50.282,Service,debug,"APRSDataService: Telemetry data: W4140048: lat=46.90954, lon=7.78422, alt=16018m, v_v=4.9m/s, v_h=13.6m/s, freq=403.50/tx=
+  ok      the route follows the landing point
+          13:50:42.820,Service,info,"RouteCalculationService: Renewing route - landing point moved: yes, hunter moved 0m"
+  ok      not seen: a landing was declared during the descent
+  ok      not seen: a landing was declared while telemetry was arriving
+  ASK     Does the descent rate in the panel match the log, and does the predicted-descent line stay drawn?
+campaign: C-3-BURST-AND-DESCENT does NOT hold - see FAIL and MISSING above.
+
+=== C-5-LAST-APRS  detected 14:26:25, phase from 14:25:34.822 ===
+campaign: C-5-LAST-APRS, log from 14:25:34.822 (49 lines)
+  hunted: W4214536
+  MISSING silence was read as landed-but-unknown
+  MISSING the route leads to the estimate
+  ok      not seen: a touchdown was confirmed from silence alone
+  ASK     Is the landing marker on the prediction rather than the last-heard position, and has it stopped moving?
+  ASK     What altitude did the last APRS frame carry? It should still be in the air.
+campaign: C-5-LAST-APRS does NOT hold - see FAIL and MISSING above.

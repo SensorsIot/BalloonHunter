@@ -19,7 +19,7 @@ until=${3:-}
 
 if [ -z "$phase" ]; then
     echo "usage: campaign.sh <phase-id> [HH:MM:SS]"
-    ruby -ryaml -e 'YAML.load_file(ARGV[0])["campaign"].each{|c| puts "  #{c["id"]}\t#{c["phase"]}"}' "$here/test-plan.yaml"
+    ruby -ryaml -e 'YAML.load_file(ARGV[0])["tests"].select{|t| t["campaign_phase"]}.each{|c| puts "  #{c["id"]}\t#{c["campaign_phase"]}"}' "$here/test-plan.yaml"
     exit 1
 fi
 

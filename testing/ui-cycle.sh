@@ -39,7 +39,8 @@ if [ "$tier" = "device" ]; then
     echo "ui-cycle: iPhone $dev"
     # The device tier can afford the dwell the background workflow actually needs.
     TEST_RUNNER_BACKGROUND_SECONDS=${BACKGROUND_SECONDS:-70}
-    export TEST_RUNNER_BACKGROUND_SECONDS
+    TEST_RUNNER_SETTLE_SECONDS=${SETTLE_SECONDS:-40}
+    export TEST_RUNNER_BACKGROUND_SECONDS TEST_RUNNER_SETTLE_SECONDS
     # The install is left alone here. Wiping a phone's container would take the
     # hunter's settings with it, so the device tier does not claim a cold start.
     xcodebuild -project "$proj" -scheme BalloonHunter \
@@ -51,6 +52,11 @@ if [ "$tier" = "device" ]; then
     xcrun devicectl device copy from --device "$dev" \
         --domain-type appDataContainer --domain-identifier "$app_id" --user mobile \
         --source Documents/balloonhunter.log.csv --destination "$log" >/dev/null 2>&1
+
+    # XCUITest terminates the app under test when the run ends. On the phone that
+    # would leave the hunter looking at a home screen, so it is put back.
+    xcrun devicectl device process launch --device "$dev" "$app_id" >/dev/null 2>&1 \
+        && echo "ui-cycle: app relaunched on the phone"
 else
     udid=$(xcodebuild -project "$proj" -scheme BalloonHunter -showdestinations 2>/dev/null \
            | grep 'platform:iOS Simulator' | grep 'name:iPhone' | grep -v placeholder \
@@ -135,6 +141,16 @@ if [ -n "$bg_line" ] && [ -n "$resume_line" ] && [ "$resume_line" -gt "$bg_line"
     else
         echo "  ok: polling resumed ($after requests after the resume)"
     fi
+    # Coming back means all four are current again, not that a fetch was issued.
+    tail_after=$(sed -n "${resume_line},\$p" "$log")
+    printf '%s\n' "$tail_after" | grep -q "Context read for" \
+        || fail "no context read after resuming - the position and track were not refreshed"
+    printf '%s\n' "$tail_after" | grep -qE "Added [0-9]+ points|TRACK EXTENT" \
+        || fail "the track was not extended after resuming"
+    printf '%s\n' "$tail_after" | grep -qE "Prediction completed|landing point|Landing point" \
+        || fail "no landing estimate after resuming"
+    printf '%s\n' "$tail_after" | grep -qE "Route calculated successfully|Route hidden" \
+        || fail "the route was neither rebuilt nor deliberately hidden after resuming"
 fi
 
 # The retired persistence files must not come back.

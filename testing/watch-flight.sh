@@ -30,11 +30,24 @@ log=$(mktemp -t balloonhunter-watch)
 # phase; an earlier flight's descent sitting in the same file would fire every
 # trigger the moment the watcher starts.
 started=$(date +%H:%M:%S)
+# And only this flight. The app may be pointed at another sonde mid-run - a
+# sonde-change test does exactly that - and a serial that landed last week will
+# happily supply a "Landed by silence" line that has nothing to do with the
+# flight being followed.
+subject=${SUBJECT:-}
 pull() {
     xcrun devicectl device copy from --device "$dev" \
         --domain-type appDataContainer --domain-identifier "$app_id" --user mobile \
         --source Documents/balloonhunter.log.csv --destination "$full" >/dev/null 2>&1
     awk -F, -v t="$started" '$1>t' "$full" > "$log"
+    if [ -n "$subject" ]; then
+        # Keep only the stretches while the subject sonde is the hunted one.
+        awk -F, -v s="$subject" '
+            /Starting to track sonde/ { hunting = ($0 ~ ("\x27" s "\x27")) }
+            hunting { print }
+        ' "$log" > "$log.subject" 2>/dev/null
+        [ -s "$log.subject" ] && mv "$log.subject" "$log"
+    fi
 }
 
 record() {   # record <phase> <since>
@@ -46,7 +59,7 @@ record() {   # record <phase> <since>
 
 done_burst=0; done_loss=0; done_stale=0
 deadline=$(( $(date +%s) + minutes * 60 ))
-echo "watch: started $started, watching only lines after it, for up to $minutes min"
+echo "watch: started $started${subject:+, subject $subject}, watching only lines after it, for up to $minutes min"
 
 while [ "$(date +%s)" -lt "$deadline" ]; do
     pull

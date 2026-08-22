@@ -305,7 +305,7 @@ Each state defines explicit entry functionality and exit criteria:
   - **Reads balloon context** (BalloonTrackService.readBalloonContext()) — the delta-fetch keeps the track complete (only when the previous state was not `startup`)
   - Calls chain: Prediction with APRS balloon position → Landing point tracking → Routing
   - Map shows balloon track, landing point, landing point track, predicted path, route
-  - Frequency sync is **not** performed here. It runs once per startup and once per sonde change, and asks the user before changing anything — see *Startup → Step 3: Load the sonde context*.
+  - Frequency sync is not a state behaviour. It follows its own three triggers — a selection, a receiver connection, and a changed report for the hunted sonde — and always asks before changing anything. See *Sonde Selection → Keeping the receiver on the hunted frequency* (FR-F.1–F.3).
 - **Transitions**:
   1. `bleTelemetryState.hasTelemetry` → `liveBLEFlying`
   2. `balloonPhase == .landed` → `aprsLanded`
@@ -319,7 +319,7 @@ Each state defines explicit entry functionality and exit criteria:
   - Calls chain: Landing point tracking → Routing
   - Map shows balloon track, landing point, landing point track, and the predicted descent line (kept for the drive)
   - Data panel shows motion metrics as zero
-  - Frequency sync is **not** performed here. It runs once per startup and once per sonde change, and asks the user before changing anything — see *Startup → Step 3: Load the sonde context*.
+  - Frequency sync is not a state behaviour. It follows its own three triggers — a selection, a receiver connection, and a changed report for the hunted sonde — and always asks before changing anything. See *Sonde Selection → Keeping the receiver on the hunted frequency* (FR-F.1–F.3).
 - **Transitions**:
   1. `bleTelemetryState.hasTelemetry` → `liveBLEFlying` or `liveBLELanded` (based on `balloonPhase`)
   2. `balloonPhase != .landed` → `aprsFlying`
@@ -1351,7 +1351,7 @@ Every selection path funnels through one method, so tracking setup exists in exa
 2. Set the sonde name in the position and track services.
 3. Tell the BLE service which sonde is hunted, so telemetry for any other serial is dropped before it enters the app.
 4. Set the APRS override, then load the sonde context (`readBalloonContext`) — the canonical loader, which brings the BLE hunt tail, the SondeHub track, the latest position and the recovery status — followed by the single prediction. See *Reading a sonde: the four steps*.
-5. Check frequency sync, unless the sonde came from BLE and the receiver is already tuned to it.
+5. Check frequency sync. A sonde adopted from BLE is one the receiver is already tuned to, so the rule finds nothing to ask; no caller has to decide that. See *Keeping the receiver on the hunted frequency*.
 6. Trigger state evaluation.
 
 **It must run for the sonde it is given, every time it is asked.** There is no

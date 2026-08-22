@@ -51,20 +51,12 @@ esac
 
 echo "situation: $situation   (state=${last_state:-none}, BLE frames=$ble_seen, receiver connected=$([ "$ble_link" -gt 0 ] && echo yes || echo "not in this window"))"
 
-# What that situation contains, from the satisfies: edges in the plan.
-allowed=$(ruby -ryaml -e '
-  plan = YAML.load_file(ARGV[0]); here = ARGV[1]
-  covered = [here] + (plan["situations"][here]["satisfies"] || [])
-  (plan["workflows"] + plan["atomic"] + (plan["campaign"] || [])).each do |t|
-    next unless t["situation"]
-    verdict = if t["blocked_by"] then "blocked - #{t["blocked_by"][0, 46]}"
-              elsif covered.include?(t["situation"]) then "RUNNABLE"
-              else "blocked - needs #{t["situation"]}" end
-    puts "#{t["id"]}\t#{t["tier"]}\t#{verdict}"
-  end' "$here/test-plan.yaml" "$situation")
+# Which capabilities the observed situation supplies, and therefore which tests
+# can run. Blocked is computed there, never typed into the plan.
+allowed=$(ruby "$here/lib/runnable.rb" "$here/test-plan.yaml" "$situation")
 
 printf '%s\n' "$allowed" | while IFS="$(printf '\t')" read -r id tier verdict; do
-    printf '  %-16s %-7s %s\n' "$id" "$tier" "$verdict"
+    printf '  %-22s %-7s %s\n' "$id" "$tier" "$verdict"
 done
 
 [ "${1:-}" = "--run" ] || exit 0

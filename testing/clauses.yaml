@@ -1,0 +1,1043 @@
+# Clause inventory of the FSD, per fsd-engineer test-design.md SS1.
+# One clause per decision point or promise; narrative prose is skipped.
+# Tests cite these ids in their verifies: list. Never renumber one.
+
+clauses:
+  - id: FSD-BLE-scan-poweredon
+    text: "Scanning runs only when Bluetooth is powered on, and starts when the radio reports poweredOn"
+    source_section: "BLE Communication Service"
+    tier: device
+    kind: state-transition
+    testability: testable
+  - id: FSD-BLE-scan-name
+    text: "Only peripherals whose name contains 'MySondy' and advertise the UART service are accepted"
+    source_section: "BLE Communication Service"
+    tier: device
+    kind: positive
+    testability: testable
+  - id: FSD-BLE-scan-retry
+    text: "When not connected, scanning retries continuously (10 s after a 5 s timeout)"
+    source_section: "BLE Communication Service"
+    tier: device
+    kind: positive
+    testability: testable
+  - id: FSD-BLE-scan-cancel
+    text: "A cancelled scan-timeout task must not run its timeout handler"
+    source_section: "BLE Communication Service"
+    tier: unit
+    kind: negative
+    testability: testable
+  - id: FSD-BLE-reconnect
+    text: "On disconnect the service restarts scanning to reconnect automatically"
+    source_section: "BLE Communication Service"
+    tier: device
+    kind: state-transition
+    testability: testable
+  - id: FSD-BLE-first-packet
+    text: "The first valid packet flips to readyForCommands and schedules getParameters() 0.5 s later"
+    source_section: "BLE Communication Service"
+    tier: device
+    kind: state-transition
+    testability: testable
+  - id: FSD-BLE-type1-dataready
+    text: "A Type 1 packet moves readyForCommands to dataReady"
+    source_section: "BLE Communication Service"
+    tier: device
+    kind: state-transition
+    testability: testable
+  - id: FSD-BLE-stale-30s
+    text: "No Type 1 packet for 30 s downgrades dataReady to readyForCommands, checked every 3 s"
+    source_section: "BLE Communication Service"
+    tier: device
+    kind: state-transition
+    testability: testable
+  - id: FSD-BLE-hasTelemetry
+    text: "hasTelemetry is true only in dataReady; Type 0/2/3 never qualify"
+    source_section: "BLE Communication Service"
+    tier: unit
+    kind: boundary
+    testability: testable
+  - id: FSD-BLE-zero-coords
+    text: "A Type 1 sample at lat 0 / lon 0 is discarded outright"
+    source_section: "BLE Communication Service"
+    tier: unit
+    kind: negative
+    testability: testable
+  - id: FSD-BLE-range-check
+    text: "Out-of-range fields log a warning without discarding the sample, per the stated ranges"
+    source_section: "BLE Communication Service"
+    tier: unit
+    kind: boundary
+    testability: testable
+  - id: FSD-BLE-rssi-sign
+    text: "RSSI arrives positive from BLE and is displayed negative"
+    source_section: "BLE Communication Service"
+    tier: unit
+    kind: positive
+    testability: testable
+  - id: FSD-BLE-cmd-freq
+    text: "setFrequency writes o{f=/tipo=}o, rounded to 0.01 MHz, and mirrors into deviceSettings"
+    source_section: "BLE Communication Service"
+    tier: device
+    kind: positive
+    testability: testable
+  - id: FSD-BLE-cmd-mute
+    text: "setMute toggles the buzzer via o{mute=0|1}o and keeps the cached flag aligned"
+    source_section: "BLE Communication Service"
+    tier: device
+    kind: positive
+    testability: testable
+  - id: FSD-BLE-cmd-noTX
+    text: "A command attempted with no TX characteristic logs and mutates nothing"
+    source_section: "BLE Communication Service"
+    tier: unit
+    kind: error
+    testability: testable
+  - id: FSD-BLE-log-cap
+    text: "The diagnostic log is capped at 512 KB and drops the oldest half when exceeded"
+    source_section: "BLE Communication Service"
+    tier: unit
+    kind: boundary
+    testability: testable
+  - id: FSD-BLE-log-type0-rate
+    text: "The Type 0 line is logged only while dataReady, at most every 5 s"
+    source_section: "BLE Communication Service"
+    tier: device
+    kind: positive
+    testability: testable
+  - id: FSD-APRS-site-endpoint
+    text: "The site endpoint /sondes/site/<station> supplies serials and latest telemetry"
+    source_section: "APRS Service"
+    tier: device
+    kind: positive
+    testability: testable
+  - id: FSD-APRS-ground-filter
+    text: "Sondes within 1 km of the uploader position are filtered out as ground test sondes"
+    source_section: "APRS Service"
+    tier: unit
+    kind: negative
+    testability: testable
+  - id: FSD-APRS-cadence
+    text: "Poll cadence follows telemetry age: <2 min = 15 s, 2-30 min = 5 min, >30 min = 1 h"
+    source_section: "APRS Service"
+    tier: unit
+    kind: boundary
+    testability: testable
+  - id: FSD-APRS-suspend
+    text: "Polling suspends when asked"
+    source_section: "APRS Service"
+    tier: device
+    kind: state-transition
+    testability: testable
+  - id: FSD-APRS-no-background-poll
+    text: "Nothing is polled while the app is in the background; polling resumes on return"
+    source_section: "APRS Service"
+    tier: device
+    kind: negative
+    testability: testable
+  - id: FSD-CTX-canonical
+    text: "readBalloonContext is the only loader of sonde data; nothing else loads it"
+    source_section: "APRS delta-fetch"
+    tier: device
+    kind: positive
+    testability: testable
+  - id: FSD-CTX-window-from-fetch
+    text: "The fetch window is sized from the last successful fetch for that serial plus 60 s, never from the newest frame"
+    source_section: "APRS delta-fetch"
+    tier: unit
+    kind: boundary
+    testability: testable
+  - id: FSD-CTX-never-fetched-3d
+    text: "Never fetched for this serial means the whole flight (3d)"
+    source_section: "APRS delta-fetch"
+    tier: unit
+    kind: boundary
+    testability: testable
+  - id: FSD-CTX-failed-not-asked
+    text: "A failed fetch does not count as asked"
+    source_section: "APRS delta-fetch"
+    tier: unit
+    kind: negative
+    testability: testable
+  - id: FSD-CTX-merge-position
+    text: "Points merge by physical position (~1 m), not timestamp, so a relay-skewed duplicate is dropped"
+    source_section: "APRS delta-fetch"
+    tier: unit
+    kind: positive
+    testability: testable
+  - id: FSD-CTX-empty-ok
+    text: "An empty answer is a normal outcome and leaves the BLE-only hunt intact"
+    source_section: "APRS delta-fetch"
+    tier: unit
+    kind: negative
+    testability: testable
+  - id: FSD-CTX-single-flight
+    text: "A second call for a serial already being read awaits the one in flight"
+    source_section: "APRS delta-fetch"
+    tier: unit
+    kind: positive
+    testability: testable
+  - id: FSD-CTX-never-awaited
+    text: "The resume sequence starts a context read and does not await it"
+    source_section: "APRS delta-fetch"
+    tier: device
+    kind: positive
+    testability: testable
+  - id: FSD-CTX-stale-guard
+    text: "A fetch that returns after a sonde change is discarded rather than written into the new track"
+    source_section: "APRS delta-fetch"
+    tier: unit
+    kind: negative
+    testability: testable
+  - id: FSD-CTX-no-archive
+    text: "The whole-archive endpoint /sonde/<serial> is never requested"
+    source_section: "APRS delta-fetch"
+    tier: device
+    kind: negative
+    testability: testable
+  - id: FSD-TAIL-content
+    text: "The retained tail is the BLE points beyond the newest APRS point; with no APRS points it degrades to the whole BLE track"
+    source_section: "The BLE hunt tail"
+    tier: unit
+    kind: positive
+    testability: testable
+  - id: FSD-TAIL-serial-24h
+    text: "The tail is keyed by serial and discarded when older than 24 h"
+    source_section: "The BLE hunt tail"
+    tier: unit
+    kind: boundary
+    testability: testable
+  - id: FSD-TAIL-reader
+    text: "Only the context loader reads the tail"
+    source_section: "The BLE hunt tail"
+    tier: unit
+    kind: positive
+    testability: testable
+  - id: FSD-PERSIST-background-only
+    text: "The tail is written on entering the background, never on .inactive"
+    source_section: "Persistence Service"
+    tier: device
+    kind: state-transition
+    testability: testable
+  - id: FSD-PERSIST-settings-immediate
+    text: "User settings are saved immediately on change"
+    source_section: "Persistence Service"
+    tier: device
+    kind: positive
+    testability: testable
+  - id: FSD-PERSIST-files
+    text: "Only userSettings.json and the hunt tail exist on disk; the full track is never persisted"
+    source_section: "Persistence Service"
+    tier: device
+    kind: negative
+    testability: testable
+  - id: FSD-PERSIST-no-identity
+    text: "The hunted serial is never restored from disk as an identity"
+    source_section: "Persistence Service"
+    tier: device
+    kind: negative
+    testability: testable
+  - id: FSD-LOC-foreground-only
+    text: "Continuous tracking runs in the foreground only and stops on background"
+    source_section: "Current Location Service"
+    tier: device
+    kind: state-transition
+    testability: testable
+  - id: FSD-LOC-when-in-use
+    text: "Only When In Use authorization is requested; no background location mode"
+    source_section: "Current Location Service"
+    tier: device
+    kind: negative
+    testability: testable
+  - id: FSD-LOC-precision
+    text: "The precision manager uses best accuracy with a 2 m filter, throttled to >= 1 s apart"
+    source_section: "Current Location Service"
+    tier: device
+    kind: positive
+    testability: testable
+  - id: FSD-LOC-distance
+    text: "distanceToBalloon and isWithin200mOfBalloon are recomputed on every location and balloon update"
+    source_section: "Current Location Service"
+    tier: unit
+    kind: boundary
+    testability: testable
+  - id: FSD-LOC-heading-flag
+    text: "Heading mode toggles map rotation only and neither starts nor stops location"
+    source_section: "Current Location Service"
+    tier: device
+    kind: positive
+    testability: testable
+  - id: FSD-SM-startup-to-liveBLELanded
+    text: "startup -> liveBLELanded when hasTelemetry and phase landed"
+    source_section: "State Machine Implementation"
+    tier: device
+    kind: state-transition
+    testability: testable
+  - id: FSD-SM-startup-to-liveBLEFlying
+    text: "startup -> liveBLEFlying when hasTelemetry and phase not landed"
+    source_section: "State Machine Implementation"
+    tier: device
+    kind: state-transition
+    testability: testable
+  - id: FSD-SM-startup-to-aprsLanded
+    text: "startup -> aprsLanded when aprsDataAvailable and phase landed"
+    source_section: "State Machine Implementation"
+    tier: device
+    kind: state-transition
+    testability: testable
+  - id: FSD-SM-startup-to-aprsFlying
+    text: "startup -> aprsFlying when aprsDataAvailable and phase not landed"
+    source_section: "State Machine Implementation"
+    tier: device
+    kind: state-transition
+    testability: testable
+  - id: FSD-SM-startup-to-noTelemetry
+    text: "startup -> noTelemetry when neither source"
+    source_section: "State Machine Implementation"
+    tier: device
+    kind: state-transition
+    testability: testable
+  - id: FSD-SM-liveBLEFlying-to-liveBLELanded
+    text: "liveBLEFlying -> liveBLELanded when phase becomes landed"
+    source_section: "State Machine Implementation"
+    tier: device
+    kind: state-transition
+    testability: testable
+  - id: FSD-SM-liveBLEFlying-to-waitingForAPRS
+    text: "liveBLEFlying -> waitingForAPRS when BLE telemetry lost"
+    source_section: "State Machine Implementation"
+    tier: device
+    kind: state-transition
+    testability: testable
+  - id: FSD-SM-liveBLELanded-to-liveBLEFlying
+    text: "liveBLELanded -> liveBLEFlying when phase leaves landed"
+    source_section: "State Machine Implementation"
+    tier: device
+    kind: state-transition
+    testability: testable
+  - id: FSD-SM-liveBLELanded-to-waitingForAPRS
+    text: "liveBLELanded -> waitingForAPRS when BLE telemetry lost"
+    source_section: "State Machine Implementation"
+    tier: device
+    kind: state-transition
+    testability: testable
+  - id: FSD-SM-waitingForAPRS-to-liveBLEFlying
+    text: "waitingForAPRS -> liveBLEFlying when BLE telemetry returns"
+    source_section: "State Machine Implementation"
+    tier: device
+    kind: state-transition
+    testability: testable
+  - id: FSD-SM-waitingForAPRS-to-aprsFlying
+    text: "waitingForAPRS -> aprsFlying when APRS answers, flying"
+    source_section: "State Machine Implementation"
+    tier: device
+    kind: state-transition
+    testability: testable
+  - id: FSD-SM-waitingForAPRS-to-aprsLanded
+    text: "waitingForAPRS -> aprsLanded when APRS answers, landed"
+    source_section: "State Machine Implementation"
+    tier: device
+    kind: state-transition
+    testability: testable
+  - id: FSD-SM-waitingForAPRS-to-noTelemetry
+    text: "waitingForAPRS -> noTelemetry when 10 s APRS timeout"
+    source_section: "State Machine Implementation"
+    tier: device
+    kind: state-transition
+    testability: testable
+  - id: FSD-SM-aprsFlying-to-liveBLEFlying
+    text: "aprsFlying -> liveBLEFlying when BLE telemetry arrives"
+    source_section: "State Machine Implementation"
+    tier: device
+    kind: state-transition
+    testability: testable
+  - id: FSD-SM-aprsFlying-to-aprsLanded
+    text: "aprsFlying -> aprsLanded when phase becomes landed"
+    source_section: "State Machine Implementation"
+    tier: device
+    kind: state-transition
+    testability: testable
+  - id: FSD-SM-aprsFlying-to-noTelemetry
+    text: "aprsFlying -> noTelemetry when 10 s APRS timeout"
+    source_section: "State Machine Implementation"
+    tier: device
+    kind: state-transition
+    testability: testable
+  - id: FSD-SM-aprsLanded-to-liveBLELanded
+    text: "aprsLanded -> liveBLELanded when BLE telemetry arrives, landed"
+    source_section: "State Machine Implementation"
+    tier: device
+    kind: state-transition
+    testability: testable
+  - id: FSD-SM-aprsLanded-to-aprsFlying
+    text: "aprsLanded -> aprsFlying when phase leaves landed"
+    source_section: "State Machine Implementation"
+    tier: device
+    kind: state-transition
+    testability: testable
+  - id: FSD-SM-aprsLanded-to-noTelemetry
+    text: "aprsLanded -> noTelemetry when 10 s APRS timeout"
+    source_section: "State Machine Implementation"
+    tier: device
+    kind: state-transition
+    testability: testable
+  - id: FSD-SM-noTelemetry-to-liveBLEFlying
+    text: "noTelemetry -> liveBLEFlying when BLE telemetry, flying"
+    source_section: "State Machine Implementation"
+    tier: device
+    kind: state-transition
+    testability: testable
+  - id: FSD-SM-noTelemetry-to-liveBLELanded
+    text: "noTelemetry -> liveBLELanded when BLE telemetry, landed"
+    source_section: "State Machine Implementation"
+    tier: device
+    kind: state-transition
+    testability: testable
+  - id: FSD-SM-noTelemetry-to-aprsFlying
+    text: "noTelemetry -> aprsFlying when APRS available, flying"
+    source_section: "State Machine Implementation"
+    tier: device
+    kind: state-transition
+    testability: testable
+  - id: FSD-SM-noTelemetry-to-aprsLanded
+    text: "noTelemetry -> aprsLanded when APRS available, landed"
+    source_section: "State Machine Implementation"
+    tier: device
+    kind: state-transition
+    testability: testable
+  - id: FSD-SM-ble-suppresses-aprs
+    text: "APRS polling is disabled in the liveBLE states"
+    source_section: "State Machine Implementation"
+    tier: device
+    kind: positive
+    testability: testable
+  - id: FSD-SM-aprs-context
+    text: "Entering an APRS state reads the balloon context, but not when the previous state was startup"
+    source_section: "State Machine Implementation"
+    tier: device
+    kind: positive
+    testability: testable
+  - id: FSD-SM-no-debounce
+    text: "Source transitions occur immediately; the 30 s BLE staleness is the only delay"
+    source_section: "Key Design Principles"
+    tier: device
+    kind: boundary
+    testability: testable
+  - id: FSD-SM-noTelemetry-6h
+    text: "In noTelemetry, data younger than 6 h is displayed and older data is not drawn, with the staleness stated"
+    source_section: "State Machine Implementation"
+    tier: device
+    kind: boundary
+    testability: testable
+  - id: FSD-SM-landed-panel-zero
+    text: "In the landed states the data panel shows motion metrics as zero"
+    source_section: "State Machine Implementation"
+    tier: device
+    kind: positive
+    testability: testable
+  - id: FSD-PHASE-priority
+    text: "Phase detection follows the stated priority: track landing, APRS age > 120 s, vector analysis, then vertical speed"
+    source_section: "Balloon Phase Detection"
+    tier: unit
+    kind: boundary
+    testability: testable
+  - id: FSD-PHASE-vector
+    text: "Vector analysis declares landed at net speed < 3 km/h and altitude < 3000 m"
+    source_section: "Balloon Phase Detection"
+    tier: unit
+    kind: boundary
+    testability: testable
+  - id: FSD-PHASE-ascend-descend
+    text: "Vertical speed > 0 is ascending; < 0 with altitude >= 10 km is descendingAbove10k, below that descendingBelow10k; 0 is unknown"
+    source_section: "Balloon Phase Detection"
+    tier: unit
+    kind: boundary
+    testability: testable
+  - id: FSD-LAND-aprsStale-keeps-prediction
+    text: "A landing declared from APRS silence keeps the predicted landing point as marker and destination"
+    source_section: "How a Landing Is Determined"
+    tier: device
+    kind: positive
+    testability: testable
+  - id: FSD-LAND-touchdown-observed
+    text: "A touchdown is confirmed only from a fixed near-ground observation, and then locks the marker to it"
+    source_section: "How a Landing Is Determined"
+    tier: device
+    kind: positive
+    testability: testable
+  - id: FSD-LAND-blackout
+    text: "A post-burst signal gap over 20 minutes truncates the track at the gap and notifies the user"
+    source_section: "Track-based landing detection"
+    tier: unit
+    kind: positive
+    testability: testable
+  - id: FSD-LAND-stationary
+    text: "A 20-minute stationary window after burst (lat/lon < 0.0001 deg, altitude < 0.3 m) truncates the track there"
+    source_section: "Track-based landing detection"
+    tier: unit
+    kind: boundary
+    testability: testable
+  - id: FSD-LAND-notify
+    text: "Any truncation sends a local notification saying why points were removed"
+    source_section: "Track-based landing detection"
+    tier: device
+    kind: positive
+    testability: testable
+  - id: FSD-LAND-detect-when
+    text: "Track-based detection runs only when the track was already loaded and is over 20 min old, or when forced"
+    source_section: "Track-based landing detection"
+    tier: unit
+    kind: positive
+    testability: testable
+  - id: FSD-TRACK-record-aprsLanded
+    text: "In aprsLanded no further track points are recorded"
+    source_section: "Track recording scenarios"
+    tier: device
+    kind: negative
+    testability: testable
+  - id: FSD-TRACK-record-liveBLELanded
+    text: "In liveBLELanded track recording continues so the hunter sees live updates on approach"
+    source_section: "Track recording scenarios"
+    tier: device
+    kind: positive
+    testability: testable
+  - id: FSD-TRACK-1hz
+    text: "The live BLE stream keeps one point per second"
+    source_section: "Balloon Track Service"
+    tier: device
+    kind: positive
+    testability: testable
+  - id: FSD-TRACK-simplify-draw-only
+    text: "Drawing uses the simplified track; no calculation ever sees the thinned version"
+    source_section: "Balloon Track Service"
+    tier: unit
+    kind: positive
+    testability: testable
+  - id: FSD-TRACK-smoothing
+    text: "Hampel window 10 k=3 rejects outliers, feeding an EMA with tau 10 s"
+    source_section: "Balloon Track Service"
+    tier: unit
+    kind: positive
+    testability: testable
+  - id: FSD-TRACK-descent-rate
+    text: "Adjusted descent rate is the median over 60 s, rolling-averaged over 20 entries, zeroed when landed"
+    source_section: "Balloon Track Service"
+    tier: unit
+    kind: positive
+    testability: testable
+  - id: FSD-TRACK-stale-3s
+    text: "isTelemetryStale flips true when the latest telemetry is over 3 s old"
+    source_section: "Balloon Track Service"
+    tier: unit
+    kind: boundary
+    testability: testable
+  - id: FSD-TRACK-clear-on-new-sonde
+    text: "A different sonde clears the previous track and counters"
+    source_section: "Balloon Track Service"
+    tier: device
+    kind: state-transition
+    testability: testable
+  - id: FSD-LP-dedup-25m
+    text: "New landing predictions within 25 m of the last are dropped as jitter"
+    source_section: "Landing Point Tracking Service"
+    tier: unit
+    kind: boundary
+    testability: testable
+  - id: FSD-LP-clear-on-sonde-change
+    text: "A sonde change clears the landing history"
+    source_section: "Landing Point Tracking Service"
+    tier: device
+    kind: state-transition
+    testability: testable
+  - id: FSD-LP-trail-after-burst
+    text: "The landing-prediction trail starts at burst, not before"
+    source_section: "Persistence / landing predictions"
+    tier: unit
+    kind: boundary
+    testability: testable
+  - id: FSD-PRED-policy
+    text: "PredictionPolicy decides when prediction runs, on whether the position is known rather than on landedness"
+    source_section: "When prediction runs"
+    tier: unit
+    kind: boundary
+    testability: testable
+  - id: FSD-PRED-no-telemetry
+    text: "Predictions are skipped entirely when no telemetry is available"
+    source_section: "Prediction Service"
+    tier: unit
+    kind: negative
+    testability: testable
+  - id: FSD-PRED-cache-key
+    text: "The cache key is balloon id, coordinate to 2 decimals, altitude and a 5-minute bucket"
+    source_section: "Prediction Service"
+    tier: unit
+    kind: positive
+    testability: testable
+  - id: FSD-PRED-burst-below-10k
+    text: "Below 10 km the burst altitude used is current altitude + 10 m, above it the user setting"
+    source_section: "Prediction Service"
+    tier: unit
+    kind: boundary
+    testability: testable
+  - id: FSD-PRED-cancel-on-change
+    text: "A running prediction is cancelled on a new prediction or a sonde change"
+    source_section: "Prediction Service"
+    tier: unit
+    kind: negative
+    testability: testable
+  - id: FSD-PRED-timer-60s
+    text: "Scheduled predictions run on a 60 s timer"
+    source_section: "Prediction Service"
+    tier: device
+    kind: positive
+    testability: testable
+  - id: FSD-PRED-manual-tap
+    text: "Tapping the balloon annotation triggers a manual prediction"
+    source_section: "Prediction Service"
+    tier: device
+    kind: positive
+    testability: testable
+  - id: FSD-PRED-server-default
+    text: "The prediction server is selectable in Settings and defaults to the Swiss predictor (FR-P.1)"
+    source_section: "Prediction Service"
+    tier: device
+    kind: positive
+    testability: testable
+  - id: FSD-PRED-fallback
+    text: "A failing server falls back to SondeHub and uses that answer (FR-P.2)"
+    source_section: "Prediction Service"
+    tier: device
+    kind: error
+    testability: testable
+  - id: FSD-PRED-log-server
+    text: "Every prediction logs which server answered and every fallback is logged as such (FR-P.3)"
+    source_section: "Prediction Service"
+    tier: device
+    kind: positive
+    testability: testable
+  - id: FSD-PRED-bad-url
+    text: "An empty or unparseable URL is treated as server unavailable, never a crash or a silent skip (FR-P.4)"
+    source_section: "Prediction Service"
+    tier: unit
+    kind: error
+    testability: testable
+  - id: FSD-PRED-https-only
+    text: "Only https URLs are accepted, refused at selection time (FR-P.5)"
+    source_section: "Prediction Service"
+    tier: unit
+    kind: negative
+    testability: testable
+  - id: FSD-ROUTE-close-range
+    text: "No route is built or drawn within 200 m of the balloon"
+    source_section: "Smart Route Recalculation"
+    tier: unit
+    kind: boundary
+    testability: testable
+  - id: FSD-ROUTE-renew-landing
+    text: "The route is renewed when the landing point moves"
+    source_section: "Smart Route Recalculation"
+    tier: unit
+    kind: positive
+    testability: testable
+  - id: FSD-ROUTE-renew-hunter
+    text: "Hunter movement renews the route only past 100 m and no more often than every 60 s"
+    source_section: "Smart Route Recalculation"
+    tier: unit
+    kind: boundary
+    testability: testable
+  - id: FSD-ROUTE-transport-mode
+    text: "Changing transport mode recalculates the route"
+    source_section: "Buttons Row"
+    tier: device
+    kind: state-transition
+    testability: testable
+  - id: FSD-ROUTE-bike-eta
+    text: "Bike mode multiplies the ETA by 0.7"
+    source_section: "Route Calculation Service"
+    tier: unit
+    kind: positive
+    testability: testable
+  - id: FSD-ROUTE-fallback
+    text: "When directions are unavailable the service tries offsets, then a radial search, then a straight-line heuristic"
+    source_section: "Route Calculation Service"
+    tier: unit
+    kind: error
+    testability: testable
+  - id: FSD-ROUTE-cache
+    text: "Routes are cached 5 minutes, LRU capacity 100"
+    source_section: "Route Calculation Service"
+    tier: unit
+    kind: positive
+    testability: testable
+  - id: FSD-ROUTE-cancel
+    text: "A running route calculation is cancelled on a new one or a sonde change"
+    source_section: "Route Calculation Service"
+    tier: unit
+    kind: negative
+    testability: testable
+  - id: FSD-NAV-applemaps
+    text: "The Apple Maps button opens directions to the landing point in the selected transport mode"
+    source_section: "Buttons Row"
+    tier: device
+    kind: positive
+    testability: testable
+  - id: FSD-NAV-button-visibility
+    text: "The Apple Maps button is visible only when a landing point exists"
+    source_section: "Buttons Row"
+    tier: device
+    kind: boundary
+    testability: testable
+  - id: FSD-SEL-single-entry
+    text: "Every selection path funnels through startTrackingSonde"
+    source_section: "Starting to track"
+    tier: device
+    kind: positive
+    testability: testable
+  - id: FSD-SEL-no-shortcut
+    text: "There is no already-tracking shortcut; the setup runs for the sonde it is given, every time"
+    source_section: "Starting to track"
+    tier: device
+    kind: negative
+    testability: testable
+  - id: FSD-SEL-clear-only-on-change
+    text: "Previous sonde data is cleared only when the previous sonde is a different one"
+    source_section: "Starting to track"
+    tier: device
+    kind: boundary
+    testability: testable
+  - id: FSD-SEL-picker-refresh
+    text: "Opening the picker during a hunt refreshes the station list from SondeHub behind a progress indicator, keeping the cached list on failure"
+    source_section: "Choosing during a hunt"
+    tier: device
+    kind: positive
+    testability: testable
+  - id: FSD-SEL-no-empty-picker
+    text: "An empty picker is never presented"
+    source_section: "Sonde Selection"
+    tier: device
+    kind: negative
+    testability: testable
+  - id: FSD-SEL-auto-airborne
+    text: "A demonstrably airborne sonde is auto-selected without the picker"
+    source_section: "Startup"
+    tier: device
+    kind: positive
+    testability: testable
+  - id: FSD-SEL-foreign-reject
+    text: "Telemetry whose serial differs from the hunted sonde is discarded before publication"
+    source_section: "Rejecting foreign telemetry"
+    tier: unit
+    kind: negative
+    testability: testable
+  - id: FSD-SEL-retune-5
+    text: "A retune is declared only after 5 consecutive foreign packets with none of the hunted sonde between them"
+    source_section: "Rejecting foreign telemetry"
+    tier: unit
+    kind: boundary
+    testability: testable
+  - id: FSD-SEL-test-sonde
+    text: "A BLE serial SondeHub holds no telemetry for must not take over the hunt; unreachable is not evidence"
+    source_section: "Test sondes must not take over the hunt"
+    tier: unit
+    kind: negative
+    testability: testable
+  - id: FSD-FREQ-on-connect
+    text: "A receiver connecting with a mismatched frequency or probe type raises the sync proposal (FR-F.1)"
+    source_section: "Keeping the receiver on the hunted frequency"
+    tier: device
+    kind: state-transition
+    testability: testable
+  - id: FSD-FREQ-on-change
+    text: "A changed reported frequency for the hunted sonde raises the proposal for the new value (FR-F.2)"
+    source_section: "Keeping the receiver on the hunted frequency"
+    tier: device
+    kind: state-transition
+    testability: testable
+  - id: FSD-FREQ-answered-silent
+    text: "An answered proposal is not raised again until a trigger recurs (FR-F.3)"
+    source_section: "Keeping the receiver on the hunted frequency"
+    tier: unit
+    kind: negative
+    testability: testable
+  - id: FSD-FREQ-no-silent-retune
+    text: "The receiver is never retuned without the hunter accepting"
+    source_section: "Keeping the receiver on the hunted frequency"
+    tier: device
+    kind: negative
+    testability: testable
+  - id: FSD-SERIAL-popup
+    text: "A SondeHub serial differing from the BLE name raises a confirmation alert, required before APRS polling continues, and is not persisted across launches"
+    source_section: "SondeHub Serial Confirmation Popup"
+    tier: device
+    kind: positive
+    testability: testable
+  - id: FSD-HUNT-recovery-no-receiver
+    text: "Selection, context, landing point and route complete with no receiver connected (FR-H.1)"
+    source_section: "Hunt Types"
+    tier: device
+    kind: negative
+    testability: testable
+  - id: FSD-HUNT-late-receiver
+    text: "A receiver switched on mid-hunt is adopted without a second selection, without clearing, and without the test-sonde refusal (FR-H.2)"
+    source_section: "Hunt Types"
+    tier: device
+    kind: positive
+    testability: testable
+  - id: FSD-HUNT-ble-loss
+    text: "Losing the BLE link neither ends nor redefines the hunt (FR-H.3)"
+    source_section: "Hunt Types"
+    tier: device
+    kind: state-transition
+    testability: testable
+  - id: FSD-ID-serial
+    text: "The serial identifies the hunt: a different serial clears everything, the same serial keeps everything at any age"
+    source_section: "Hunt Identity"
+    tier: device
+    kind: boundary
+    testability: testable
+  - id: FSD-ID-6h
+    text: "With no data arriving, data younger than 6 h is shown and older data is not"
+    source_section: "Hunt Identity"
+    tier: device
+    kind: boundary
+    testability: testable
+  - id: FSD-P2-depart
+    text: "Departure time is the predicted landing time minus route travel time, shown as time remaining and negative in red once unmeetable"
+    source_section: "Phase 2 - Stationary"
+    tier: unit
+    kind: boundary
+    testability: testable
+  - id: FSD-P4-handoff
+    text: "Close range hands over from routing to distance and bearing guidance"
+    source_section: "Phase 4 - On Foot"
+    tier: unit
+    kind: boundary
+    testability: testable
+  - id: FSD-SONDE-12h
+    text: "A sonde still transmitting long after its battery life is a repowered bench unit, never a hunt"
+    source_section: "Sonde Behaviour"
+    tier: unit
+    kind: boundary
+    testability: testable
+  - id: FSD-RECOVERY-status
+    text: "Recovery status is loaded with the sonde context and refreshed every 5 minutes while landed, and colours the balloon marker"
+    source_section: "Recovery status"
+    tier: device
+    kind: positive
+    testability: testable
+  - id: FSD-START-settings-only
+    text: "Startup reads userSettings.json and nothing else before a sonde is chosen"
+    source_section: "Startup Steps"
+    tier: device
+    kind: negative
+    testability: testable
+  - id: FSD-START-no-identity
+    text: "No sonde identity exists before selection answers"
+    source_section: "Startup Steps"
+    tier: device
+    kind: negative
+    testability: testable
+  - id: FSD-START-parallel-feeds
+    text: "BLE and APRS start together and never coordinate; either alone is a workable hunt"
+    source_section: "Startup Steps"
+    tier: device
+    kind: positive
+    testability: testable
+  - id: FSD-START-resume-distinct
+    text: "Cold launch and foreground resume are separate sequences; resume never runs during a launch"
+    source_section: "Phase 1 - Startup"
+    tier: device
+    kind: negative
+    testability: testable
+  - id: FSD-START-resume-steps
+    text: "Resume requests location, resumes polling, evaluates state, reads the context for the hunted sonde whatever the state, and refreshes services"
+    source_section: "Phase 1 - Startup"
+    tier: device
+    kind: positive
+    testability: testable
+  - id: FSD-UI-buttons-row
+    text: "The button row above the map carries settings, transport mode, point/all/cancel, heading, change sonde, mute and Apple Maps"
+    source_section: "Buttons Row"
+    tier: device
+    kind: positive
+    testability: testable
+  - id: FSD-UI-transport-toggle
+    text: "The transport button shows the mode in use and swaps on tap"
+    source_section: "Buttons Row"
+    tier: device
+    kind: positive
+    testability: testable
+  - id: FSD-UI-point-all-cancel
+    text: "The dynamic button reads Point with no landing point, Cancel while selecting, and All once a landing point exists"
+    source_section: "Buttons Row"
+    tier: device
+    kind: state-transition
+    testability: testable
+  - id: FSD-UI-manual-point
+    text: "Tapping Point then the map sets the landing point"
+    source_section: "Buttons Row"
+    tier: device
+    kind: positive
+    testability: testable
+  - id: FSD-UI-heading-toggle
+    text: "Heading mode centres and rotates to device heading with zoom-only interaction; free mode allows pan and zoom; zoom is preserved across the switch"
+    source_section: "Buttons Row"
+    tier: device
+    kind: state-transition
+    testability: testable
+  - id: FSD-UI-mute-toggle
+    text: "The mute button sends the BLE mute command and reflects the device state, syncing from the buzmute field"
+    source_section: "Buttons Row"
+    tier: device
+    kind: positive
+    testability: testable
+  - id: FSD-UI-decode-tone
+    text: "Every decoded Type 1 packet plays a short tone, muted by the same control"
+    source_section: "Buttons Row"
+    tier: device
+    kind: positive
+    testability: testable
+  - id: FSD-UI-no-prediction-toggle
+    text: "There is no prediction-path toggle; the presenter alone decides visibility"
+    source_section: "Buttons Row"
+    tier: device
+    kind: negative
+    testability: testable
+  - id: FSD-UI-marker-order
+    text: "The balloon marker is drawn in front of the landing marker"
+    source_section: "Map Overlays"
+    tier: device
+    kind: positive
+    testability: testable
+  - id: FSD-UI-balloon-colour
+    text: "The balloon marker is green ascending, orange descending above 10 km, red below, grey unknown, and reports recovery once landed"
+    source_section: "Map Overlays"
+    tier: device
+    kind: boundary
+    testability: testable
+  - id: FSD-UI-track-red
+    text: "The track draws as a thin red line, starting empty and filled by the context loader"
+    source_section: "Map Overlays"
+    tier: device
+    kind: positive
+    testability: testable
+  - id: FSD-UI-predicted-path
+    text: "The predicted path draws as a thick blue line with a burst marker visible only while ascending"
+    source_section: "Map Overlays"
+    tier: device
+    kind: boundary
+    testability: testable
+  - id: FSD-UI-route-green
+    text: "The route draws green from the hunter to the landing point and is hidden within 200 m"
+    source_section: "Map Overlays"
+    tier: device
+    kind: boundary
+    testability: testable
+  - id: FSD-UI-panel-fields
+    text: "The data panel shows the specified two tables of fields in the specified order"
+    source_section: "Data Panel"
+    tier: device
+    kind: positive
+    testability: testable
+  - id: FSD-UI-panel-frame
+    text: "The panel frame is green on live BLE, orange on APRS fallback, red when telemetry is over 3 s old"
+    source_section: "Data Panel"
+    tier: device
+    kind: boundary
+    testability: testable
+  - id: FSD-UI-panel-nosignal
+    text: "Signal reads 'no signal' when no sonde is decoded rather than a dBm figure"
+    source_section: "Data Panel"
+    tier: device
+    kind: negative
+    testability: testable
+  - id: FSD-UI-panel-battery
+    text: "Battery colour is green above 40 %, amber 20-40 %, red below 20 %"
+    source_section: "Data Panel"
+    tier: device
+    kind: boundary
+    testability: testable
+  - id: FSD-UI-panel-speeds
+    text: "Vertical speed is green ascending and red descending"
+    source_section: "Data Panel"
+    tier: device
+    kind: positive
+    testability: testable
+  - id: FSD-UI-panel-burstkiller
+    text: "The burst-killer countdown is shown as a local clock time, retained from BLE across APRS fallback and never overwritten by APRS"
+    source_section: "Data Panel"
+    tier: device
+    kind: positive
+    testability: testable
+  - id: FSD-UI-panel-landed-icon
+    text: "A target icon is shown once the balloon is landed"
+    source_section: "Data Panel"
+    tier: device
+    kind: positive
+    testability: testable
+  - id: FSD-SET-sonde-save-on-dismiss
+    text: "Swiping the sonde settings window down saves frequency and type and transmits them if they differ"
+    source_section: "Settings"
+    tier: device
+    kind: positive
+    testability: testable
+  - id: FSD-SET-warn-no-device
+    text: "With no device for commands or telemetry, a red warning is displayed"
+    source_section: "Settings"
+    tier: device
+    kind: error
+    testability: testable
+  - id: FSD-SET-wheel-pickers
+    text: "Frequency is entered with 5 independent wheel pickers restricted to 400-406 MHz, with cascading adjustment and reversion on invalid values"
+    source_section: "Sonde Settings Window"
+    tier: device
+    kind: boundary
+    testability: testable
+  - id: FSD-SET-revert
+    text: "The Revert button restores the values present when the screen was entered"
+    source_section: "Sonde Settings Window"
+    tier: device
+    kind: positive
+    testability: testable
+  - id: FSD-SET-sonde-types
+    text: "The five sonde types display as text and transmit as their number"
+    source_section: "Sonde types"
+    tier: device
+    kind: positive
+    testability: testable
+  - id: FSD-SET-prediction-save
+    text: "Prediction settings save on Done or on disappear"
+    source_section: "Prediction Settings"
+    tier: device
+    kind: positive
+    testability: testable
+  - id: FSD-SET-device-read
+    text: "Device settings are read from the receiver over BLE on opening and the cache updated"
+    source_section: "Device Settings"
+    tier: device
+    kind: positive
+    testability: testable
+  - id: FSD-SET-device-write
+    text: "Done writes the changed device settings back over BLE"
+    source_section: "Device Settings"
+    tier: device
+    kind: positive
+    testability: testable
+  - id: FSD-SET-tabs
+    text: "The device settings sheet carries the Pins, Battery, Radio and Other tabs with the specified fields"
+    source_section: "Tab Structure"
+    tier: device
+    kind: positive
+    testability: testable
+  - id: FSD-SET-tune
+    text: "The Tune view shows the smoothed AFC value, Transfer copies it, Save stores it via setFreqCorrection, and the view stays open"
+    source_section: "Tune Function"
+    tier: device
+    kind: positive
+    testability: testable
+  - id: FSD-SET-station-id
+    text: "Changing the station ID re-targets APRS to that launch site"
+    source_section: "Prediction View"
+    tier: device
+    kind: state-transition
+    testability: testable
