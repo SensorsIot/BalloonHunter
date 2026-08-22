@@ -75,7 +75,11 @@ BalloonHunter/
 
 ## 📄 Documentation
 
-- [📋 Functional Specification](BalloonHunter/BalloonHunterAppFSD.md) — the single design document; background/resume behaviour lives in *Phase 1 → What runs in the background*
+Documentation is in three planes — start at [`docs/00-Overview.md`](../docs/00-Overview.md).
+
+- [📋 Functional Specification](BalloonHunter/BalloonHunterAppFSD.md) — what must be true
+- [🔧 Harness](../docs/Harness/AI-Workflow.md) — how it is built and changed
+- [📖 User Manual](../docs/UserDocumentation/User-Manual.md) — how to install, hunt and recover
 - [📡 SondeHub API Reference](BalloonHunter/SondeHub_API_Reference.md)
 
 ## 📜 License

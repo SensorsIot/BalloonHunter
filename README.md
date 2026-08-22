@@ -64,7 +64,8 @@ Requirements: Android Studio, JDK 17+, Google Maps API key
 - 🔒 [Privacy Policy](Privacy-Policy.md)
 - 🍎 [iOS FSD](ios/BalloonHunter/BalloonHunterAppFSD.md)
 - 🤖 [Android FSD](android/docs/BalloonHunter_Android_fsd.md)
-- 📡 [SondeHub API Reference](docs/SondeHub_API_Reference.md)
+- 📚 [Documentation map](docs/00-Overview.md) — the three planes
+- 📡 [SondeHub API Reference](ios/BalloonHunter/SondeHub_API_Reference.md)
 
 ## 🙏 Acknowledgments
 

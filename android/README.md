@@ -122,7 +122,7 @@ The app follows Material 3 guidelines throughout:
 ## 📄 Documentation
 
 - [📋 Functional Specification](docs/BalloonHunter_Android_fsd.md)
-- [📡 SondeHub API Reference](../docs/SondeHub_API_Reference.md)
+- [📡 SondeHub API Reference](../ios/BalloonHunter/SondeHub_API_Reference.md)
 
 ## 📜 License
 
