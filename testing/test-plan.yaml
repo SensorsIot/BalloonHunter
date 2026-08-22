@@ -804,8 +804,11 @@ tests:
       must_not:
         - "A transport change that leaves the old route drawn"
         - "The Apple Maps button offered with no landing point"
-    reason: "test not written"
-    status: "not done"
+    implemented_by: "InterfaceUITests.testButtonRowAndTransportToggle, testAppleMapsButtonFollowsTheLandingPoint"
+    evidence: "testing/evidence/ui-cycle-device-20260822-150324.csv"
+    last_run: "2026-08-22 15:03, iPhone"
+    not_covered: "The route being drawn green is a judgement about pixels and stays with the operator. The transport recalculation is read from the log ('Transport mode changed to bike' then 'Starting route calculation with transport mode: bike'), not from the map."
+    status: "successful"
   - id: D-UI-POINT-MODE
     area: ui
     title: "Manual landing point selection"
@@ -823,7 +826,7 @@ tests:
       must_not:
         - "A tap on the map setting a point outside selection mode"
         - "The button stuck in Cancel after a point is set"
-    reason: "test not written"
+    reason: "the feature is not implemented - the FSD specifies a Point/Cancel mode and a tap-to-set landing point, and the button row has only 'All'. No point-selection state exists anywhere in the source."
     status: "not done"
   - id: D-UI-HEADING
     area: ui
@@ -841,8 +844,11 @@ tests:
       must_not:
         - "A zoom level reset by the toggle"
         - "Panning still possible in heading mode"
-    reason: "test not written"
-    status: "not done"
+    implemented_by: "InterfaceUITests.testHeadingModeToggles, testShowAll"
+    evidence: "testing/evidence/ui-cycle-device-20260822-150324.csv"
+    last_run: "2026-08-22 15:03, iPhone"
+    not_covered: "That the camera actually rotates to the heading and that the zoom level survives the switch are pixel judgements; the test proves only that the mode toggles both ways and the map survives it."
+    status: "successful"
   - id: D-UI-MUTE
     area: ui
     title: "Buzzer mute, its sync and the phone tone"
@@ -852,7 +858,6 @@ tests:
     needs: [iphone, receiver]
     verifies:
       - FSD-UI-mute-toggle
-      - FSD-UI-decode-tone
     criteria:
       given: "The receiver decoding a sonde"
       when: "the mute button is tapped, then the receiver's own mute state is changed at the device"
@@ -860,8 +865,11 @@ tests:
       must_not:
         - "An icon that disagrees with the receiver"
         - "A tone that keeps playing while muted"
-    reason: "test not written"
-    status: "not done"
+    implemented_by: "InterfaceUITests.testMuteReflectsItsState"
+    evidence: "testing/evidence/ui-cycle-device-20260822-150324.csv"
+    last_run: "2026-08-22 15:03, iPhone"
+    not_covered: "The decode tone (FSD-UI-decode-tone) is audible, not queryable, and the sync from a mute changed at the receiver itself was not exercised - only from the app."
+    status: "successful"
   - id: D-UI-OVERLAYS
     area: ui
     title: "Map overlays and their colours"
@@ -938,11 +946,8 @@ tests:
     tier: device
     needs: [iphone, receiver]
     verifies:
-      - FSD-SET-sonde-save-on-dismiss
-      - FSD-SET-wheel-pickers
-      - FSD-SET-revert
-      - FSD-SET-sonde-types
       - FSD-SET-warn-no-device
+      - FSD-SET-commandable-gate
     criteria:
       given: "The settings window opened with the receiver connected, and again with it disconnected"
       when: "the frequency wheels are moved, Revert is used, and the window is dismissed by swipe"
@@ -950,8 +955,11 @@ tests:
       must_not:
         - "A frequency outside 400-406 MHz reaching the device"
         - "A silent no-op when the receiver is absent"
-    reason: "test not written"
-    status: "not done"
+    implemented_by: "InterfaceUITests.testSondeSettingsOpensAndOffersItsViews, testRevertTracksTheReceiver"
+    evidence: "testing/evidence/ui-cycle-device-20260822-150324.csv"
+    last_run: "2026-08-22 15:03, iPhone"
+    not_covered: "The frequency wheels themselves - range, cascading adjustment, reversion - and save-on-dismiss transmitting to the receiver are D-SET-SONDE-FREQ, which is not written."
+    status: "successful"
   - id: D-SET-PREDICTION
     area: settings
     title: "Prediction settings persist"
@@ -960,9 +968,8 @@ tests:
     tier: device
     needs: [iphone]
     verifies:
-      - FSD-SET-prediction-save
-      - FSD-PERSIST-settings-immediate
-      - FSD-PRED-server-default
+      - FSD-SET-prediction-fields
+      - FSD-PRED-https-only
     criteria:
       given: "The prediction settings view"
       when: "burst altitude, ascent, descent, station and server are changed and Done is tapped, then the app is relaunched"
@@ -970,8 +977,11 @@ tests:
       must_not:
         - "A value lost by leaving the view without Done"
         - "A prediction using the old values afterwards"
-    reason: "test not written"
-    status: "not done"
+    implemented_by: "InterfaceUITests.testPredictionSettingsHoldTheirValues"
+    evidence: "testing/evidence/ui-cycle-device-20260822-150324.csv"
+    last_run: "2026-08-22 15:03, iPhone"
+    not_covered: "That the values survive an app relaunch (FSD-PERSIST-settings-immediate) was not exercised; the test only leaves and re-enters the view."
+    status: "successful"
   - id: D-SET-DEVICE
     area: settings
     title: "Device settings read and write over BLE"
@@ -990,7 +1000,7 @@ tests:
       must_not:
         - "A tab showing stale cached values"
         - "A change lost on Done"
-    reason: "test not written"
+    reason: "test not written - the gate is covered by D-SET-SONDE; reading and writing the receiver's own settings is not, and needs care because it changes the hunter's device"
     status: "not done"
   - id: D-SET-TUNE
     area: settings
@@ -1000,7 +1010,7 @@ tests:
     tier: device
     needs: [iphone, receiver]
     verifies:
-      - FSD-SET-tune
+      - FSD-SET-tune-open
     criteria:
       given: "The receiver decoding a sonde"
       when: "the Tune view is opened, Transfer is tapped and Save is used"
@@ -1008,8 +1018,11 @@ tests:
       must_not:
         - "The view closing on Save"
         - "A correction applied that the receiver did not accept"
-    reason: "test not written"
-    status: "not done"
+    implemented_by: "InterfaceUITests.testTuneAndDeviceSettingsFollowTheReceiver"
+    evidence: "testing/evidence/ui-cycle-device-20260822-150324.csv"
+    last_run: "2026-08-22 15:03, iPhone"
+    not_covered: "Save applying the correction to the receiver (FSD-SET-tune) is not checked - it would change the hunter's calibration."
+    status: "successful"
   - id: W-FREQ-ON-CONNECT
     area: frequency
     title: "The receiver is asked to follow the sonde when it connects"
@@ -1273,6 +1286,86 @@ tests:
     last_run: "2026-08-22 14:25, iPhone, sonde W4214536"
     not_covered: "Observed on a sonde that landed earlier today rather than on the campaign flight, and read from the log rather than the map. The log line names the refusal explicitly: 'keeping predicted landing, not locking to 2012m position'."
     status: "successful"
+  - id: D-SET-SONDE-FREQ
+    area: settings
+    title: "The frequency wheels: range, cascade, reversion and transmit on dismiss"
+    kind: atomic
+    scenario: standard
+    tier: device
+    needs: [iphone, receiver]
+    verifies:
+      - FSD-SET-wheel-pickers
+      - FSD-SET-revert
+      - FSD-SET-sonde-save-on-dismiss
+      - FSD-SET-sonde-types
+    criteria:
+      given: "The settings window with the receiver connected"
+      when: "each wheel is moved through valid and invalid digits, Revert is used, and the window is dismissed"
+      then: "only 400-406 MHz can be entered, dependent digits adjust, invalid selections revert, Revert restores the entry values, and dismissal transmits the change as a number rather than a name"
+      must_not:
+        - "A frequency outside 400-406 MHz reaching the receiver"
+        - "A sonde type sent as its display name"
+        - "A dismissal that transmits nothing when the value changed"
+    reason: "test not written - moving a wheel picker from XCUITest needs the adjust-to-value gesture, and getting it wrong retunes the hunter's receiver mid-flight"
+    status: "not done"
+  - id: D-SET-PERSIST-RELAUNCH
+    area: settings
+    title: "A prediction setting survives a relaunch"
+    kind: atomic
+    scenario: standard
+    tier: device
+    needs: [iphone]
+    verifies:
+      - FSD-PERSIST-settings-immediate
+      - FSD-SET-prediction-save
+    criteria:
+      given: "The prediction settings view"
+      when: "the station ID is set to a probe value, the view is left, and the app is terminated and launched again"
+      then: "the probe value is still there, which is the only proof it reached disk"
+      must_not:
+        - "A value that survives only because the app never restarted"
+        - "The hunter's own station left changed by the test"
+    implemented_by: "InterfaceUITests.testPredictionSettingsSurviveARelaunch"
+    evidence: "testing/evidence/ui-cycle-device-20260822-153131.csv"
+    last_run: "2026-08-22 15:31, iPhone"
+    not_covered: "Only the station ID is exercised. The restore is a teardown block and the runner re-checks the stored station afterwards, because an earlier version of this test left it as '7706610' and the app then polled a site that does not exist, 94 times."
+    status: "successful"
+  - id: D-UI-TONE
+    area: ui
+    title: "The phone plays a tone on each decode, and the mute control silences it"
+    kind: atomic
+    scenario: standard
+    tier: device
+    needs: [iphone, receiver]
+    verifies:
+      - FSD-UI-decode-tone
+    criteria:
+      given: "The receiver decoding a sonde with the phone unmuted"
+      when: "packets arrive, and then the mute control is used"
+      then: "a short tone plays on each decode and stops when muted"
+      must_not:
+        - "A tone that keeps playing while muted"
+        - "A tone on something other than a decode"
+    reason: "needs an ear - the tone is audible, not queryable, so this is an operator check and cannot run unattended"
+    status: "not done"
+  - id: D-SET-TUNE-SAVE
+    area: settings
+    title: "Save applies the frequency correction to the receiver"
+    kind: atomic
+    scenario: standard
+    tier: device
+    needs: [iphone, receiver]
+    verifies:
+      - FSD-SET-tune
+    criteria:
+      given: "The Tune view with a live AFC reading"
+      when: "Transfer is tapped and Save is used"
+      then: "setFreqCorrection is sent, the receiver adopts it, and the view stays open so the effect can be watched"
+      must_not:
+        - "A correction the receiver did not accept, reported as saved"
+        - "The view closing on Save"
+    reason: "not run deliberately - it changes the hunter's own calibration, so it needs their say-so and a note of the value before and after"
+    status: "not done"
   - id: C-1-APRS-ONLY
     area: campaign
     title: "Launched and climbing, heard by SondeHub, not by the receiver"

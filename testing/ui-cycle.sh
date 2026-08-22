@@ -43,15 +43,35 @@ if [ "$tier" = "device" ]; then
     export TEST_RUNNER_BACKGROUND_SECONDS TEST_RUNNER_SETTLE_SECONDS
     # The install is left alone here. Wiping a phone's container would take the
     # hunter's settings with it, so the device tier does not claim a cold start.
+    run=$(mktemp -t balloonhunter-xcodebuild)
     xcodebuild -project "$proj" -scheme BalloonHunter \
         -destination "platform=iOS,arch=arm64,id=$dev" \
-        "$@" -allowProvisioningUpdates build test 2>&1 \
-        | grep -E "Test Case|error:|Executed [0-9]+ test|TEST SUCCEEDED|TEST FAILED" \
-        | grep -v "Executed 0 tests" || status=1
+        "$@" -allowProvisioningUpdates build test > "$run" 2>&1 || true
+    grep -E "Test Case|error:|Executed [0-9]+ test|TEST SUCCEEDED|TEST FAILED" "$run" \
+        | grep -v "Executed 0 tests" || true
+    # The verdict is xcodebuild's own line, not grep's exit status - which is 0
+    # whenever it matched anything, failure lines included.
+    grep -q "\*\* TEST SUCCEEDED \*\*" "$run" || status=1
 
     xcrun devicectl device copy from --device "$dev" \
         --domain-type appDataContainer --domain-identifier "$app_id" --user mobile \
         --source Documents/balloonhunter.log.csv --destination "$log" >/dev/null 2>&1
+
+    # The tests type into the hunter's own settings. A test that leaves one changed
+    # is worse than a test that fails: the app then polls a station that does not
+    # exist and nobody notices until the next hunt. Measured once, at 94 futile
+    # requests to site 706610, before this check existed.
+    settings=$(mktemp -t balloonhunter-settings)
+    if xcrun devicectl device copy from --device "$dev" \
+        --domain-type appDataContainer --domain-identifier "$app_id" --user mobile \
+        --source Documents/userSettings.json --destination "$settings" >/dev/null 2>&1; then
+        station=$(sed -n 's/.*"stationId" *: *"\([^"]*\)".*/\1/p' "$settings")
+        case "$station" in
+            [0-9][0-9][0-9][0-9][0-9]) echo "ui-cycle: station ID intact ($station)" ;;
+            *) echo "ui-cycle: FAIL - the station ID is '''$station''', which is not a station. A test left it changed."
+               status=1 ;;
+        esac
+    fi
 
     # XCUITest terminates the app under test when the run ends. On the phone that
     # would leave the hunter looking at a home screen, so it is put back.
@@ -72,11 +92,13 @@ else
     xcrun simctl boot "$udid" >/dev/null 2>&1
     xcrun simctl uninstall "$udid" "$app_id" >/dev/null 2>&1
 
+    run=$(mktemp -t balloonhunter-xcodebuild)
     xcodebuild -project "$proj" -scheme BalloonHunter \
         -destination "platform=iOS Simulator,id=$udid" \
-        "$@" CODE_SIGNING_ALLOWED=NO build test 2>&1 \
-        | grep -E "Test Case|error:|Executed [0-9]+ test|TEST SUCCEEDED|TEST FAILED" \
-        | grep -v "Executed 0 tests" || status=1
+        "$@" CODE_SIGNING_ALLOWED=NO build test > "$run" 2>&1 || true
+    grep -E "Test Case|error:|Executed [0-9]+ test|TEST SUCCEEDED|TEST FAILED" "$run" \
+        | grep -v "Executed 0 tests" || true
+    grep -q "\*\* TEST SUCCEEDED \*\*" "$run" || status=1
 
     container=$(xcrun simctl get_app_container "$udid" "$app_id" data 2>/dev/null)
     cp "$container/Documents/balloonhunter.log.csv" "$log" 2>/dev/null
@@ -100,7 +122,11 @@ fail() { echo "ui-cycle: FAIL - $1"; status=1; }
 # The phone keeps its log across runs and its install across tests, so a startup
 # claim there would be read from lines an earlier session wrote.
 if [ "$tier" = "device" ]; then
-    [ "$status" -eq 0 ] && echo "ui-cycle: PASS - tests green on the phone; log kept as evidence"
+    if [ "$status" -eq 0 ]; then
+        echo "ui-cycle: PASS - tests green on the phone; log kept as evidence"
+    else
+        echo "ui-cycle: FAIL - the suite did not pass on the phone"
+    fi
     exit "$status"
 fi
 

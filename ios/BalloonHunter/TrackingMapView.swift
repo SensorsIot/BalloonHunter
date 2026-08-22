@@ -471,6 +471,7 @@ struct TrackingMapView: View {
         .background(.ultraThinMaterial)
         .cornerRadius(8)
         .accessibilityLabel(mapPresenter.transportMode == .car ? "Driving. Tap for cycling." : "Cycling. Tap for driving.")
+        .accessibilityIdentifier("map.transport")
 
         // Show All button - always functional
         Button("All") {
@@ -478,6 +479,7 @@ struct TrackingMapView: View {
             mapPresenter.triggerShowAllAnnotations()
         }
         .buttonStyle(.bordered)
+        .accessibilityIdentifier("map.showAll")
 
         // Heading mode toggle
         Button {
@@ -489,6 +491,7 @@ struct TrackingMapView: View {
         }
         .background(.ultraThinMaterial)
         .cornerRadius(8)
+        .accessibilityIdentifier("map.heading")
 
         // Buzzer mute toggle. Removed from the layout while the receiver is
         // disconnected rather than hidden at zero opacity, which would leave a hole
@@ -510,6 +513,8 @@ struct TrackingMapView: View {
             }
             .background(.ultraThinMaterial)
             .cornerRadius(8)
+            .accessibilityIdentifier("map.mute")
+            .accessibilityValue(mapPresenter.isBuzzerMuted ? "muted" : "unmuted")
         }
 
         // Apple Maps navigation button (only show when landing point available)
@@ -523,6 +528,7 @@ struct TrackingMapView: View {
             }
             .background(.ultraThinMaterial)
             .cornerRadius(8)
+            .accessibilityIdentifier("map.appleMaps")
         }
     }
 

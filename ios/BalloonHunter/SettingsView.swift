@@ -25,6 +25,7 @@ struct DeviceSettingsView: View {
                         Section {
                             Text("Sonde not connected")
                                 .foregroundColor(.red)
+                                .accessibilityIdentifier("settings.notConnected")
                                 .fontWeight(.semibold)
                         }
                         disabledFormFields()
@@ -444,19 +445,23 @@ struct SettingsView: View {
                         Button(horizontalSizeClass == .regular ? "Prediction Settings" : "Prediction") {
                             isShowingPredictionSettings = true
                         }
+                        .accessibilityIdentifier("settings.prediction")
                         .font(.system(size: 24))
 
                         Button(horizontalSizeClass == .regular ? "Device Settings" : "Device") {
                             isShowingDeviceSettings = true
                         }
+                        .accessibilityIdentifier("settings.device")
                         .font(.system(size: 24))
                         .disabled(!bleService.connectionState.canReceiveCommands)
 
                         Button("Tune") { selectedTab = 1 }
+                            .accessibilityIdentifier("settings.tune")
                             .font(.system(size: 24))
                             .disabled(!bleService.connectionState.canReceiveCommands)
                     } else { // Tune
                         Button("Done") { selectedTab = 0 }
+                            .accessibilityIdentifier("settings.done")
                             .font(.system(size: 24))
                         Button("Reset") {
                             saveTuneSettings(correctionValue: 0)
@@ -712,6 +717,7 @@ struct SettingsView: View {
 
                 Section {
                     Button("Revert") { revertSondeSettings() }
+                        .accessibilityIdentifier("settings.revert")
                         .disabled(!bleService.connectionState.canReceiveCommands)
                         .frame(maxWidth: .infinity)
                 }
@@ -741,6 +747,7 @@ struct SettingsView: View {
                     Button("Transfer") {
                         tempTuneFrequencyCorrection = Int(bleService.afcData.smoothedFrequency)
                     }
+                    .accessibilityIdentifier("tune.transfer")
                     .buttonStyle(.bordered)
                     .disabled(!bleService.connectionState.canReceiveCommands)
                 }
@@ -769,6 +776,7 @@ struct SettingsView: View {
                     Button("Save") {
                         saveTuneSettings(correctionValue: tempTuneFrequencyCorrection)
                     }
+                    .accessibilityIdentifier("tune.save")
                     .buttonStyle(.borderedProminent)
                     .disabled(!bleService.connectionState.canReceiveCommands)
                 }
@@ -831,6 +839,7 @@ struct PredictionSettingsView: View {
                         Text("Burst Altitude")
                         Spacer()
                         TextField("30000", value: $userSettings.burstAltitude, format: .number)
+                            .accessibilityIdentifier("pred.burstAltitude")
                             .keyboardType(.numberPad)
                             .multilineTextAlignment(.trailing)
                     }
@@ -839,6 +848,7 @@ struct PredictionSettingsView: View {
                         Text("Ascent Rate")
                         Spacer()
                         TextField("5.0", value: $userSettings.ascentRate, format: .number)
+                            .accessibilityIdentifier("pred.ascentRate")
                             .keyboardType(.decimalPad)
                             .multilineTextAlignment(.trailing)
                     }
@@ -847,6 +857,7 @@ struct PredictionSettingsView: View {
                         Text("Descent Rate")
                         Spacer()
                         TextField("5.0", value: $userSettings.descentRate, format: .number)
+                            .accessibilityIdentifier("pred.descentRate")
                             .keyboardType(.decimalPad)
                             .multilineTextAlignment(.trailing)
                     }
@@ -857,6 +868,7 @@ struct PredictionSettingsView: View {
                         Text("Station ID")
                         Spacer()
                         TextField("06610", text: $userSettings.stationId)
+                            .accessibilityIdentifier("pred.stationId")
                             .keyboardType(.numberPad)
                             .multilineTextAlignment(.trailing)
                     }
@@ -867,6 +879,7 @@ struct PredictionSettingsView: View {
                     Toggle("Swiss-Balloon-Predictor", isOn: $userSettings.useSwissPredictor)
                     if userSettings.useSwissPredictor {
                         TextField("https://predictor.fabia.ch/tawhiri", text: $userSettings.swissPredictorURL)
+                            .accessibilityIdentifier("pred.serverURL")
                             .keyboardType(.URL)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()

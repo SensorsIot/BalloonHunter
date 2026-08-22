@@ -56,6 +56,12 @@ final class HuntWorkflowUITests: XCTestCase {
     private func attach() -> XCUIApplication {
         let app = makeApp()
         app.activate()
+        // A sheet or an alert left standing by an earlier test - or a frequency
+        // proposal raised by the receiver connecting - hides the map without
+        // removing it from the hierarchy, and every tap then fails as
+        // "not hittable".
+        _ = app.buttons["map.settings"].waitForExistence(timeout: 90)
+        clearWhateverIsCoveringTheMap(app)
         return app
     }
 
@@ -132,6 +138,7 @@ final class HuntWorkflowUITests: XCTestCase {
         let settings = app.buttons["map.settings"]
         XCTAssertTrue(settings.waitForExistence(timeout: contextTimeout),
                       "The tracking view never appeared after selection", file: file, line: line)
+        clearWhateverIsCoveringTheMap(app)
     }
 
     // MARK: - W-STARTUP

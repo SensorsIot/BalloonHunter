@@ -1041,3 +1041,21 @@ clauses:
     tier: device
     kind: state-transition
     testability: testable
+  - id: FSD-SET-tune-open
+    text: "The Tune view offers the live AFC value, Transfer and Save, and stays open after Transfer so the effect can be watched"
+    source_section: "Tune Function"
+    tier: device
+    kind: positive
+    testability: testable
+  - id: FSD-SET-commandable-gate
+    text: "Device Settings and Tune are reachable only while the receiver can be commanded, and the screen says so when it cannot"
+    source_section: "Settings"
+    tier: device
+    kind: boundary
+    testability: testable
+  - id: FSD-SET-prediction-fields
+    text: "Prediction settings carry burst altitude, ascent rate, descent rate, station ID and the prediction server URL, and a change survives leaving the view"
+    source_section: "Prediction Settings"
+    tier: device
+    kind: positive
+    testability: testable
