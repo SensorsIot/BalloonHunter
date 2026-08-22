@@ -45,6 +45,18 @@ xcodebuild -project BalloonHunter.xcodeproj -scheme BalloonHunter \
 The suite runs on the simulator and needs no hardware. A device build additionally
 proves the stricter concurrency settings compile.
 
-**There is no CI.** Nothing runs this suite except whoever is making the change.
-Running it before every commit is therefore not a convention but the only gate
-that exists.
+## CI
+
+`.github/workflows/ios-tests.yml` runs the suite on every push to `main` and every
+pull request that touches `ios/`. A red run blocks the merge, so the gate no longer
+depends on someone remembering.
+
+The workflow discovers its toolchain rather than pinning one: it selects the newest
+Xcode on the runner and asks `xcodebuild -showdestinations` for a simulator UDID. A
+device *name* is ambiguous — the same iPhone exists under several runtimes and
+xcodebuild refuses a destination it cannot resolve to one device — so the UDID is
+what it uses. On failure the `.xcresult` bundle is uploaded, because a red run
+without it means reproducing the failure locally to find out what broke.
+
+Running the suite locally before committing still matters: CI reports after the
+push, and the loop is faster here.

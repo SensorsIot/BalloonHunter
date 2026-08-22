@@ -689,8 +689,8 @@ needed. This is the same footprint as a foreground navigation app and within
 Apple’s policy; the scrutinised case is *background* location, which the app does
 not use. Only the hunter marker and the distance/route triggers depend on this —
 BLE, APRS and predictions run on their own cadences, unaffected. Heading mode is
-now just a map-rotation flag (the map follows heading); it no longer starts or
-stops location, since tracking already runs.
+a map-rotation flag alone: the map follows the heading, and location tracking runs
+independently of it.
 
 #### When it runs
 
@@ -715,7 +715,7 @@ stops location, since tracking already runs.
 
 - Two location managers: the precision manager (best accuracy, 2 m filter) runs continuously in the foreground as the hunter tracker; the other serves one-shot `requestCurrentLocation()` fetches.
 - Requests “When In Use” and begins monitoring significant movement once permitted; continuous tracking starts on the grant.
-- `enableHeadingMode()` / `disableHeadingMode()` only toggle the map-rotation flag; they no longer start or stop location.
+- `enableHeadingMode()` / `disableHeadingMode()` toggle the map-rotation flag only; neither starts nor stops location.
 - Every location callback builds a new `LocationData`, throttles precision updates to at least 1 s apart, logs movement jumps (>20 m), updates the significant-movement marker, and recomputes both distance-to-balloon and the 200 m proximity flag.
 - Heading callbacks keep the last known direction so future `LocationData` includes it.
 - `updateDistanceToBalloon()` computes the raw meters from user to balloon; formatting (e.g., “123 m” vs “1.2 km”) is handled by the view.
