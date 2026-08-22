@@ -756,6 +756,24 @@ track back.
 5. If the fetch is empty *and* the track is still empty, fall back to per-frame streaming
    recovery.
 
+**Single-flight — one read per serial serves every caller.** A second call for a
+serial already being read does not start another fetch; it awaits the one in
+flight. This is what lets callers ask whenever they need data, as the design
+requires, without any of them coordinating.
+
+   > **Measured — foreground resume, 22 Aug 2026.** Resume asks for context from
+   > three places within milliseconds: the state evaluation (step 2), the resume
+   > sequence itself (step 3), and the state refresh that follows (step 4, via
+   > `refreshCurrentState` → `handleStateTransition`). Each read merges and re-runs
+   > `detectTrackBasedLanding()` **on the main actor**, which the track-based rules
+   > note costs over a second on a large track. Three of those overlapping on a
+   > 5 510-point track froze the app on resume. Single-flight collapses them to one.
+
+**The resume sequence never awaits a context read.** It starts one and moves on to
+refreshing services; blocking resume behind a network fetch (up to the 30 s
+telemetry timeout) is what made the app look dead on return from the background.
+Every call site is fire-and-forget for the same reason.
+
 **There is no separate gap-hunting function**, and there must not be one. An
 earlier design kept a second path that always pulled a fixed `3d` window and
 diffed it by timestamp; both halves were wrong. Timestamp diffing is fragile

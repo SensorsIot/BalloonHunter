@@ -242,7 +242,12 @@ struct BalloonHunterApp: App {
         if currentState == .liveBLEFlying || currentState == .aprsFlying,
            let hunted = appServices.balloonPositionService.currentBalloonName {
             appLog("BalloonHunterApp: Step 3 - Currently flying (\(currentState)) - reading balloon context to fill any gap while away", category: .lifecycle, level: .info)
-            await appServices.balloonTrackService.readBalloonContext(serial: hunted)
+            // Not awaited: resume must not sit behind a network fetch before it
+            // refreshes services below. `readBalloonContext` is single-flight, so
+            // this shares whatever read the state machine has already started.
+            Task { [balloonTrackService = appServices.balloonTrackService] in
+                await balloonTrackService.readBalloonContext(serial: hunted)
+            }
         } else {
             appLog("BalloonHunterApp: Step 3 - Not flying (\(currentState)) - skipping forced detection", category: .lifecycle, level: .info)
         }

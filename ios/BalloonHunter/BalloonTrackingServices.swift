@@ -867,6 +867,9 @@ final class BalloonTrackService: ObservableObject {
     let balloonPositionService: BalloonPositionService
     private var aprsService: APRSDataService?
     private var cancellables = Set<AnyCancellable>()
+    /// The context read currently in flight, so concurrent callers share it rather
+    /// than each starting their own fetch-merge-detect pass. See `readBalloonContext`.
+    private var contextRead: (serial: String, task: Task<Void, Never>)?
 
     // Track management
     private var smoothingCounter = 0
@@ -1274,12 +1277,39 @@ final class BalloonTrackService: ObservableObject {
     /// Runs asynchronously and does not block UI.
     /// See FSD *Reading a sonde: the four steps* and *APRS Telemetry: the delta-fetch*.
     func readBalloonContext(serial: String) async {
+        // Single-flight. A foreground resume asks for context from three places at
+        // once — the state evaluation, the resume sequence, and the state refresh
+        // that follows it — and every APRS poll can add another. Each read merges
+        // and re-runs landing detection on the main actor, so letting them overlap
+        // froze the app on resume with a large track. One read per serial serves
+        // every caller: later callers await the same task instead of starting
+        // another fetch. This is what lets callers ask whenever they need data,
+        // as the design requires, without any of them coordinating.
+        if let inFlight = contextRead, inFlight.serial == serial {
+            appLog("BalloonTrackService: Context read for \(serial) already in flight - joining it", category: .service, level: .debug)
+            await inFlight.task.value
+            return
+        }
+        let task = Task { [weak self] in
+            guard let self else { return }
+            await self.performContextRead(serial: serial)
+        }
+        contextRead = (serial, task)
+        await task.value
+        if contextRead?.task == task { contextRead = nil }
+    }
+
+    /// The actual read. Never call directly — go through `readBalloonContext`, which
+    /// collapses concurrent requests for the same serial onto one of these.
+    private func performContextRead(serial: String) async {
         guard let aprsService else { return }
         // Fetch only what we don't already hold: the window from the newest frame
         // in the retained track to now (a small margin covers the BLE/APRS skew),
         // or the whole flight when we hold nothing. The track stays complete;
         // position-dedup keeps a re-drawn stretch from doubling BLE points.
-        let duration = Self.sondeHubDurationBucket(covering: gapSinceNewestFrame())
+        let gap = gapSinceNewestFrame()
+        let duration = Self.sondeHubDurationBucket(covering: gap)
+        appLog("BalloonTrackService: Context read for \(serial) - gap \(gap.isFinite ? "\(Int(gap))s" : "whole flight") -> duration=\(duration), holding \(currentBalloonTrack.count) points", category: .service, level: .info)
         let points = await aprsService.fetchAPRSTelemetryToFillGaps(serial: serial, duration: duration, localTrack: currentBalloonTrack)
         await MainActor.run {
             guard currentBalloonName == serial else { return }   // sonde changed while fetching
@@ -1501,6 +1531,12 @@ final class BalloonTrackService: ObservableObject {
     // MARK: - Sonde Change
 
     func clearAllData() {
+        // Drop the in-flight context read: it belongs to the previous sonde, and a
+        // new sonde must not be served by it. Its own serial guard would discard the
+        // result anyway; cancelling just stops the wasted fetch.
+        contextRead?.task.cancel()
+        contextRead = nil
+
         // Clear all track data from memory. The sonde name is not cleared here:
         // it is owned by BalloonPositionService, whose own clearAllData() resets
         // it as part of the same sonde change.

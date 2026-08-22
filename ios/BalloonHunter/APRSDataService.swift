@@ -455,7 +455,7 @@ final class APRSDataService: ObservableObject {
         let decoder = JSONDecoder()
         if let telemetryResult = try? decoder.decode([String: [String: SondeHubSondeData]].self, from: telemetryData),
            let sondeData = telemetryResult[serial], !sondeData.isEmpty {
-            // Found in 3-day telemetry!
+            // Found in the poll window.
             guard let latestPoint = sondeData.values.max(by: { point1, point2 in
                 let date1 = parseISO8601Date(point1.datetime) ?? Date.distantPast
                 let date2 = parseISO8601Date(point2.datetime) ?? Date.distantPast
@@ -463,7 +463,7 @@ final class APRSDataService: ObservableObject {
             }) else {
                 throw APRSError.noSondesFound
             }
-            appLog("APRSDataService: Found \(sondeData.count) points for override sonde \(serial) in 3d telemetry", category: .service, level: .info)
+            appLog("APRSDataService: Found \(sondeData.count) points for override sonde \(serial) in \(Self.pollTelemetryWindow) telemetry", category: .service, level: .info)
             try await publishSondeData(latestPoint)
             return
         }
