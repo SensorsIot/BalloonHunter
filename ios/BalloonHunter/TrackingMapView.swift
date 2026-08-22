@@ -4,6 +4,37 @@ import Combine
 import OSLog
 
 
+// MARK: - Sonde Context Progress
+
+/// What the sonde context load is doing, shown over the map while it runs.
+/// Presentation only — the coordinator decides the text and when it disappears.
+struct SondeContextProgressView: View {
+    let message: String
+
+    var body: some View {
+        VStack {
+            Spacer()
+            HStack(spacing: 10) {
+                ProgressView()
+                    .progressViewStyle(.circular)
+                Text(message)
+                    .font(.subheadline)
+                    .foregroundColor(.primary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .background(.ultraThinMaterial)
+            .cornerRadius(12)
+            .shadow(radius: 4)
+            .padding(.bottom, 24)
+            .padding(.horizontal, 20)
+        }
+        .transition(.opacity)
+        .animation(.easeInOut(duration: 0.2), value: message)
+    }
+}
+
 // MARK: - Distance Overlay Component
 struct DistanceOverlayView: View {
     let distanceMeters: CLLocationDistance?
@@ -313,6 +344,14 @@ struct TrackingMapView: View {
                         DistanceOverlayView(
                             distanceMeters: mapPresenter.distanceToBalloon
                         )
+                    }
+
+                    // What the sonde context load is doing. Fetching a whole flight
+                    // from SondeHub takes seconds, during which nothing on the map
+                    // changes — without this the hunter has no way to tell working
+                    // from hung. Purely a readout of coordinator state.
+                    if let progress = coordinator.sondeContextProgress {
+                        SondeContextProgressView(message: progress)
                     }
 
                     // Map type toggle button (positioned below built-in map compass)

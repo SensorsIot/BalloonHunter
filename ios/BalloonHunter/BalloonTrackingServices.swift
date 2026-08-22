@@ -1309,7 +1309,8 @@ final class BalloonTrackService: ObservableObject {
         // position-dedup keeps a re-drawn stretch from doubling BLE points.
         let gap = gapSinceNewestFrame()
         let duration = Self.sondeHubDurationBucket(covering: gap)
-        appLog("BalloonTrackService: Context read for \(serial) - gap \(gap.isFinite ? "\(Int(gap))s" : "whole flight") -> duration=\(duration), holding \(currentBalloonTrack.count) points", category: .service, level: .info)
+        let gapText = gap.map { String(format: "%.0fs", $0) } ?? "whole flight"
+        appLog("BalloonTrackService: Context read for \(serial) - gap \(gapText) -> duration=\(duration), holding \(currentBalloonTrack.count) points", category: .service, level: .info)
         let points = await aprsService.fetchAPRSTelemetryToFillGaps(serial: serial, duration: duration, localTrack: currentBalloonTrack)
         await MainActor.run {
             guard currentBalloonName == serial else { return }   // sonde changed while fetching
@@ -1332,18 +1333,24 @@ final class BalloonTrackService: ObservableObject {
     }
 
     /// Seconds of history `readBalloonContext` must fetch: from the newest frame
-    /// already held (plus a margin for the ~17 s BLE/APRS skew) to now, or a huge
-    /// value when nothing is held (whole flight).
-    private func gapSinceNewestFrame() -> TimeInterval {
-        guard let newest = currentBalloonTrack.map({ $0.timestamp }).max() else {
-            return .greatestFiniteMagnitude
-        }
+    /// already held (plus a margin for the ~17 s BLE/APRS skew) to now.
+    ///
+    /// `nil` means nothing is held, so the whole flight is wanted. Deliberately not
+    /// a sentinel value: `.greatestFiniteMagnitude` satisfies `isFinite`, so any
+    /// guard written against it waves it through and the next `Int()` conversion
+    /// traps — which is exactly what crashed a sonde change, whose first act is to
+    /// empty the track.
+    private func gapSinceNewestFrame() -> TimeInterval? {
+        guard let newest = currentBalloonTrack.map({ $0.timestamp }).max() else { return nil }
         return Date().timeIntervalSince(newest) + 60
     }
 
-    /// Smallest SondeHub `duration` bucket that covers `seconds`. SondeHub only
-    /// accepts a fixed set (`15s,1m,30m,1h,3h,6h,12h,1d,3d`), so a delta rounds up.
-    static func sondeHubDurationBucket(covering seconds: TimeInterval) -> String {
+    /// Smallest SondeHub `duration` bucket that covers `seconds`, or the whole
+    /// flight when `seconds` is `nil` (nothing held). SondeHub accepts only a fixed
+    /// set (`15s,1m,30m,1h,3h,6h,12h,1d,3d`), so a delta rounds up, and anything
+    /// past its retention clamps to the largest.
+    nonisolated static func sondeHubDurationBucket(covering seconds: TimeInterval?) -> String {
+        guard let seconds else { return "3d" }
         let buckets: [(TimeInterval, String)] = [
             (15, "15s"), (60, "1m"), (1800, "30m"), (3600, "1h"),
             (10800, "3h"), (21600, "6h"), (43200, "12h"), (86400, "1d"), (259200, "3d")

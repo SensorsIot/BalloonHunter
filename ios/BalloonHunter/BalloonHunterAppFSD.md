@@ -1425,6 +1425,21 @@ selection function, not a second code path: sometimes it answers without asking,
 sometimes it asks first, but it always returns a hunted serial. Callers neither know
 nor care which happened.
 
+**There is no Skip, and an empty picker never appears.** A hunt always has a hunted
+sonde, so dismissing the picker without choosing is not a state the app supports —
+the button is gone. That makes the empty list a dead end, so the picker is presented
+only when there is something to choose: at startup an empty candidate list simply
+proceeds and the state machine waits for telemetry; on a manual change the list is
+fetched *before* presenting, and a refresh that comes back empty keeps the previous
+list rather than emptying the picker on screen.
+
+**The picker shows no flight state.** Each row carries serial, type, last-heard time,
+last-heard altitude and frequency — and no ascent/descent indication of any kind.
+`LandingDetector` owns flying-versus-landed and has no verdict on candidates, so any
+arrow drawn here would be a second opinion on the one question that must have a
+single owner. (An altitude label once used an upward arrow as its icon, which read as
+"ascending" on sondes that had landed hours before.)
+
 1. **Gather** candidates from both feeds, which run independently and never consult each other:
    the station's sondes from `/sondes/site/{id}` (ground tests within 1 km of the uploader discarded, last 24 hours, newest first), and **any serial BLE has decoded**.
    The station list exists so the picker has something to offer; it is not evidence that any of it is still aloft.
@@ -1929,7 +1944,11 @@ different one — in particular, **only step 3 loads sonde data**.
         does reach SondeHub — no coordination between the two feeds is needed or
         wanted.
     *   Frequency sync runs here, once the hunted sonde is known and if the receiver
-        is ready for commands. It is evaluated **once**: it compares frequency (0.01 MHz tolerance) and sonde type, and on a mismatch raises a proposal for the hunter to accept or decline. Declining records a 5-minute cooldown for that frequency/type pair; it is not repeated while hunting and resets on a sonde change.
+        is ready for commands.
+    *   **The load reports what it is doing.** Fetching a whole flight takes seconds
+        during which nothing on the map changes, so the coordinator publishes the
+        current stage (`sondeContextProgress`) and the map renders it. Without it the
+        hunter cannot tell a working app from a hung one. It is evaluated **once**: it compares frequency (0.01 MHz tolerance) and sonde type, and on a mismatch raises a proposal for the hunter to accept or decline. Declining records a 5-minute cooldown for that frequency/type pair; it is not repeated while hunting and resets on a sonde change.
 
 **Step 4: Draw the overlays, in order**
     *   Progress label: "Step 4: Drawing"

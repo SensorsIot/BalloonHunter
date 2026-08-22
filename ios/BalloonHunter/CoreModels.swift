@@ -11,7 +11,10 @@ enum TransportationMode: String, CaseIterable, Codable {
 }
 
 // Flight phase of the balloon
-enum BalloonPhase: String, Codable {
+/// Pure data: the detector's verdict, carried between services and read by the
+/// nonisolated rule types. Explicitly `nonisolated` because the project defaults
+/// types to `@MainActor`, which a plain Codable enum has no business being.
+nonisolated enum BalloonPhase: String, Codable {
     case ascending
     case descendingAbove10k
     case descendingBelow10k
@@ -381,7 +384,7 @@ nonisolated func appLog(_ message: String, category: LogCategory, level: OSLogTy
     AppLogFile.shared.write("\(timestamp),\(category.rawValue),\(levelName(level)),\(csvEscape(message))")
 }
 
-private func levelName(_ level: OSLogType) -> String {
+nonisolated private func levelName(_ level: OSLogType) -> String {
     switch level {
     case .debug: return "debug"
     case .info: return "info"
@@ -391,7 +394,7 @@ private func levelName(_ level: OSLogType) -> String {
     }
 }
 
-private func csvEscape(_ s: String) -> String {
+nonisolated private func csvEscape(_ s: String) -> String {
     (s.contains(",") || s.contains("\"") || s.contains("\n"))
         ? "\"" + s.replacingOccurrences(of: "\"", with: "\"\"") + "\""
         : s
@@ -401,13 +404,20 @@ private func csvEscape(_ s: String) -> String {
 /// container): every `appLog` line, the same content as the Xcode console.
 /// Thread-safe, size-capped — when it passes the ceiling the oldest half is
 /// dropped, so it stays small and pullable without the unified-log archive.
-final class AppLogFile: @unchecked Sendable {
+/// Nonisolated by design: `appLog` is called from every context in the app, and
+/// this type does its own serialisation on a private queue. The project default of
+/// `@MainActor` would otherwise make the one diagnostic log unreachable from the
+/// nonisolated code that most needs to report.
+nonisolated final class AppLogFile: @unchecked Sendable {
     static let shared = AppLogFile()
     private init() {}
 
     private let queue = DispatchQueue(label: "com.balloonhunter.applogfile")
     private let maxBytes = 512 * 1024
-    private lazy var url: URL? = FileManager.default
+    /// Resolved once at init rather than lazily: `nonisolated` and `lazy` are
+    /// incompatible (an error in the Swift 6 language mode), and the documents
+    /// directory does not move.
+    private let url: URL? = FileManager.default
         .urls(for: .documentDirectory, in: .userDomainMask).first?
         .appendingPathComponent("balloonhunter.log.csv")
 

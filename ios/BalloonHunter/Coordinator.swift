@@ -64,6 +64,12 @@ final class ServiceCoordinator: ObservableObject {
     /// sets before any of that has happened. See `startTrackingSonde`.
     private var establishedSonde: String?
 
+    /// What the sonde context load is doing right now, or `nil` when it is not
+    /// running. Loading a whole flight from SondeHub takes seconds, and without
+    /// this the hunter watches an unchanged screen and reasonably concludes the app
+    /// has hung. Published as text so the view only renders it.
+    @Published private(set) var sondeContextProgress: String?
+
     // 60-second prediction timer (as referenced in comments)
     private var predictionTimer: Timer? = nil
 
@@ -234,11 +240,17 @@ final class ServiceCoordinator: ObservableObject {
             }
             .store(in: &cancellables)
 
-        // Monitor state changes to control 60-second prediction timer
+        // The prediction timer follows `PredictionPolicy`, so it must be re-evaluated
+        // whenever any of that policy's three inputs changes — not on state alone.
+        // In landed-by-silence the decision flips the moment the first estimate
+        // arrives, which is what stops the marker drifting under a driving hunter.
         balloonPositionService.$currentState
+            .map { _ in () }
+            .merge(with: balloonPositionService.$landingConfirmedByBLE.map { _ in () },
+                   predictionService.$latestPrediction.map { _ in () })
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] state in
-                self?.handleStateChangeForPredictionTimer(state)
+            .sink { [weak self] in
+                self?.updatePredictionTimer()
             }
             .store(in: &cancellables)
 
@@ -252,9 +264,15 @@ final class ServiceCoordinator: ObservableObject {
 
     // MARK: - 60-Second Prediction Timer
 
-    /// Handle state changes to control prediction timer
-    private func handleStateChangeForPredictionTimer(_ state: DataState) {
-        if PredictionPolicy.shouldPredict(state: state) {
+    /// Run or stop the prediction timer according to `PredictionPolicy`, from the
+    /// current value of each of its inputs. Called whenever any of them changes.
+    private func updatePredictionTimer() {
+        let shouldPredict = PredictionPolicy.shouldPredict(
+            state: balloonPositionService.currentState,
+            touchdownConfirmed: balloonPositionService.landingConfirmedByBLE,
+            hasPrediction: predictionService.latestPrediction != nil)
+
+        if shouldPredict {
             startPredictionTimer()
         } else {
             stopPredictionTimer()
@@ -383,14 +401,20 @@ final class ServiceCoordinator: ObservableObject {
         // landed sonde is predicted once here and does not drift.
         Task { [weak self] in
             guard let self else { return }
+            defer { self.sondeContextProgress = nil }
+
             // ① Read the balloon context — the retained track topped up from
             //    SondeHub, latest position published. Recovery is a sibling call.
+            self.sondeContextProgress = "Loading \(name) from SondeHub…"
             await self.balloonTrackService.readBalloonContext(serial: name)
+
+            self.sondeContextProgress = "Checking whether \(name) was recovered…"
             await self.balloonPositionService.aprsService.checkRecovery(serial: name)
 
             // ② track is drawn from that data. ③ prediction from the published
             // position → ④ route. One ordered chain, no second fetch.
             if let position = self.balloonPositionService.aprsService.latestPosition {
+                self.sondeContextProgress = "Predicting the landing point…"
                 await self.predictionService.triggerPredictionWithPosition(position, trigger: "sonde-context")
             }
 
@@ -508,46 +532,67 @@ final class ServiceCoordinator: ObservableObject {
     }
 
     /// User skipped sonde selection (tapped "Skip")
-    func skipSondeSelection() {
-        // Stop timer if running
-        sondeSelectionTimer?.invalidate()
-        sondeSelectionTimer = nil
-
-        appLog("ServiceCoordinator: User skipped sonde selection", category: .general, level: .info)
-        showSondeSelectionPopup = false
-        sondeSelectionContinuation?.resume()
-        sondeSelectionContinuation = nil
-    }
-
     /// Show sonde selection popup during operation (Change Sonde)
+    /// **An empty picker must never appear.** It has no Skip — a hunt always has a
+    /// hunted sonde — so a picker with nothing in it is a dead end. When the cached
+    /// list is empty the refresh happens *first* and the picker is presented only if
+    /// it produced candidates.
     func showSondeSelectionForChange() {
-        // Update available sondes list from APRS service
-        availableSondesForSelection = balloonPositionService.aprsService.availableSondes
-        selectedSondeSerial = balloonPositionService.currentBalloonName
+        let cached = balloonPositionService.aprsService.availableSondes
 
-        // Reset countdown
-        sondeSelectionCountdown = 0  // No auto-confirm during manual change
-        userStartedEditing = false
-
-        showSondeSelectionPopup = true
-        appLog("ServiceCoordinator: Showing sonde selection for manual change (\(availableSondesForSelection.count) cached)", category: .general, level: .info)
+        guard !cached.isEmpty else {
+            appLog("ServiceCoordinator: Change Sonde - nothing cached, fetching before presenting", category: .general, level: .info)
+            isRefreshingSondeList = true
+            Task { [weak self] in
+                guard let self else { return }
+                await self.balloonPositionService.aprsService.refreshAvailableSondes()
+                self.isRefreshingSondeList = false
+                let fetched = self.balloonPositionService.aprsService.availableSondes
+                guard !fetched.isEmpty else {
+                    appLog("ServiceCoordinator: Change Sonde - no sondes available, picker not shown", category: .general, level: .info)
+                    return
+                }
+                self.presentSondePicker(fetched)
+            }
+            return
+        }
 
         // Show the cached list at once, then refresh from SondeHub so the picker
         // reflects the last 24 h as of now rather than as of app launch.
+        presentSondePicker(cached)
         isRefreshingSondeList = true
         Task { [weak self] in
             guard let self else { return }
             await self.balloonPositionService.aprsService.refreshAvailableSondes()
-            self.availableSondesForSelection = self.balloonPositionService.aprsService.availableSondes
+            let refreshed = self.balloonPositionService.aprsService.availableSondes
             self.isRefreshingSondeList = false
+
+            // A refresh that empties the list would leave an empty picker on screen.
+            guard !refreshed.isEmpty else {
+                appLog("ServiceCoordinator: Sonde list refresh returned nothing - keeping the cached list rather than emptying the picker", category: .general, level: .info)
+                return
+            }
+            self.availableSondesForSelection = refreshed
 
             // Keep the highlighted row valid if the refresh dropped it.
             if let selected = self.selectedSondeSerial,
-               !self.availableSondesForSelection.contains(where: { $0.serial == selected }) {
-                self.selectedSondeSerial = self.availableSondesForSelection.first?.serial
+               !refreshed.contains(where: { $0.serial == selected }) {
+                self.selectedSondeSerial = refreshed.first?.serial
             }
-            appLog("ServiceCoordinator: Sonde list refreshed (\(self.availableSondesForSelection.count) available)", category: .general, level: .info)
+            appLog("ServiceCoordinator: Sonde list refreshed (\(refreshed.count) available)", category: .general, level: .info)
         }
+    }
+
+    /// Put a non-empty candidate list on screen. The only place the picker is shown
+    /// for a manual change, so the non-empty precondition holds in one spot.
+    private func presentSondePicker(_ sondes: [SondeHubSondeData]) {
+        precondition(!sondes.isEmpty, "the picker must never be presented empty")
+        availableSondesForSelection = sondes
+        selectedSondeSerial = balloonPositionService.currentBalloonName ?? sondes.first?.serial
+        sondeSelectionCountdown = 0  // No auto-confirm during manual change
+        userStartedEditing = false
+        showSondeSelectionPopup = true
+        appLog("ServiceCoordinator: Showing sonde selection for manual change (\(sondes.count) available)", category: .general, level: .info)
     }
 
     /// Switch to a sonde detected by BLE (may not be in APRS)

@@ -212,4 +212,33 @@ final class TrackDedupTests: XCTestCase {
         let merged = full.mergingByPosition(backfill)
         XCTAssertEqual(merged.count, full.count, "a complete track gains nothing from a re-offer")
     }
+
+    // MARK: - Sizing the delta fetch
+
+    /// "Nothing held" is expressed as `nil`, never as a sentinel Double. A sentinel
+    /// invites a guard that fails to recognise it — `.greatestFiniteMagnitude`
+    /// satisfies `isFinite`, so an `isFinite` check waves it through and any later
+    /// `Int()` conversion traps.
+    func testBucket_nothingHeld_isWholeFlight() {
+        XCTAssertEqual(BalloonTrackService.sondeHubDurationBucket(covering: nil), "3d",
+                       "an empty track must fetch the whole flight")
+    }
+
+    func testBucket_roundsUpToSondeHubsAllowedWindows() {
+        // SondeHub accepts only these, so a delta must round up to one of them.
+        XCTAssertEqual(BalloonTrackService.sondeHubDurationBucket(covering: 10), "15s")
+        XCTAssertEqual(BalloonTrackService.sondeHubDurationBucket(covering: 15), "15s")
+        XCTAssertEqual(BalloonTrackService.sondeHubDurationBucket(covering: 16), "1m")
+        XCTAssertEqual(BalloonTrackService.sondeHubDurationBucket(covering: 90), "30m")
+        XCTAssertEqual(BalloonTrackService.sondeHubDurationBucket(covering: 3600), "1h")
+        XCTAssertEqual(BalloonTrackService.sondeHubDurationBucket(covering: 3601), "3h")
+        XCTAssertEqual(BalloonTrackService.sondeHubDurationBucket(covering: 86_400), "1d")
+    }
+
+    /// Beyond SondeHub's retention there is nothing larger to ask for.
+    func testBucket_beyondRetentionClampsToThreeDays() {
+        XCTAssertEqual(BalloonTrackService.sondeHubDurationBucket(covering: 400_000), "3d")
+        XCTAssertEqual(BalloonTrackService.sondeHubDurationBucket(covering: .greatestFiniteMagnitude), "3d",
+                       "an absurd value must clamp, not trap")
+    }
 }

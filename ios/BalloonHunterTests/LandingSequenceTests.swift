@@ -166,18 +166,87 @@ final class LandingSequenceTests: XCTestCase {
         XCTAssertTrue(detector.confirmsTouchdown(.trackLanding), "track landing = touchdown")
     }
 
-    // MARK: - Predictions run only while flying
+    // MARK: - Predictions run when the position is unknown, not merely when flying
 
-    func testPredictionPolicy_predictsOnlyWhileFlying() {
-        XCTAssertTrue(PredictionPolicy.shouldPredict(state: .liveBLEFlying))
-        XCTAssertTrue(PredictionPolicy.shouldPredict(state: .aprsFlying))
-        // Landed — by silence or touchdown — needs no new prediction: the last
-        // estimate is the landing, and re-predicting a fixed position only makes
-        // it drift (and asks for GFS data an old sonde no longer has).
-        for state in [DataState.aprsLanded, .liveBLELanded, .startup, .waitingForAPRS, .noTelemetry] {
-            XCTAssertFalse(PredictionPolicy.shouldPredict(state: state),
-                           "\(state) must not trigger a new prediction")
+    /// The question is "do we know where it is?", never "is it landed?".
+    /// See FSD *How a Landing Is Determined → When prediction runs*.
+
+    func testPredict_whileFlying_always() {
+        for state in [DataState.liveBLEFlying, .aprsFlying] {
+            XCTAssertTrue(PredictionPolicy.shouldPredict(state: state,
+                                                         touchdownConfirmed: false,
+                                                         hasPrediction: false),
+                          "\(state): flying with no estimate yet must predict")
+            XCTAssertTrue(PredictionPolicy.shouldPredict(state: state,
+                                                         touchdownConfirmed: false,
+                                                         hasPrediction: true),
+                          "\(state): flying keeps re-predicting — each run has fresh telemetry")
         }
+    }
+
+    /// A sonde whose APRS coverage ended while it was still descending is down, but
+    /// nobody has seen where. The predicted landing point is the only estimate there
+    /// is, so one must be made.
+    func testPredict_landedBySilence_withNoPrediction() {
+        XCTAssertTrue(PredictionPolicy.shouldPredict(state: .aprsLanded,
+                                                     touchdownConfirmed: false,
+                                                     hasPrediction: false),
+                      "down but never seen: without a prediction there is no landing point at all")
+    }
+
+    /// ...but only once. No new telemetry is arriving, so re-running would move the
+    /// marker purely because the wind forecast advanced.
+    func testNoPredict_landedBySilence_whenPredictionExists() {
+        XCTAssertFalse(PredictionPolicy.shouldPredict(state: .aprsLanded,
+                                                      touchdownConfirmed: false,
+                                                      hasPrediction: true),
+                       "estimate exists and nothing new arrived — re-running only tracks the forecast")
+    }
+
+    /// A fixed, near-ground observation is the position. Nothing left to estimate.
+    func testNoPredict_afterConfirmedTouchdown() {
+        for state in [DataState.aprsLanded, .liveBLELanded] {
+            for hasPrediction in [true, false] {
+                XCTAssertFalse(PredictionPolicy.shouldPredict(state: state,
+                                                              touchdownConfirmed: true,
+                                                              hasPrediction: hasPrediction),
+                               "\(state): touchdown confirmed — the position is known")
+            }
+        }
+    }
+
+    /// BLE reporting landed without a confirmed touchdown is still an unknown
+    /// position, and follows the same rule as landed-by-silence.
+    func testPredict_bleLanded_unconfirmed_withNoPrediction() {
+        XCTAssertTrue(PredictionPolicy.shouldPredict(state: .liveBLELanded,
+                                                     touchdownConfirmed: false,
+                                                     hasPrediction: false),
+                      "landed but unconfirmed is an unknown position, whatever the source")
+    }
+
+    /// No telemetry to predict from, in any combination.
+    func testNoPredict_withoutTelemetry() {
+        for state in [DataState.startup, .waitingForAPRS, .noTelemetry] {
+            for confirmed in [true, false] {
+                for hasPrediction in [true, false] {
+                    XCTAssertFalse(PredictionPolicy.shouldPredict(state: state,
+                                                                  touchdownConfirmed: confirmed,
+                                                                  hasPrediction: hasPrediction),
+                                   "\(state): nothing to predict from")
+                }
+            }
+        }
+    }
+
+    /// The touchdown verdict is `LandingDetector`'s, never re-derived here — the
+    /// policy takes it as an input so there is one owner for that question.
+    func testTouchdownVerdictComesFromTheDetector() {
+        XCTAssertFalse(PredictionPolicy.shouldPredict(state: .aprsLanded,
+                                                      touchdownConfirmed: detector.confirmsTouchdown(.vectorAnalysis),
+                                                      hasPrediction: false))
+        XCTAssertTrue(PredictionPolicy.shouldPredict(state: .aprsLanded,
+                                                     touchdownConfirmed: detector.confirmsTouchdown(.aprsStale),
+                                                     hasPrediction: false))
     }
 
     // MARK: - Landing time is anchored to telemetry, not the request launch

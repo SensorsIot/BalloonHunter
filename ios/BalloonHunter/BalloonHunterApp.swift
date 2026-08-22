@@ -166,7 +166,6 @@ struct BalloonHunterApp: App {
                     countdown: serviceCoordinator.sondeSelectionCountdown,
                     isRefreshing: serviceCoordinator.isRefreshingSondeList,
                     onConfirm: { serviceCoordinator.confirmSondeSelection() },
-                    onSkip: { serviceCoordinator.skipSondeSelection() },
                     onStartEditing: { serviceCoordinator.userDidStartEditingSondeName() }
                 )
                 .presentationDetents([.large])
@@ -301,7 +300,6 @@ struct SondeSelectionSheet: View {
     let countdown: Int
     var isRefreshing: Bool = false
     let onConfirm: () -> Void
-    let onSkip: () -> Void
     let onStartEditing: () -> Void
 
     @State private var manualSerial: String = ""
@@ -403,11 +401,6 @@ struct SondeSelectionSheet: View {
                     }
                     .disabled(selectedSondeSerial == nil)
 
-                    Button(action: onSkip) {
-                        Text("Skip")
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
-                    }
                 }
                 .padding(.horizontal, 20)
                 .padding(.bottom, 20)
@@ -450,8 +443,14 @@ struct SondeRowView: View {
                         .font(.caption)
                         .foregroundColor(.secondary)
 
-                    // Altitude
-                    Label("\(Int(sonde.alt))m", systemImage: "arrow.up")
+                    // Altitude of the last frame. No arrow: this is the height the
+                    // sonde was last heard at, not a direction of travel. An
+                    // "arrow.up" here read as "ascending" on sondes that had landed
+                    // hours earlier. The picker must not depict flight state at all
+                    // — `LandingDetector` owns that question and has no verdict on
+                    // candidates, so any glyph invented here would be a second
+                    // opinion. See FSD *Sonde Selection*.
+                    Text("\(Int(sonde.alt)) m")
                         .font(.caption)
                         .foregroundColor(.secondary)
 

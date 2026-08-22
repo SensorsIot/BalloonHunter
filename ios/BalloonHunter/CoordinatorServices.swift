@@ -198,6 +198,13 @@ extension ServiceCoordinator {
             // Directly confirm the flying sonde selection
             confirmSondeSelection()
 
+        } else if sondes.isEmpty {
+            // Nothing to choose from. The picker has no Skip — a hunt always has a
+            // hunted sonde — so presenting an empty one would trap the hunter with
+            // no way forward. Proceed instead and let the state machine wait: a
+            // sonde appears on either feed, or nothing is drawn.
+            appLog("STARTUP: Step 4b - No candidates on either feed - nothing to select, waiting for telemetry", category: .general, level: .info)
+
         } else {
             // No flying sonde - show selection popup
             let ages = sondes.map { s -> String in
@@ -212,7 +219,8 @@ extension ServiceCoordinator {
                 showSondeSelectionPopup = true
             }
 
-            // Wait for user to confirm or skip (with 5-second auto-confirm)
+            // Wait for the hunter to confirm (5-second auto-confirm on the
+            // pre-selected newest). Selection always yields a sonde.
             await waitForSondeSelection()
         }
 

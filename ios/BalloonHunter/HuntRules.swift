@@ -43,12 +43,42 @@ import CoreLocation
 /// has). States with no basis for a prediction (startup, waiting, no telemetry)
 /// also stop. See FSD *How a Landing Is Determined*.
 enum PredictionPolicy {
-    static func shouldPredict(state: DataState) -> Bool {
+
+    /// Whether a prediction should be made now.
+    ///
+    /// The question is **"do we know where the balloon is?"**, never "is it landed?".
+    /// A sonde whose APRS coverage ended while it was still descending is down, but
+    /// nobody has seen where — the predicted landing point is the only estimate of
+    /// where it lies, so it must have one.
+    ///
+    /// - Parameters:
+    ///   - state: the data state the machine is in.
+    ///   - touchdownConfirmed: `LandingDetector`'s verdict that a fixed, near-ground
+    ///     observation has pinned the balloon. Passed in rather than re-derived, so
+    ///     that question keeps one owner.
+    ///   - hasPrediction: whether an estimate already exists.
+    ///
+    /// See FSD *How a Landing Is Determined → When prediction runs*.
+    static func shouldPredict(state: DataState,
+                              touchdownConfirmed: Bool,
+                              hasPrediction: Bool) -> Bool {
         switch state {
-        case .liveBLEFlying, .aprsFlying:
-            return true
-        case .liveBLELanded, .aprsLanded, .startup, .waitingForAPRS, .noTelemetry:
+        case .startup, .waitingForAPRS, .noTelemetry:
+            // Nothing is arriving to predict from.
             return false
+
+        case .liveBLEFlying, .aprsFlying:
+            // Every run has fresher telemetry than the last, so each answer is better.
+            return true
+
+        case .liveBLELanded, .aprsLanded:
+            // A confirmed touchdown *is* the position — nothing left to estimate.
+            guard !touchdownConfirmed else { return false }
+            // Down but never seen. Make the one estimate that says where it lies, and
+            // then leave it alone: no new telemetry is arriving, so re-running would
+            // move the marker only because the wind forecast advanced — under a hunter
+            // who is driving to it.
+            return !hasPrediction
         }
     }
 }
