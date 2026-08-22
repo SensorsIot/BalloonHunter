@@ -1270,34 +1270,45 @@ hunter is immediately hundreds of metres "off"; the off-route monitor then trigg
 recalculation, which snaps differently, and repeats indefinitely — Apple Maps calls
 every few seconds for a route nobody is shown.
 
-**Recalculation Triggers**:
-1. **Landing Point Movement** (≥100m threshold):
-   - When predicted landing point moves ≥100 meters, route is recalculated
-   - Minor prediction updates (<100m) keep existing route to prevent excessive API calls
-   - Typical balloon chase: 2-5 recalculations as landing point converges during descent
+#### When a route is renewed
 
-2. **Off-Route Detection** (≥50m threshold):
-   - User's current position is continuously compared to planned route polyline
-   - Perpendicular distance to nearest route segment is calculated using point-to-line geometry
-   - If user deviates ≥50 meters from route, automatic recalculation is triggered
-   - Follows navigation best practices similar to commercial navigation apps
+**The router decides, and nothing else.** The landing point moving and the hunter
+moving are reported to it as facts; `RouteRenewalPolicy` weighs them. No caller
+rebuilds a route past that decision — a trigger that calls the builder directly is
+how a route comes to be rebuilt for no reason.
 
-3. **Transport Mode Changes**:
-   - Switching between car/bike modes immediately recalculates route with new transport type
-   - Mode is preserved across all automatic recalculations
+Two things can make the route on screen wrong, and they are not paced alike:
 
-**Off-Route Detection Implementation**:
-- Route polyline is stored in `CurrentLocationService` for deviation monitoring
-- On each location update (every 10m in normal mode, 2m in heading mode):
-  - Calculates minimum perpendicular distance from user position to route segments
-  - Uses dot product projection to find closest point on each line segment
-  - Triggers `shouldUpdateRoute` flag when threshold exceeded
-- `RouteCalculationService` subscribes to off-route events and recalculates automatically
+| what changed | renews | throttled |
+|---|---|---|
+| **The landing point moved** (≥100 m) | yes | **no** |
+| **The hunter moved** (≥100 m) | yes | yes — 60 s minimum |
+| No route yet, or transport mode changed | yes | no |
+| Neither | no | — |
 
-**API Efficiency**:
-- Typical balloon chase: 3-8 total API calls (initial + landing point moves + off-route corrections)
-- No time-based periodic recalculation (eliminates ~360 calls/hour overhead)
-- No redundant calls when user stays on route and landing point is stable
+**The landing point is not throttled here** because it moves only when a prediction
+produces a new one, and predictions run on their own timer — it is already paced
+upstream. Throttling it again would delay the most important update of a hunt, the
+confirmed touchdown that turns an estimate into the real place, by up to a minute.
+
+**The hunter's position is throttled** because it changes continuously. Without a
+floor, a destination a few metres away is snapped by Apple Maps to the nearest road,
+the hunter is measured as hundreds of metres "off" that road, and the resulting
+renewal snaps differently and repeats — a stationary hunter beside a landed sonde
+producing Apple Maps calls every few seconds for a route that is not even drawn.
+
+Deviating from the route is not a separate trigger. A wrong turn moves the hunter,
+and 100 m of movement renews within the throttle anyway.
+
+**How movement is reported**: `CurrentLocationService` measures the hunter's
+perpendicular distance to the route polyline on each location update and raises
+`shouldUpdateRoute`. That is a **report, not an instruction** — it reaches the router
+through the same entry as every other trigger, and the policy above decides.
+
+**API efficiency**: a typical chase makes a handful of Apple Maps calls — the first
+route, then one per prediction that moves the landing point, plus at most one a
+minute while driving. There is no periodic recalculation, and a stationary hunter
+beside a landed sonde makes none at all.
 
 #### Automatic Route Calculation on GPS Availability
 

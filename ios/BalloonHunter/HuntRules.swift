@@ -461,3 +461,47 @@ nonisolated enum RoutePolicy {
         userToDestinationMetres >= closeRangeMetres
     }
 }
+
+// MARK: - When a route is renewed
+
+/// Whether a new route should be built now.
+///
+/// Two things can make the current route wrong: the destination moved, or the hunter
+/// did. They are not paced alike.
+///
+/// A **landing point** moves only when a prediction produces a new one, and
+/// predictions run on their own timer — so that trigger is already throttled upstream
+/// and must not be throttled again here. Doing so would delay the most important
+/// update of the hunt, the confirmed touchdown that turns an estimate into the real
+/// place, by up to a minute.
+///
+/// The **hunter's position** changes continuously, so it is the one trigger that
+/// needs a floor under it. Without one, a destination a few metres away is snapped by
+/// Apple Maps to the nearest road and the hunter is immediately "off" that road,
+/// which renews, which snaps differently, and repeats.
+///
+/// See FSD *Route Calculation Service → When a route is renewed*.
+nonisolated enum RouteRenewalPolicy {
+
+    /// How far the hunter must move before the route is worth rebuilding. Below this
+    /// the destination has not meaningfully changed relative to them.
+    static let significantHunterMovementMetres: CLLocationDistance = 100
+
+    /// Minimum interval between renewals caused by the hunter moving.
+    static let minimumInterval: TimeInterval = 60
+
+    static func shouldRenew(hasExistingRoute: Bool,
+                            transportModeChanged: Bool,
+                            landingPointMoved: Bool,
+                            hunterMovedMetres: CLLocationDistance,
+                            sinceLastHunterRenewal: TimeInterval) -> Bool {
+        // Nothing to preserve, or the hunter has just asked for something different.
+        if !hasExistingRoute || transportModeChanged { return true }
+
+        // Paced by the prediction that produced it.
+        if landingPointMoved { return true }
+
+        return hunterMovedMetres >= significantHunterMovementMetres
+            && sinceLastHunterRenewal >= minimumInterval
+    }
+}

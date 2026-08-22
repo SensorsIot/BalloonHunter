@@ -157,6 +157,12 @@ final class RouteCalculationService: ObservableObject {
     private var appSettings: AppSettings?
     private var cancellables = Set<AnyCancellable>()
     private var currentRouteTask: Task<Void, Never>?  // Track in-flight route calculation for cancellation
+    /// Where the hunter stood when the route on screen was built, and when a
+    /// hunter-movement renewal last happened. `RouteRenewalPolicy` needs both.
+    private var routeOriginAtLastCalculation: CLLocationCoordinate2D?
+    private var lastHunterRenewal: Date?
+    private var pendingTransportModeChange = false
+
     private let destinationMovementThreshold: CLLocationDistance = 100.0 // meters - recalculate if landing point moves this much
 
     init(currentLocationService: CurrentLocationService) {
@@ -181,8 +187,8 @@ final class RouteCalculationService: ObservableObject {
                     return
                 }
 
-                appLog("RouteCalculationService: User location available, calculating route", category: .service, level: .info)
-                self.calculateAndPublishRoute(from: locationData, to: destination)
+                appLog("RouteCalculationService: User location available, evaluating route", category: .service, level: .info)
+                self.calculateRoute(to: destination)
             }
             .store(in: &cancellables)
 
@@ -193,17 +199,14 @@ final class RouteCalculationService: ObservableObject {
             }
             .store(in: &cancellables)
 
-        // Listen for off-route triggers from location service
+        // The location service reports that the hunter has moved. Whether that
+        // warrants a new route is this service's decision, so the report goes
+        // through `calculateRoute(to:)` and `RouteRenewalPolicy` weighs it. Calling
+        // `calculateAndPublishRoute` here instead would rebuild unconditionally.
         currentLocationService.$shouldUpdateRoute
             .sink { [weak self] shouldUpdate in
-                guard let self = self, shouldUpdate else { return }
-
-                // Recalculate route if we have a destination and user location
-                if let destination = self.lastDestination,
-                   let userLocation = self.currentLocationService.locationData {
-                    appLog("RouteCalculationService: Off-route detected, recalculating route", category: .service, level: .info)
-                    self.calculateAndPublishRoute(from: userLocation, to: destination)
-                }
+                guard let self, shouldUpdate, let destination = self.lastDestination else { return }
+                self.calculateRoute(to: destination)
             }
             .store(in: &cancellables)
     }
@@ -222,11 +225,12 @@ final class RouteCalculationService: ObservableObject {
         // Save to AppSettings
         appSettings?.transportMode = mode
 
-        // Recalculate current route with new transport mode
-        if let destination = lastDestination,
-           let userLocation = currentLocationService.locationData {
-            appLog("RouteCalculationService: Recalculating route with new transport mode", category: .service, level: .info)
-            calculateAndPublishRoute(from: userLocation, to: destination, transportMode: mode)
+        // The hunter asked for a different kind of route, so the one on screen is
+        // wrong whatever else is unchanged. Recorded as a fact for the policy rather
+        // than forcing a rebuild past it.
+        pendingTransportModeChange = true
+        if let destination = lastDestination {
+            calculateRoute(to: destination)
         }
     }
 
@@ -249,26 +253,28 @@ final class RouteCalculationService: ObservableObject {
             }
         }
 
-        // Check if destination has moved significantly
-        var shouldRecalculate = false
-        if let previousDestination = lastDestination {
-            let distance = CLLocation(latitude: previousDestination.latitude, longitude: previousDestination.longitude)
+        // Whether a new route is warranted is this service's decision alone: the
+        // landing point moving and the hunter moving are reported to it as facts,
+        // and `RouteRenewalPolicy` weighs them.
+        let landingPointMoved = lastDestination.map { previous in
+            CLLocation(latitude: previous.latitude, longitude: previous.longitude)
                 .distance(from: CLLocation(latitude: destination.latitude, longitude: destination.longitude))
+                >= destinationMovementThreshold
+        } ?? false
 
-            if distance >= destinationMovementThreshold {
-                shouldRecalculate = true
-                appLog("RouteCalculationService: Landing point moved \(Int(distance))m - triggering recalculation", category: .service, level: .info)
-            } else {
-                appLog("RouteCalculationService: Landing point moved only \(Int(distance))m - keeping existing route", category: .service, level: .debug)
-                // Update destination but don't recalculate
-                lastDestination = destination
-                return
-            }
-        } else {
-            // First time - always calculate
-            shouldRecalculate = true
-            appLog("RouteCalculationService: Initial route calculation", category: .service, level: .info)
+        let hunterMoved = hunterMovementSinceLastRoute()
+        let sinceLastHunterRenewal = lastHunterRenewal.map { Date().timeIntervalSince($0) } ?? .greatestFiniteMagnitude
+
+        guard RouteRenewalPolicy.shouldRenew(hasExistingRoute: currentRoute != nil,
+                                             transportModeChanged: pendingTransportModeChange,
+                                             landingPointMoved: landingPointMoved,
+                                             hunterMovedMetres: hunterMoved,
+                                             sinceLastHunterRenewal: sinceLastHunterRenewal) else {
+            appLog(String(format: "RouteCalculationService: Route still current - landing point steady, hunter moved %.0fm - keeping it", hunterMoved), category: .service, level: .debug)
+            lastDestination = destination
+            return
         }
+        pendingTransportModeChange = false
 
         // Store new destination
         lastDestination = destination
@@ -278,10 +284,21 @@ final class RouteCalculationService: ObservableObject {
             return
         }
 
-        if shouldRecalculate {
-            appLog("RouteCalculationService: User location available at [\(String(format: "%.4f", userLocation.latitude)), \(String(format: "%.4f", userLocation.longitude))], proceeding with route calculation", category: .service, level: .info)
-            calculateAndPublishRoute(from: userLocation, to: destination)
+        if !landingPointMoved && hunterMoved >= RouteRenewalPolicy.significantHunterMovementMetres {
+            lastHunterRenewal = Date()
         }
+        routeOriginAtLastCalculation = CLLocationCoordinate2D(latitude: userLocation.latitude, longitude: userLocation.longitude)
+
+        appLog(String(format: "RouteCalculationService: Renewing route - landing point moved: %@, hunter moved %.0fm", landingPointMoved ? "yes" : "no", hunterMoved), category: .service, level: .info)
+        calculateAndPublishRoute(from: userLocation, to: destination)
+    }
+
+    /// How far the hunter has moved since the route on screen was built.
+    private func hunterMovementSinceLastRoute() -> CLLocationDistance {
+        guard let origin = routeOriginAtLastCalculation,
+              let now = currentLocationService.locationData else { return 0 }
+        return CLLocation(latitude: origin.latitude, longitude: origin.longitude)
+            .distance(from: CLLocation(latitude: now.latitude, longitude: now.longitude))
     }
 
     /// Calculate and publish route - called by state machine

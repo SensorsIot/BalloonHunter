@@ -130,4 +130,60 @@ final class CloseRangeGuidanceTests: XCTestCase {
         XCTAssertEqual(RoutePolicy.closeRangeMetres, 200,
                        "the same radius that hides the route and starts foot guidance")
     }
+
+    // MARK: - When a route is renewed
+    //
+    // A route is renewed when the landing point moves, or when the hunter has moved
+    // significantly. Only the second is throttled: the landing point moves only when
+    // a prediction produces a new one, and predictions are paced by their own timer,
+    // whereas the hunter's position changes continuously.
+    // See FSD *Route Calculation Service → When a route is renewed*.
+
+    private func renew(landingMoved: Bool = false,
+                       moved: CLLocationDistance = 0,
+                       since: TimeInterval = 3600,
+                       hasRoute: Bool = true,
+                       modeChanged: Bool = false) -> Bool {
+        RouteRenewalPolicy.shouldRenew(hasExistingRoute: hasRoute,
+                                       transportModeChanged: modeChanged,
+                                       landingPointMoved: landingMoved,
+                                       hunterMovedMetres: moved,
+                                       sinceLastHunterRenewal: since)
+    }
+
+    /// The case that produced eight Apple Maps calls in six minutes: the sonde is
+    /// down, its landing point cannot move, and the hunter is sitting still.
+    func testRenew_landedAndStationaryNeverRenews() {
+        XCTAssertFalse(renew(), "nothing a route depends on has changed")
+        XCTAssertFalse(renew(moved: 99), "shuffling about is not going somewhere else")
+    }
+
+    /// Not throttled. A new landing point only exists because a prediction produced
+    /// one, and those are already paced. Throttling here would delay a confirmed
+    /// touchdown — the moment the destination becomes the real place — by a minute.
+    func testRenew_landingPointMoveIsNeverThrottled() {
+        XCTAssertTrue(renew(landingMoved: true, since: 0),
+                      "a moved landing point is acted on at once, whenever it arrives")
+        XCTAssertTrue(renew(landingMoved: true, since: 1))
+    }
+
+    /// Throttled. The hunter's position changes continuously, so this is the one
+    /// trigger that needs a floor under it.
+    func testRenew_hunterMovementIsThrottled() {
+        XCTAssertTrue(renew(moved: 100, since: 60))
+        XCTAssertFalse(renew(moved: 100, since: 59), "a renewal a moment ago is enough for now")
+        XCTAssertFalse(renew(moved: 99, since: 3600), "moving less than the threshold is not moving")
+    }
+
+    /// A first route and an explicit change of transport are not throttled: there is
+    /// nothing to show, or the hunter has just asked for something different.
+    func testRenew_firstRouteAndModeChangeAreImmediate() {
+        XCTAssertTrue(renew(since: 0, hasRoute: false))
+        XCTAssertTrue(renew(since: 0, modeChanged: true))
+    }
+
+    func testRenew_thresholdsAreTheAgreedOnes() {
+        XCTAssertEqual(RouteRenewalPolicy.significantHunterMovementMetres, 100)
+        XCTAssertEqual(RouteRenewalPolicy.minimumInterval, 60)
+    }
 }
