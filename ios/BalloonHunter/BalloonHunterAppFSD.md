@@ -222,8 +222,7 @@ This architecture ensures that:
 - **Connection State Transitions:**
   - `notConnected` → `readyForCommands`: When first BLE packet (any type) is received
   - `readyForCommands` → `dataReady`: When Type 1 packet (telemetry with position) is received
-  - `dataReady` → `readyForCommands`: When no Type 1 packets received for 10 seconds (only Type 0/2/3 status packets)
-  - Background staleness check runs every 3 seconds with 30-second threshold for final downgrade
+  - `dataReady` → `readyForCommands`: When no Type 1 packet has arrived for **30 seconds** (only Type 0/2/3 status packets). The staleness check runs every 3 seconds; 30 s is the one threshold, and it is the only delay in the whole BLE/APRS transition path (see *Key Design Principles → No Debouncing*).
 - **Type 1 Packet Requirement:** `hasTelemetry` returns `true` only when in `dataReady` state (actively receiving Type 1 packets with position data). Type 0 (device status), Type 2 (partial telemetry), and Type 3 (settings) packets do NOT qualify as telemetry.
 - **UI Integration**: BLE icon color reflects connection state - red for readyForCommands (connected but no position data), green flash animation for active telemetry reception
 
@@ -283,7 +282,7 @@ Each state defines explicit entry functionality and exit criteria:
 **State: `liveBLELanded`**
 - **Functionality**:
   - Disables APRS polling
-  - **Updates landing point** to current balloon position and triggers route calculation — NEW
+  - **Locks the landing point to the balloon's actual position** and triggers route calculation. Close-range BLE seeing a fixed, near-ground position is the *confirmed touchdown* — the one case where the marker leaves the prediction. See *How a Landing Is Determined*.
   - Calls chain: Landing point tracking with BLE balloon position → routing
   - Map shows balloon track, landing point, landing point track, predicted path, route
   - Data panel shows motion metrics as zero
@@ -315,10 +314,10 @@ Each state defines explicit entry functionality and exit criteria:
 **State: `aprsLanded`**
 - **Functionality**:
   - Enables APRS polling
-  - **Updates landing point** to current balloon position and triggers route calculation — NEW
+  - **Keeps the predicted landing point** and routes to it. APRS going quiet says the flight is over, not where the balloon lies — the last frame was still at altitude and descending, so it is never the destination. Only a confirmed touchdown moves the marker. See *How a Landing Is Determined*.
   - **Reads balloon context** (BalloonTrackService.readBalloonContext()) — the delta-fetch keeps the track complete (only when the previous state was not `startup`)
-  - Calls chain: Landing point tracking with APRS balloon position → Routing
-  - Map shows balloon track, landing point, landing point track
+  - Calls chain: Landing point tracking → Routing
+  - Map shows balloon track, landing point, landing point track, and the predicted descent line (kept for the drive)
   - Data panel shows motion metrics as zero
   - Frequency sync is **not** performed here. It runs once per startup and once per sonde change, and asks the user before changing anything — see *Startup → Step 4c: Frequency Sync*.
 - **Transitions**:
@@ -428,7 +427,7 @@ serviceCoordinator.openInAppleMaps() // Uses location + routing + settings
 
 Do not open a new file without asking the user
 
-#### Complete Service Layer Organization (26 Swift files)
+#### Complete Service Layer Organization (22 Swift files)
 
 The codebase is organized into logical layers with clear separation of responsibilities:
 
@@ -462,15 +461,6 @@ The codebase is organized into logical layers with clear separation of responsib
 - `Settings.swift` - UserSettings and AppSettings with persistence management
 - `DebugCSVLogger.swift` - Development telemetry logging and debugging support
 
-**Service Communication Matrix:**
-| Service | Access Pattern | Coordinator Integration |
-|---------|---------------|------------------------|
-| BLECommunicationService | Direct + Coordinated | Startup, frequency sync |
-| BalloonPositionService | Direct | State machine updates |
-| PredictionService | Direct | Timer control only |
-| CurrentLocationService | Coordinated | Route calculations |
-| PersistenceService | Direct | Background operations |
-
 #### BalloonHunterApp.swift:
 
 The main entry point of the application. It initializes the dependency container (`AppServices`), creates the `ServiceCoordinator`, injects both (plus shared services such as `LandingPointTrackingService`) into the SwiftUI environment, and manages scene lifecycle tasks like persistence saves and notification routing.
@@ -501,56 +491,15 @@ Contains `BalloonPositionService`, `BalloonTrackService`, and `LandingPointTrack
 
 #### RoutingServices.swift:
 
-**Apple Maps Integration with Performance Optimization:**
-
-Comprehensive routing service with sophisticated caching and proximity-aware behavior:
-
-**Cache Strategy:**
-```swift
-private func generateCacheKey(start: CLLocationCoordinate2D,
-                             end: CLLocationCoordinate2D,
-                             mode: TransportationMode) -> String {
-    let startKey = "\(round(start.latitude * 100)/100)-\(round(start.longitude * 100)/100)"
-    let endKey = "\(round(end.latitude * 100)/100)-\(round(end.longitude * 100)/100)"
-    return "route-\(startKey)-\(endKey)-\(mode.rawValue)"
-}
-```
-
-**Proximity Rules:**
-- **200m Threshold**: Route visibility automatically hidden when user within 200m of landed balloon
-- **Recalculation Triggers**: User movement >100m, transport mode change, landing point updates
-- **Performance Optimization**: Cache prevents redundant Apple Maps API calls
-
-**Transport Mode Support:**
-```swift
-enum TransportationMode: String, CaseIterable {
-    case car = "car"
-    case bike = "bike"
-
-    var directionsMode: String {
-        switch self {
-        case .car: return MKLaunchOptionsDirectionsModeDriving
-        case .bike: return MKLaunchOptionsDirectionsModeCycling
-        }
-    }
-}
-```
-
-**Advanced Features:**
-- **Bike Mode Optimization**: 30% time reduction for conservative Apple Maps bicycle estimates
-- **Straight-line Fallback**: Ensures UI always has path display even without Apple Maps coverage
-- **Cache Performance**: TTL-based expiration, LRU eviction, coordinate quantization
-- **iOS Version Handling**: Cycling directions on iOS 14+, walking fallback for older versions
-
-**Integration Points:**
-- **Apple Maps Hand-off**: Direct navigation launch with transport mode preservation
-- **Map Overlay**: Green route line (3px) with real-time updates
-- **Data Panel**: ETA and distance calculations for recovery planning
-- **Notification System**: Updated destination handling for background navigation
+Houses `RouteCalculationService` and the `RoutingCache` actor: Apple Maps
+directions from the hunter to the landing point, with a cache keyed on
+origin/destination/mode, transport modes (car, bike), the straight-line fallback,
+and the proximity rule that hides the route inside 200 m. Fully specified in
+*Services → Route Calculation Service*.
 
 #### PersistenceService.swift:
 
-Dedicated file for the `PersistenceService`, responsible for simple file-based persistence of current sonde state (track, landing history) and user settings. Uses single-sonde snapshot model with 3 JSON files.
+Dedicated file for the `PersistenceService`, responsible for simple file-based persistence of current sonde state (track, landing history) and user settings. Single-sonde snapshot model — see *Services → Persistence Service* for the file list.
 
 #### BLEService.swift:
 
@@ -558,144 +507,32 @@ Contains the `BLECommunicationService`, which is responsible for all Bluetooth L
 
 #### MapPresenter.swift:
 
-**Hybrid Architecture Pattern**: MapPresenter uses both direct service access and ServiceCoordinator integration strategically:
+Owns everything the map needs and nothing else: annotation generation, camera and
+zoom, overlay-state transformation (track polyline, prediction path, route), user
+intents (heading mode, trigger prediction, open Apple Maps), and display
+formatting. It reads single-service data directly and goes through
+`ServiceCoordinator` only for cross-service state — the general rule is in
+*Direct vs Coordinated Communication Patterns* above.
 
-- **Direct Service Access**: Single-service data that's map-specific (balloon position, track points, landing points)
-- **Coordinated Access**: Cross-service operations requiring multiple services (prediction paths, user routes)
-- **Map-Specific Coordination**: Aggregates, transforms, and republishes map state without duplicating coordinator logic
-
-**Implementation Pattern:**
-```swift
-@MainActor
-final class MapPresenter: ObservableObject {
-    // DIRECT ACCESS: Single-service data
-    private let balloonPositionService: BalloonPositionService
-    private let balloonTrackService: BalloonTrackService
-
-    // COORDINATED ACCESS: Cross-service operations
-    private let coordinator: ServiceCoordinator
-
-    // MAP-SPECIFIC STATE: Transformed for map display
-    @Published private(set) var annotations: [MapAnnotationItem] = []
-    @Published private(set) var region: MKCoordinateRegion?
-
-    private func bindServices() {
-        // Direct subscription to single services
-        balloonPositionService.$landingPoint
-            .sink { [weak self] point in
-                self?.landingPoint = point
-                self?.refreshAnnotations() // Map-specific transformation
-            }
-            .store(in: &cancellables)
-
-        // Coordinated access for complex operations
-        coordinator.$predictionPath
-            .sink { [weak self] path in
-                self?.predictionPath = path
-            }
-            .store(in: &cancellables)
-    }
-}
-```
-
-**Responsibilities:**
-- Map annotation generation and management
-- Camera position and zoom level coordination
-- Map overlay state transformation (track lines, prediction paths, routes)
-- User intent handling (toggle heading mode, trigger predictions, open Apple Maps)
-- Distance calculations and formatting for map display
+Two decisions live here and nowhere else, because splitting them caused
+regressions: **predicted-path visibility** (`predictionPathVisible` — see *How a
+Landing Is Determined*) and **track simplification for drawing**
+(`simplifiedForDrawing()` — see *Balloon Track Service*).
 
 #### TrackingMapView.swift:
 
-**Primary Map Interface (70% of Screen):**
-
-Comprehensive map view with sophisticated overlay system and user controls:
-
-**Layout Structure:**
-```swift
-VStack(spacing: 0) {
-    // Top control panel with horizontal scroll
-    ScrollView(.horizontal) {
-        HStack(spacing: 12) {
-            Button("Settings") // Gear icon
-            Picker("Transport Mode") // Car/Bike segmented control
-            Button("All/Point") // Show all annotations or set landing point
-            Button("Heading Mode") // Location/compass toggle
-            Button("Buzzer") // Speaker mute control
-            Button("Apple Maps") // External navigation (when landing point available)
-        }
-    }
-
-    // Map with 8 annotation types (70% height)
-    Map(position: $position, interactionModes: mapPresenter.isHeadingMode ? .zoom : .all) {
-        // 1. Balloon Track: Historic track as thin red line (2px)
-        // 2. Balloon Predicted Path: Thick blue line (4px, flying mode only)
-        // 3. Planned Route: Green path from user to landing point (3px)
-        // 4. Landing History: Purple polyline connecting Sondehub estimates (2px)
-        // 5. User Position: Runner icon (figure.run) with blue circle background
-        // 6. Balloon Live Position: balloon.fill icon, color-coded by phase
-        // 7. Burst Point: burst.fill icon, orange (ascending mode only)
-        // 8. Landing Point: target icon, purple background (when available)
-    }
-
-    // Map type toggle overlay (top-right corner)
-    Button("Map Type") // map/map.fill icon - toggles between standard and satellite view
-
-    // Distance overlay (landing mode only)
-    if isLanded {
-        DistanceOverlayView(distanceMeters: mapPresenter.distanceToBalloon)
-    }
-}
-```
-
-**Color Coding System:**
-- **Green**: Ascending balloon phase
-- **Orange**: Descending above 10k altitude
-- **Red**: Descending below 10k altitude
-- **Purple**: Landed balloon phase
-- **Blue**: Prediction paths and user position
-- **Gray**: Unknown phase
-
-**Interactive Features:**
-- Heading mode: User location tracking with compass orientation
-- Free mode: Full pan/zoom interaction
-- Map controls: Scale, user location button (compass removed - functionality covered by heading mode button)
-- Map type toggle: Standard/satellite view switcher overlaid on top-right corner of map
-- Zoom preservation between mode switches
+The primary map interface (about 70 % of the screen): the button row, the map
+with its overlays and annotations, and the close-range distance overlay. It is
+presentation only — it draws what `MapPresenter` publishes and decides nothing.
+The overlays, their colours and the button row are specified in
+*Tracking View → Map Overlays* and *Buttons Row*.
 
 #### DataPanelView.swift:
 
-**Telemetry Display Panel (30% of Screen):**
-
-Two-table layout providing comprehensive real-time data display:
-
-**Left Table - Live Telemetry:**
-```
-Row 1: Serial Name    | Altitude (m)     | Timestamp
-Row 2: Position       | Speed (m/s)      | Course (°)
-Row 3: Environment    | Signal (dBm)     | Battery (%)
-Row 4: Descent Rate   | Distance (km)    | Status
-```
-
-**Right Table - Predictions & Route:**
-```
-Row 1: Burst Alt (m)  | Landing Time     | Route Info
-Row 2: Flight Time    | Distance (km)    | ETA
-Row 3: Prediction     | Transport Mode   | Status
-Row 4: Cache Stats    | Last Updated     | Version
-```
-
-**Data Sources:**
-- **ServiceCoordinator**: Consolidated cross-service data (route, predictions)
-- **Direct Service Access**: Single-service data for performance
-- **Real-time Updates**: Combine-driven reactive updates
-- **Formatted Strings**: Pre-formatted by services for display consistency
-
-**Layout Implementation:**
-- Grid-based responsive layout adapting to screen size
-- Automatic text scaling for accessibility
-- Color-coded status indicators
-- Smooth animation transitions for data changes
+The telemetry panel below the map (about 30 % of the screen): a `Grid`-based
+two-table layout fed by pre-formatted strings from the services. The exact fields,
+their tables, colours and the stale-telemetry frame are specified in
+*Tracking View → Data Panel*.
 
 #### SettingsView.swift:
 
@@ -703,43 +540,11 @@ Contains the UI for all settings, including the main "Sonde Settings" and the ta
 
 #### PredictionService.swift:
 
-**Tawhiri API Integration with Advanced Caching:**
-
-Implements sophisticated trajectory prediction using the Tawhiri API with performance-optimized caching:
-
-**Caching Strategy:**
-```swift
-// 5-minute time bucket caching with coordinate rounding
-private func generateCacheKey(lat: Double, lon: Double, altitude: Double, time: Date) -> String {
-    let roundedLat = round(lat * 100) / 100  // 0.01° precision (~1km)
-    let roundedLon = round(lon * 100) / 100
-    let roundedAlt = round(altitude / 1000) * 1000  // 1km precision
-    let timeBucket = Int(time.timeIntervalSince1970 / 300) * 300  // 5-min buckets
-    return "pred-\(roundedLat)-\(roundedLon)-\(roundedAlt)-\(timeBucket)"
-}
-```
-
-**Descent Rate:** the configured value from Settings, unchanged, at every
-altitude. See *Descent Rate and Parachute Behaviour* for why the app must not
-substitute the observed rate.
-
-
-**State Machine Control:**
-- Predictions enabled only in flying states (ascending, descending)
-- Manual prediction triggers available via user interface
-- Timer paused during landed state to conserve API quota
-
-**Cache Performance:**
-- TTL-based expiration (5-minute default)
-- LRU eviction for memory management
-- Hit/miss metrics tracking for optimization
-- Coordinate quantization reduces cache misses
-
-**API Integration:**
-- Request throttling and error handling
-- Graceful degradation for network failures
-- Response validation and plausibility checking
-- Time calculation strings published directly for UI consumption
+Trajectory prediction against SondeHub's Tawhiri API, with the co-located
+`PredictionCache` (5-minute time buckets, coordinate quantisation, LRU eviction).
+Specified in *Services → Prediction Service*; the descent-rate rule is in
+*Descent Rate and Parachute Behaviour*, and when predictions run is in
+*How a Landing Is Determined*.
 
 #### DebugCSVLogger.swift:
 
@@ -951,11 +756,12 @@ track back.
 5. If the fetch is empty *and* the track is still empty, fall back to per-frame streaming
    recovery.
 
-There is no separate gap-hunting function. The former `fillTrackGapsFromAPRS` (which always
-pulled a fixed `3d` window and diffed by timestamp) was replaced by this delta-fetch:
-timestamp diffing was fragile against the BLE/APRS relay skew, and the fixed `3d` window
-re-downloaded the entire history on every foreground return or BLE↔APRS handoff. The
-position-keyed merge and gap-sized bucket fix both.
+**There is no separate gap-hunting function**, and there must not be one. An
+earlier design kept a second path that always pulled a fixed `3d` window and
+diffed it by timestamp; both halves were wrong. Timestamp diffing is fragile
+against the BLE/APRS relay skew, and a fixed `3d` window re-downloaded the entire
+history on every foreground return and every BLE↔APRS handoff. The position-keyed
+merge and the gap-sized bucket replace both, in this one function.
 
 ### Current Location Service
 
@@ -1083,7 +889,7 @@ Hold the authoritative telemetry snapshot for the hunted sonde, derive the ballo
 - **Availability State**: Manages `aprsDataAvailable` based on APRS connection status and telemetry flow. BLE state managed by BLECommunicationService.
 - **Position Tracking**: Caches the latest packet, updating timestamp and derived values. Recomputes distance when user location changes.
 - **Balloon Phase Detection**: The three algorithms and their priority chain live in `LandingDetector`, a pure value type with no Combine or service dependencies, so the thresholds that decide flying-versus-landed can be unit-tested in isolation. `BalloonPositionService` calls it and publishes the answer. Priority order:
-  1. `landed` (highest priority): Track-based landing detected (BalloonTrackService.trackBasedLandingDetected) — NEW
+  1. `landed` (highest priority): Track-based landing detected (BalloonTrackService.trackBasedLandingDetected)
   2. `landed`: APRS age > 120s
   3. `landed`: Vector analysis (BalloonTrackService) - net speed < 3 km/h AND altitude < 3000m
   4. `ascending`: vertical speed > 0
@@ -1110,7 +916,7 @@ Build the flight history, smooth velocities, detect landings, derive descent met
 - `currentBalloonTrack`, `currentEffectiveDescentRate`.
 - `currentBalloonName` is **not** published here. It is a read-only view of `BalloonPositionService.currentBalloonName`, which is the only place the hunted serial is stored — see *One name for the hunted sonde* below.
 - `trackUpdated` (Combine subject), `landingPosition`, `balloonPhase`.
-- `trackBasedLandingDetected` (Bool), `trackBasedLandingTime` (Date?) — NEW: Flags for track-based landing detection.
+- `trackBasedLandingDetected` (Bool), `trackBasedLandingTime` (Date?): Flags for track-based landing detection.
 - `motionMetrics` struct (raw horizontal/vertical speeds, smoothed horizontal/vertical speeds, adjusted descent rate).
 - `isTelemetryStale` flag for UI highlighting.
 
@@ -1128,50 +934,39 @@ Build the flight history, smooth velocities, detect landings, derive descent met
 Selecting a sonde (startup **and** every new sonde go through `startTrackingSonde`)
 does four things, in one ordered chain, each owned by one place:
 
-1. **`readBalloonContext(serial)`** — *the* SondeHub track read: keep the whole
-   track complete and publish the latest position (its last point), with the
-   recovery status checked separately by the caller. It is a **delta-fetch**: it
-   sizes the request from the gap since the newest frame it already holds — the
-   whole flight (`3d`) when the track is empty, only the last minutes when it is
-   nearly current — and merges the result by physical position. It replaces the
-   old pair `forceImmediateFetch` (position) + startup `fillTrackGapsFromAPRS`
-   (track), which fetched a fixed 3-day payload **twice**.
+1. **`readBalloonContext(serial)`** — the SondeHub track read: it keeps the track
+   complete and publishes the latest position (its last point). How it sizes and
+   merges its fetch is specified in *APRS Service → APRS Telemetry: the
+   delta-fetch*; recovery status is checked separately by the caller.
 2. **track overlay** — the red track + balloon marker draw from that data
    immediately; nothing downstream is waited on.
 3. **prediction overlay** — one prediction from the published position → the blue
    path + landing point. Then re-prediction is flying-only (`PredictionPolicy`).
 4. **route overlay** — the green route follows from the landing point.
 
-`readBalloonContext` is the **only** function that fetches the red track. There is
-no separate gap-repair path: the same delta-fetch serves selection, a BLE-loss
-handoff, a foreground return, and each APRS state entry. On a state entry the
-state machine calls it only when the previous state was not `startup`, so
-selection's context read is never immediately repeated. Recovery-status and the
-continuous poll run separately.
+**When it runs:** on a sonde change, at startup, on returning to the foreground
+mid-flight, and on entering an APRS state — the last only when the previous state
+was not `startup`, so selection's context read is never immediately repeated.
 
-The **live poll** (`fetchSondeBySerial`) fetches only a short window
-(`pollTelemetryWindow`, 30 min) because it uses just the latest frame — so it is
-cheap even for a long flight and never re-downloads the history. If that
-window is empty (a landed/stale sonde) it returns quietly; it does **not** fall
-back to the slow full streaming. The only full-history fetch is
-`readBalloonContext`'s first load of an empty track (and its
-`recoverPositionViaStreaming` fallback for a sonde older than 3 days); every
-later `readBalloonContext` pulls only the delta.
+The **live poll** (`fetchSondeBySerial`) is a different thing and stays cheap: it
+fetches only a short window (`pollTelemetryWindow`, 30 min) because it uses just
+the latest frame. If that window is empty (a landed/stale sonde) it returns
+quietly; it does **not** fall back to the slow full streaming.
 
-2a. **Track merge, deduplicated by physical position** — `readBalloonContext` merges
-its fetched points with `Array.mergingByPosition` (`BalloonTrackPoint.positionKey`,
-rounded to ~1 m: 5 decimals of lat/lon, 1 m of altitude). A genuine new position is
-inserted; an APRS copy of a position the track already holds is dropped.
-
-   Position, not timestamp, is the identity because BLE and APRS decode the *same* sonde frame and report identical GPS position, but their timestamps differ by the relay latency — BLE stamps the phone's arrival time (direct RF decode), APRS carries the sonde's frame time as recorded by SondeHub. A per-second timestamp key could not tell an APRS point was a copy of one BLE already held, and inserted both; position is immune to the skew and needs no time-window constant. Live APRS is otherwise suppressed while BLE is the active source, so APRS enters the track only through this merge.
+**Why the merge keys on position** — BLE and APRS decode the *same* sonde frame and
+report identical GPS position, but their timestamps differ by the relay latency:
+BLE stamps the phone's arrival time (direct RF decode), APRS carries the sonde's
+frame time as recorded by SondeHub. A per-second timestamp key could not tell that
+an APRS point was a copy of one BLE already held, and inserted both; position is
+immune to the skew and needs no time-window constant. Live APRS is otherwise
+suppressed while BLE is the active source, so APRS enters the track only through
+this merge.
 
    > **Measured — W4214924, 21 Aug 2026.** BLE dropped, returned briefly for ~6 s near 1551 m, then dropped again. A backfill re-inserted APRS copies of those 6 BLE points 17 s later with identical lat/lon/alt, producing an interleaved sawtooth and repeated `RED TRACK JUMP` warnings. Under a 1 s timestamp key the copies landed in different slots and were not caught; position keying drops them.
 
-   **Accepted limitation:** position keying collapses same-position samples in *backfilled* data to one point. Pre-launch pad samples are irrelevant. The one case it affects is a balloon that lands, keeps transmitting, and is only seen via a backfill (e.g. the app was backgrounded) — track-based *stationary-period* detection cannot fire on a single collapsed point there. Live landings are unaffected (BLE per-second), and a balloon that goes silent is still caught by the APRS-age rule, so the exposure is narrow and deliberate.
+**Accepted limitation:** position keying collapses same-position samples in *backfilled* data to one point. Pre-launch pad samples are irrelevant. The one case it affects is a balloon that lands, keeps transmitting, and is only seen via a backfill (e.g. the app was backgrounded) — track-based *stationary-period* detection cannot fire on a single collapsed point there. Live landings are unaffected (BLE per-second), and a balloon that goes silent is still caught by the APRS-age rule, so the exposure is narrow and deliberate.
 
-   It runs when the state machine enters an APRS state, on a sonde change, at startup, and on returning from the background mid-flight.
-
-   **Background telemetry — by design, the app does not poll in the background; it backfills on foreground.** iOS suspends the app in the background (the `bluetooth-central` mode only keeps it alive while a BLE peripheral is connected, and even then no state restoration means a full close stops everything). Rather than fight this with a `location` background mode and its battery/permission cost, the app relies on SondeHub retaining the whole flight: on return to the foreground `readBalloonContext` fetches exactly the window since its newest held frame — a short delta after a brief absence, up to `3d` if the track was empty — and merges it by position, reconstructing whatever was missed while suspended — however long the app was away. This covers both outcomes: a balloon still flying on resume (foreground step 3, forced; and entering `aprsFlying`) and one that landed while the app was away (entering `aprsLanded`, line 463). The position dedup makes the backfill safe against any BLE points already in the track. The only thing not recoverable is BLE's ~17 s-ahead precision during the gap — SondeHub isn't fed BLE — but APRS fills the positions, so the track is complete.
+**Background telemetry — by design, the app does not poll in the background; it backfills on foreground.** The app relies on SondeHub retaining the whole flight: on return to the foreground `readBalloonContext` delta-fetches whatever was missed and merges it by position, reconstructing the gap however long the app was away. This covers both outcomes — a balloon still flying on resume, and one that landed while the app was away. The position dedup makes the backfill safe against BLE points already in the track. The only thing not recoverable is BLE's ~17 s-ahead precision during the gap, since SondeHub isn't fed BLE; APRS fills the positions, so the track is complete. What the app declares and why is in *Phase 1 → What runs in the background*.
 
    Landing detection runs afterwards only in two cases: the track was already loaded and its last packet is over 20 minutes old, or the caller forced it. Skipping it on routine updates matters — detection takes over a second on a large track.
 
@@ -1180,9 +975,9 @@ inserted; an APRS copy of a position the track already holds is dropped.
 3. **Speed smoothing** — Maintains Hampel buffers (window 10, k=3) to reject outliers, applies deadbands near zero, and feeds an exponential moving average (τ = 10 s) to publish smoothed horizontal/vertical speeds alongside the raw telemetry values within `motionMetrics`.
 4. **Adjusted descent rate** — Looks back 60 s over the track, computes interval descent rates, takes the median, and keeps a 20-entry rolling average; the latest value is exposed through `motionMetrics` (and zeroed when the balloon is landed).
 
-5. **Landing detection** — **MOVED TO BALLOONPOSITIONSERVICE**: Vector analysis algorithm calculates net movement across dynamic 5-20 packet windows. Landing detected when net speed < 3 km/h AND altitude < 3000m. Confidence ≥ 75 % flips `balloonPhase` to `.landed` and averages the buffered coordinates for the landing point; confidence < 40 % for three consecutive updates (or too few samples) returns the phase to the appropriate flight state. APRS packets older than 120 s also force `.landed` so stale data doesn’t masquerade as an in-flight balloon.
+5. **Landing detection** — the algorithms and their priority chain belong to `LandingDetector`; `BalloonPositionService` calls it and publishes the verdict. The thresholds are specified once, in *Balloon Position Service -> Balloon Phase Detection*, and are not repeated here. What this service contributes is the *track-based* input to that chain (5a below) and the vector-analysis window: net movement across dynamic 5-20 packet windows, where confidence >= 75 % flips `balloonPhase` to `.landed` and averages the buffered coordinates for the landing point, while confidence < 40 % for three consecutive updates (or too few samples) returns the phase to the appropriate flight state.
 
-5a. **Track-based landing detection and automatic track removal after landing position**  — `detectTrackBasedLanding()` analyzes the entire track after APRS fill completes to find landing point and remove post-landing data. 
+5a. **Track-based landing detection and automatic track removal after landing position**  — `detectTrackBasedLanding()` analyzes the entire track after a context read completes to find landing point and remove post-landing data. 
 **Standard case**: Balloon lands and stays at landing location - track naturally ends at landing, no truncation needed (handled by real-time landing detection). **Special cases requiring track truncation** (checked in order):
 
    - **Telemetry blackout scenario**: Balloon lands, signal lost for >20 minutes after burst, then recovered/moved and transmits again from different location. Landing = last point before gap. Track truncated at gap - everything after is post-recovery transmission from recovery team. User is notified via local notification that post-landing track points were removed due to detected blackout.
@@ -1199,12 +994,7 @@ inserted; an APRS copy of a position the track already holds is dropped.
      changes latitude or longitude, so position alone would call a fast descent a
      landing. Altitude is what separates the two.
 
-     **What the hunter sees.** A local notification saying post-landing points
-     were removed, so the track shortening is never a silent surprise. This takes
-     priority over every other landing test, and runs after an APRS fill and on a
-     restored track at startup.
-
-**User notification**: When track truncation occurs, the app sends a short local notification explaining why points were removed (e.g., "Landing detected: Removed 147 post-landing track points from recovery period"). This helps the user understand track changes and confirms the landing detection worked correctly.
+**User notification**: whenever truncation occurs — blackout or stationary period — the app sends a short local notification saying why points were removed (e.g. "Landing detected: Removed 147 post-landing track points from recovery period"), so the track shortening is never a silent surprise. Track-based detection takes priority over every other landing test, and runs after a context read and on a restored track at startup.
 
 5b. **Track-based landing detection trigger scenarios** — To avoid unnecessary CPU-intensive analysis (1.5+ seconds on 10K+ point tracks), track-based landing detection runs conditionally based on specific scenarios rather than on every APRS poll. The following scenarios determine when detection should run and when track recording should continue or stop:
 
@@ -1221,10 +1011,10 @@ inserted; an APRS copy of a position the track already holds is dropped.
    **Scenario 3: App Returns from Background During Flight**
    When the user backgrounds the app during an active flight and later returns to the foreground, the app must fetch any APRS data accumulated during the background period and run track-based landing detection to determine if the balloon landed while the app was inactive. Detection method: Monitor app lifecycle using SwiftUI's `scenePhase` environment variable. When `scenePhase` transitions from `.background` to `.active`, check if the current state is a flying state (`liveBLEFlying` or `aprsFlying`). If flying, the foreground-resume path calls `readBalloonContext(serial:)` for the hunted sonde, which delta-fetches whatever accumulated while the app was suspended, merges it by position, and runs track-based detection (`detectTrackBasedLanding()`) over the resulting track. Track recording continues normally for all telemetry sources.
 
-   **Scenario 5: Landing Detected with BLE Active**
+   **Scenario 4: Landing Detected with BLE Active**
    When the balloon has landed but BLE remains connected and active (state machine is in `liveBLELanded`), track recording must continue because the hunter needs real-time position updates as they approach the balloon on foot or by vehicle. BLE provides live telemetry as the hunter gets closer, which is critical for final navigation to the landing site. Detection method: The state machine has already transitioned to `liveBLELanded` based on real-time BLE landing detection (5-packet window showing net speed below 3 km/h and altitude below 3000 meters). APRS polling stops (already implemented via `aprsService.disablePolling()` in the `liveBLELanded` state handler). In `processPositionData()`, the state check allows track recording to continue for all states except `startup`, `waitingForAPRS`, and `noTelemetry`. Since `liveBLELanded` is not in the exclusion list, BLE track points continue to be recorded and published. Track recording continues as long as BLE remains active, regardless of landing status.
 
-   **Summary**: Track-based landing detection runs conditionally (Scenarios 1 and 3 only). Track recording behavior depends on data source availability: stops in `aprsLanded` (Scenario 2) when no BLE available, continues in `liveBLELanded` (Scenario 5) when BLE active because hunter needs live updates during approach.
+   **Summary**: Track-based landing detection runs conditionally (Scenarios 1 and 3 only). Track recording behavior depends on data source availability: stops in `aprsLanded` (Scenario 2) when no BLE available, continues in `liveBLELanded` (Scenario 4) when BLE active because hunter needs live updates during approach.
 
 6. **Staleness** — A 1 Hz timer flips `isTelemetryStale = true` whenever the latest telemetry is more than 3 s old.
 7. **Persistence** — Saves the track every 10 telemetry points via `saveBalloonTrack`. Helpers expose the full track for app-shutdown persistence (`saveOnAppClose`). CSV logging for each telemetry sample is routed to `DebugCSVLogger`.
@@ -1328,7 +1118,7 @@ measured constraint taken from these very structs.
 
 #### Notes
 
-- Predictions are skipped entirely if no telemetry is available or the balloon is already marked as landed.
+- Predictions are skipped entirely if no telemetry is available. **Re-prediction** is flying-only (`PredictionPolicy.shouldPredict`), so a landed balloon is never re-predicted — with one deliberate exception: the single prediction made on sonde selection runs whether the sonde is flying or landed, so a landed sonde selected cold still gets a landing point and a route. See *How a Landing Is Determined*.
 - The service lives on the main actor so published state updates remain synchronous with the UI.
 - CSV logging and other long-term diagnostics remain outside this service to keep it focused on API orchestration.
 
@@ -1356,7 +1146,7 @@ Request a route from the user’s current location to the landing point using Ap
 4. If `MKDirections` throws `MKError.directionsNotAvailable`:  
    • Tries up to ten random 500 m offsets around the destination.  
    • Runs a radial search (300/600/1200 m every 45°) while the error remains “directions not available”.  
-   • If nothing succeeds, falls back to a straight-line segment with a heuristic speed (car ≈ 60any other services km/h, bike ≈ 20 km/h) to produce a distance and arrival estimate.
+   • If nothing succeeds, falls back to a straight-line segment with a heuristic speed (car ≈ 60 km/h, bike ≈ 20 km/h) to produce a distance and arrival estimate.
 5. Any other error is propagated to the caller so the UI can handle failure states (e.g., hide the overlay).
 6. Successful routes are cached in `RoutingCache` for 5 minutes (LRU eviction, capacity 100). Callers check the cache before invoking Apple Maps again.
 7. **Task cancellation**: Tracks `currentRouteTask` and cancels it immediately when starting a new route calculation or when `clearAllData()` is called during sonde changes. Running tasks check `Task.checkCancellation()` before route calculation and before publishing results to exit cleanly with `CancellationError` when cancelled. This prevents stale routes to old sonde landing points being published after sonde change completes.
@@ -1447,7 +1237,7 @@ Manage external navigation integration with Apple Maps and provide landing point
 2. Creates `MKMapItem` with "Balloon Landing Site" label
 3. Launches Apple Maps with transport mode matching RouteCalculationService setting:
    - Car mode → Driving directions
-   - Bike mode → Cycling directions (iOS 14+, falls back to walking)
+   - Bike mode → Cycling directions (iOS 17+, falls back to walking)
 
 **Landing Point Change Notifications**:
 1. Stores last landing point for comparison on each update
@@ -1483,7 +1273,7 @@ iOS Notification System
 
 #### Notes
 
-- Notifications only fire when app is in foreground (background predictions suspended per BACKGROUND_TRACKING.md)
+- Notifications only fire when app is in foreground (background predictions suspended — see *Phase 1 → What runs in the background*)
 - 300m threshold prevents spurious alerts from minor prediction adjustments
 - First landing point stored without notification (baseline for comparison)
 - Sonde change resets tracking to prevent false alerts when switching balloons
@@ -1529,9 +1319,9 @@ The `ServiceCoordinator` is responsible for cross-service coordination to determ
         *   **Flying States** (`.liveBLEFlying`, `.aprsFlying`, `.waitingForAPRS`):
             - Uses `predictionService.latestPrediction.landingPoint`
             - ServiceCoordinator updates `LandingPointTrackingService` with `.prediction` source
-        *   **Landed States** (`.liveBLELanded`, `.aprsLanded`):
-            - Uses `balloonPositionService.currentPositionData` (lat/lon)
-            - ServiceCoordinator updates `LandingPointTrackingService` with `.currentPosition` source
+        *   **Landed States** (`.liveBLELanded`, `.aprsLanded`): **the source depends on *why* it is landed, not on the state alone** — see *How a Landing Is Determined*.
+            - **Confirmed touchdown** (a fixed, near-ground observation — `vectorAnalysis` or the track-based rules): uses `balloonPositionService.currentPositionData` (lat/lon), `.currentPosition` source.
+            - **Landed by silence** (`aprsStale` — the last frame was still at altitude and descending): **keeps the prediction** as the landing point and route target. The last-heard-at-altitude position is never the destination.
         *   **No Telemetry States** (`.startup`, `.noTelemetry`):
             - Landing point is `nil`
     
@@ -1545,7 +1335,7 @@ The `ServiceCoordinator` is responsible for cross-service coordination to determ
 4. **Prediction scheduling** — Hands telemetry and settings to `PredictionService`, reacts to completions/failures, and exposes landing/flight time strings for the data panel.
 5. **Route management** — Requests routes when the landing point or user location changes, updates the green overlay, surfaces ETA/distance in the data panel, and honours cache hits to avoid redundant Apple Maps calls.
 6. **UI state management** — Owns camera mode (`isHeadingMode`), overlay toggles, buzzer mute (with automatic sync from `buzmute` field in BLE Type 0/1/2 messages), centre-on-all logic, and guards against updates while sheets (settings) are open.
-7. **Apple Maps hand-off & navigation notifications** — `openInAppleMaps()` launches navigation using the selected transport mode (car → driving, bike → cycling on iOS 14+ with walking fallback). Landing point updates automatically trigger NavigationService to check for significant changes (>300m) and send iOS notifications to alert users during CarPlay navigation.
+7. **Apple Maps hand-off & navigation notifications** — `openInAppleMaps()` launches navigation using the selected transport mode (car → driving, bike → cycling on iOS 17+ with walking fallback). Landing point updates automatically trigger NavigationService to check for significant changes (>300m) and send iOS notifications to alert users during CarPlay navigation.
 8. **Optional APRS bridge** — When an APRS provider is enabled, the coordinator brokers SondeHub serial prompts, pauses APRS polling whenever fresh BLE telemetry is available, and synchronises RadioSondyGo frequency/probe type to match APRS telemetry when the streams differ.
 9. **Frequency Mismatch** - If a RadioSondyGo is connected, it compares its freuqncy with the APRS frequency and, if a mismatch is detected, a confirmation alert appears on screen. This screen asks if the user wants to accept the frequency change of the RadioSondyGo to the APRS frequency. If accepted, APRS frequency is transmittes via the BLE command, while cancelling defers the change for a period of 5 minutes.
 
@@ -1578,7 +1368,7 @@ Every selection path funnels through one method, so tracking setup exists in exa
 1. Clear all data for the previous sonde (see *Sonde Change Flow*).
 2. Set the sonde name in the position and track services.
 3. Tell the BLE service which sonde is hunted, so telemetry for any other serial is dropped before it enters the app.
-4. Set the APRS override, fetch immediately, and fill track gaps.
+4. Set the APRS override, then read the balloon context (`readBalloonContext`) and check recovery — the one track/position read, followed by the single prediction. See *Reading a sonde: the four steps*.
 5. Check frequency sync, unless the sonde came from BLE and the receiver is already tuned to it.
 6. Trigger state evaluation.
 
@@ -1586,8 +1376,8 @@ Every selection path funnels through one method, so tracking setup exists in exa
 is the only stored copy. `BalloonTrackService` exposes it read-only rather than
 keeping its own, because a mirror that lags the original silently discards work:
 it was written only from arriving telemetry, so between selecting a sonde and the
-first frame it read `nil`, and the APRS fill guard — which compares the fetched
-serial against it — threw the fetch away. On 21 August 2026 that discarded 11 121
+first frame it read `nil`, and `readBalloonContext`'s stale-fetch guard — which
+compares the fetched serial against it — threw the fetch away. On 21 August 2026 that discarded 11 121
 points and cancelled the retry, leaving the hunter with an empty track. Whether it
 happened at all depended on which arrived first, so the same selection sometimes
 worked.
@@ -1619,7 +1409,7 @@ Sequential steps to clear all old sonde data:
 
 1. **Call `clearAllData()` on each service:**
    - `balloonPositionService.clearAllData()` - clears currentBalloonName (enables next sonde detection)
-   - `balloonTrackService.clearAllData()` - clears track arrays, descent history, filter windows, motion metrics; **cancels in-flight APRS fill task**
+   - `balloonTrackService.clearAllData()` - clears track arrays, descent history, filter windows, motion metrics (an in-flight `readBalloonContext` needs no cancelling: its serial guard discards a result that arrives after the change)
    - `landingPointTrackingService.clearAllData()` - clears landing history array
    - `predictionService.clearAllData()` - clears prediction data (including flight path array); **cancels in-flight prediction task**
    - `routeCalculationService.clearAllData()` - clears route data (including route polyline array); **cancels in-flight route calculation task**
@@ -1633,13 +1423,13 @@ Sequential steps to clear all old sonde data:
 
 **Architecture principle:** Each service encapsulates its own clearing logic via `clearAllData()`. Coordinator orchestrates but doesn't manipulate service internals.
 
-**Async operation cancellation:** Services with long-running async operations (predictions, route calculations, APRS fetches) track their current task using Swift's structured concurrency. When `clearAllData()` is called, each service immediately cancels its in-flight task via `currentTask?.cancel()` without waiting for completion. The running task checks for cancellation at key points using `Task.checkCancellation()` and exits cleanly with `CancellationError`. This prevents stale results from old sondes being published after the sonde change completes. Cancellation is instantaneous - the coordinator doesn't wait for tasks to finish, they clean up asynchronously.
+**Async operation cancellation:** Services with long-running async operations (predictions, route calculations) track their current task using Swift's structured concurrency. When `clearAllData()` is called, each service immediately cancels its in-flight task via `currentTask?.cancel()` without waiting for completion. The running task checks for cancellation at key points using `Task.checkCancellation()` and exits cleanly with `CancellationError`. Cancellation is instantaneous - the coordinator doesn't wait for tasks to finish, they clean up asynchronously. The SondeHub track read guards itself differently: `readBalloonContext` re-checks the hunted serial after its fetch returns, so a result for the previous sonde is discarded rather than cancelled. Either way, stale results from an old sonde are never published after the change.
 
 #### Key Principles
 
 - **Transparent to other services** - Services see telemetry stop, then start again with new sonde name
 - **State machine continues normally** - No special state transitions; evaluates based on current inputs
-- **APRS fetch happens after clearing** - Loads APRS track for new sonde asynchronously
+- **Context read happens after clearing** - `readBalloonContext` loads the new sonde's track asynchronously; the empty track makes it a full `3d` load
 - **Service encapsulation** - Each service owns its clearing logic via `clearAllData()`
 - **Coordinator orchestration** - Coordinator calls each service but doesn't manipulate internals
 - **Separation of concerns**:
@@ -1650,13 +1440,11 @@ Sequential steps to clear all old sonde data:
 
 #### Persistence Data
 
-The following data is persisted as simple JSON files (single-sonde snapshot model):
-- **sondeName.json** - Current sonde name String (must match balloontrack.json)
-- **balloontrack.json** - Current sonde's track points `[BalloonTrackPoint]` (must match sondeName.json)
-- **landingPoints.json** - Current sonde's landing prediction history `[LandingPredictionPoint]`
-- **userSettings.json** - User prediction parameters (not sonde-specific)
-
-**Consistency:** sondeName.json and balloontrack.json are always updated together as a pair. When sonde changes, both files are overwritten with the new sonde's data. Previous sonde's data is preserved only in CSV logs (write-only, never loaded).
+The persisted files and their consistency rule are specified once, in *Services →
+Persistence Service*. What matters for a sonde change: the sonde-specific files are
+overwritten with the new sonde's data rather than purged, so no explicit delete is
+needed, and the previous sonde survives only in the CSV logs (write-only, never
+loaded).
 
 ## Hunt Phases
 
@@ -1693,6 +1481,33 @@ Six hours spans a real recovery: ascent, descent, the drive, and the search on f
 Cold launch and foreground resume are **separate sequences**. Today `handleForegroundResume()` also fires on a cold launch, because SwiftUI passes through `.inactive -> .active`, and the two race - visible in the log as `APRSDataService: Polling already active, ignoring start request`. Resume must be guarded so it never runs during a launch.
 
 They answer different questions: startup asks what is being hunted and what is known; resume asks only what changed while away. The **display rules above are identical for both** - how the app was last terminated is not something the hunter should be able to perceive.
+
+#### What runs in the background, and the resume sequence
+
+**Nothing is polled in the background.** The app declares only
+`UIBackgroundModes: bluetooth-central` in `Info.plist`, and location is **"When In
+Use"** — never "Always". `bluetooth-central` keeps the app alive only while a BLE
+peripheral stays connected, and because **BLE state restoration is not
+implemented**, a full close stops everything. So background BLE is a bonus when it
+happens, never something the track depends on. The design decision that follows is
+in *Balloon Track Service → Background telemetry*: SondeHub retains the flight, so
+the track is repaired on resume rather than defended in the background. This is
+also why no `location` background mode is requested — it would cost battery and a
+harder permission for data the backfill already recovers.
+
+`handleForegroundResume()` then runs, in order:
+
+1. **Request the current user location** — for the map and routing.
+2. **Check BLE connection health** — reconnect if the link dropped while away.
+3. **Trigger state-machine evaluation**, and if the state is a flying one, call
+   `readBalloonContext(serial:)` to delta-fetch whatever accumulated while
+   suspended and re-run track-based landing detection.
+4. **Refresh the current state** if no transition occurred, so each state's
+   services are configured to match reality now.
+
+**The state machine decides what is active — never hardcoded resume logic.** Which
+services each state enables is specified in *The State Machine → State Behaviors
+and Transitions*; resume only re-applies the current state.
 
 ### Phase 2 - Stationary
 
@@ -2000,10 +1815,10 @@ The coordinator runs `performCompleteStartupSequence()` in eight stages, waiting
     *   Compares frequency (0.01 MHz tolerance) and sonde type; on a mismatch, raises a proposal for the user to accept or decline
     *   Evaluated **once**. Declining records a 5-minute cooldown for that frequency/type pair. Not repeated while hunting; reset on sonde change
 
-**Step 4d: Fill Track Gaps**
-    *   Fetch from SondeHub whatever the flight path is missing and merge it in
+**Step 4d: Read Balloon Context**
+    *   `readBalloonContext(serial:)` fetches from SondeHub whatever the flight path is missing and merges it in
     *   Runs unconditionally, not only when the track is empty: a track holding a few minutes of BLE is still missing everything before the app was started, and SondeHub is the only source for it
-    *   Merge is slot-based — every held point claims its one-second slot and APRS writes only into slots with none — so live BLE data is never displaced or duplicated
+    *   The request is sized from the gap since the newest held frame — a full `3d` load for an empty track, a short delta for a restored one — and the merge is keyed on **physical position**, so live BLE data is never displaced or duplicated. See *APRS Telemetry: the delta-fetch*
 
 **Step 5: State Machine Handoff & UI Transition**
     *   Progress label: "Step 5: Startup Complete"
@@ -2034,7 +1849,7 @@ A row for Buttons is placed above the map. It is fixed and covers the entire wid
 * Settings  
 
 * Mode of transportation: The transport mode (car or bicycle) shall be used to calculate the route and the predicted arrival time. Every time the mode is changed, a new calculation has to be done. Use icons to save horizontal space.  
-* Apple Maps navigation: Opens Apple Maps with the current landing point pre-filled. Car mode launches driving directions; bicycle mode launches cycling directions on iOS 14+ and falls back to walking on older systems.  
+* Apple Maps navigation: Opens Apple Maps with the current landing point pre-filled. Car mode launches driving directions; bicycle mode launches cycling directions on iOS 17+ and falls back to walking on older systems.  
 
 * **Settings Button**: Gear icon that opens device configuration interface and requests current device parameters via BLE.
 
@@ -2056,7 +1871,7 @@ A row for Buttons is placed above the map. It is fixed and covers the entire wid
 
 * **Apple Maps Button**: Navigation icon (only visible when landing point available) that opens Apple Maps with pre-configured directions using selected transport mode.
 
-**Note**: Prediction path visibility toggle is not currently implemented - prediction paths are always shown when available during flight phases.
+**Note**: there is no prediction-path toggle button. `MapPresenter` alone decides when the predicted path is visible — through flight *and* through landed-by-silence, dropped only on a confirmed touchdown or a no-data state.
 
 
 ### Map
@@ -2070,19 +1885,18 @@ No calculations or business logic in views. Search for an appropriate service to
 The overlays must remain accurately positioned and correctly cropped within the displayed map area during all interactions. They should be updated independently and drawn as soon as available and when changed.
 
 * User Position: The iPhone's current position is continuously displayed and updated on the map, represented by a runner.  
-* Balloon Live Position: If Telemetry is available, the balloon's real-time position is displayed using a balloon marker(Balloon.fill). Its colour shall be green while ascending and red while descending.  
+* Balloon Live Position: If Telemetry is available, the balloon's real-time position is displayed using a balloon marker (balloon.fill). While flying its colour is green ascending, orange descending above 10 km, red descending below 10 km, grey unknown; once landed the colour reports recovery instead — see *Recovery status — is it found?*.  
 * Balloon Track: The map overlay shall show the current balloon track as a thin red line. At startup, persisted track (if any) is loaded from balloontrack.json. New telemetry points are appended to the array as they are received. The array is automatically cleared if a different sonde name is received (new sonde). It is updated when a new point is added to the track. The track should appear on the map when it is available.  
-* Balloon Predicted Path: The complete predicted flight path from the Sondehub API is displayed as a thick blue line. While the balloon is ascending, a distinct marker indicates the predicted burst location. The burst location shall only be visible when the balloon is ascending. The display of this path is controlled by the button “Prediction on/off”. The path should appear on the map when it is available.  
+* Balloon Predicted Path: The complete predicted flight path from the Sondehub API is displayed as a thick blue line. While the balloon is ascending, a distinct marker indicates the predicted burst location; the burst marker is visible only while ascending. Visibility of the path itself is decided in one place — `MapPresenter.predictionPathVisible` — and the view draws whatever the presenter publishes. There is no "Prediction on/off" button. See *How a Landing Is Determined → Drawing the predicted-descent line*.  
 * Landing point: Shall be visible if a valid landing point is available  
 * Planned Route from User to Landing Point: The recommended route from the user's current location to the predicted landing point is retrieved from Apple Maps and displayed on the map as a green overlay path. When bicycle mode is selected the in-app overlay still uses walking directions (MapKit limitation) but the Apple Maps button launches native cycling navigation. The route should appear on the map when it is available.  
 
-A new route calculation and presentation is triggered:
+A new route calculation is triggered by a **material change, never by a clock** —
+there is no periodic recalculation. The triggers are specified once, in *Route
+Calculation Service → Smart Route Recalculation*: the landing point moving,
+the hunter going off-route, and a transport-mode change.
 
-* After a new track prediction is received, and the predicted landing point is moved  
-  * Every minute, when the user moves.   
-  * When the transport mode is changed
-
-It is not shown if the distance between the balloon and the iPhone is less than 100m.
+It is not shown once the hunter is within 200 m of the balloon (`isWithin200mOfBalloon`) — at that range the route is noise and the close-range guidance takes over.
 
 ### SondeHub Serial Confirmation Popup
 

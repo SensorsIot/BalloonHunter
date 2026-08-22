@@ -71,12 +71,11 @@ BalloonHunter/
 |---------|-------------|
 | 🗺️ Apple Maps | Native MapKit integration |
 | 🚗 CarPlay Alerts | Landing prediction notifications |
-| 📍 Background Tracking | Limited background updates |
+| 📍 Foreground Backfill | Track repaired from SondeHub on resume, not polled in background |
 
 ## 📄 Documentation
 
-- [📋 Functional Specification](BalloonHunter/BalloonHunterAppFSD.md)
-- [📍 Background Tracking](BACKGROUND_TRACKING.md)
+- [📋 Functional Specification](BalloonHunter/BalloonHunterAppFSD.md) — the single design document; background/resume behaviour lives in *Phase 1 → What runs in the background*
 - [📡 SondeHub API Reference](BalloonHunter/SondeHub_API_Reference.md)
 
 ## 📜 License
