@@ -349,9 +349,7 @@ final class ServiceCoordinator: ObservableObject {
     ///   - checkFrequencySync: Whether to check frequency sync (false for BLE-detected sondes already tuned)
     func startTrackingSonde(name: String, checkFrequencySync: Bool = true) {
         // No "already tracking" shortcut. Selection is the only thing that names a
-        // hunted sonde, and it always means: set this one up. Nothing writes the
-        // name beforehand any more, so there is no earlier value that could be
-        // mistaken for proof the chain below has run.
+        // hunted sonde, and it always means: set this one up.
         let previousSonde = balloonPositionService.currentBalloonName
 
         appLog("ServiceCoordinator: === Starting to track sonde '\(name)' (was: '\(previousSonde ?? "none")') ===", category: .general, level: .info)

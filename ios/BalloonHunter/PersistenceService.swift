@@ -121,14 +121,11 @@ final class PersistenceService: ObservableObject {
         }
     }
 
-    /// Files earlier versions wrote and nothing reads any more.
+    /// Files no part of the app reads.
     ///
-    /// `balloontrack.json` and `sondeName.json` are gone because the flight comes
-    /// from SondeHub and the hunted serial is the picker's answer; `landingPoints.json`
-    /// was written on every new landing point and never once read back. Left alone
-    /// they would sit in Documents forever — the track file was 129 KB — and, worse,
-    /// invite someone to start reading them again. Safe to delete this method once
-    /// no installed build still writes them.
+    /// The flight comes from SondeHub and the hunted serial is the picker's answer,
+    /// so neither a stored track nor a stored name has a consumer. Left in Documents
+    /// they waste space and invite someone to start reading them again.
     private func removeRetiredFiles() {
         for filename in ["balloontrack.json", "sondeName.json", "landingPoints.json"] {
             deleteFromDocumentsDirectory(filename: filename)

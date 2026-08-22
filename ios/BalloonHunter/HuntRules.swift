@@ -35,12 +35,13 @@ import CoreLocation
 /// Pure so it is testable without the coordinator.
 ///
 /// Predictions run **only while the balloon is flying**. Once it is landed — by a
-/// confirmed touchdown or by silence — no new prediction is needed or wanted: the
-/// last estimate made while flying is the landing, and re-predicting a fixed
-/// position only makes the landing marker drift as the wind forecast for "now"
-/// advances (and, for an old sonde, asks the predictor for GFS data it no longer
-/// has). States with no basis for a prediction (startup, waiting, no telemetry)
-/// also stop. See FSD *How a Landing Is Determined*.
+/// confirmed touchdown, the position is known and there is nothing left to
+/// estimate. Landed by silence it is not: the balloon is down but unseen, and the
+/// predicted point is the only account of where it lies, so one estimate is made
+/// and then left alone — nothing new is arriving, and re-running would move the
+/// marker only because the wind forecast advanced. States with no basis for a
+/// prediction (startup, waiting, no telemetry) do not predict.
+/// See FSD *How a Landing Is Determined*.
 enum PredictionPolicy {
 
     /// Whether a prediction should be made now.
@@ -89,10 +90,9 @@ enum PredictionPolicy {
 ///
 /// Startup owns no idea of flying and landed. `LandingDetector` decides,
 /// `BalloonPositionService` publishes the verdict as `balloonPhase`, and this
-/// rule does nothing but read it. Startup once re-decided from the raw SondeHub
-/// list on vertical speed alone: on 21 August 2026 that auto-selected W4214520
-/// from a frame 6.8 h old, 2.4 seconds after the detector had classified that
-/// same sonde as landed, and the picker never appeared.
+/// rule does nothing but read it. Re-deciding from the raw SondeHub list on
+/// vertical speed alone would be a second answer to a question with one owner, and
+/// a bare vertical-speed field cannot see how old its frame is.
 nonisolated enum StartupSelection: Equatable {
     /// The sonde is up. Track it and skip the picker.
     case autoSelect(serial: String)

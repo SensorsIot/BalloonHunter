@@ -132,12 +132,9 @@ extension ServiceCoordinator {
         // Startup performs no investigation of its own. `LandingDetector` has
         // already judged the sonde whose telemetry arrived, and its verdict is
         // published as `balloonPhase`; startup reads that and nothing else.
-        //
-        // It used to re-decide from the raw sonde list on vertical speed alone.
-        // That is a second implementation of a question the detector owns, and
-        // it disagreed: on 21 August 2026 it auto-selected W4214520 from a frame
-        // 6.8 h old, 2.4 seconds after the detector had classified that very
-        // sonde as landed. The picker never appeared.
+        // Re-deciding from the raw sonde list would be a second implementation of
+        // a question the detector owns, and a bare vertical-speed field cannot see
+        // how old its frame is.
         let phase = balloonPositionService.balloonPhase
         let selection = StartupSelection.decide(
             phase: phase,

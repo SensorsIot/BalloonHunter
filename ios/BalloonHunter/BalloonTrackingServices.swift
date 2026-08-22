@@ -286,12 +286,11 @@ final class BalloonPositionService: ObservableObject {
         // Which sonde is being hunted is decided by selection - at startup, or
         // through the picker - and telemetry never redefines it.
         //
-        // This used to treat any differing serial as a sonde change: it wiped
-        // every service via clearAllSondeData() and adopted the new serial. A
-        // receiver decodes a neighbouring sonde now and then, a bench unit or
-        // one on an adjacent frequency, and a single such packet was enough to
-        // destroy the tracked flight and adopt the intruder - leaving its
-        // position stitched into the track as a leg running off to wherever it
+        // A differing serial must not be treated as a sonde change. A receiver
+        // decodes a neighbouring sonde now and then, a bench unit or one on an
+        // adjacent frequency, and acting on a single such packet would destroy the
+        // tracked flight and adopt the intruder - stitching its position into the
+        // track as a leg running off to wherever it
         // sat. Selection now owns the identity, so a foreign serial is simply
         // not this hunt's data.
         let incomingName = position.sondeName.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -836,11 +835,10 @@ final class BalloonTrackService: ObservableObject {
 
     /// The hunted sonde, read from the one place it is stored.
     ///
-    /// This service used to keep its own copy, written only when telemetry
-    /// arrived. Between selecting a sonde and its first frame the copy read
-    /// `nil`, and `readBalloonContext` compares the serial it fetched against
-    /// this — so a fetch that finished first was thrown away. Getter-only by
-    /// design: a mirror that can be assigned is a mirror that can lag.
+    /// Getter-only by design: a mirror that can be assigned is a mirror that can
+    /// lag. One written only from arriving telemetry reads `nil` between selecting
+    /// a sonde and its first frame, and `readBalloonContext` compares the serial it
+    /// fetched against this — so a context read returning first would be discarded.
     var currentBalloonName: String? { balloonPositionService.currentBalloonName }
     var currentEffectiveDescentRate: Double?
     var trackUpdated = PassthroughSubject<Void, Never>()
@@ -1252,11 +1250,11 @@ final class BalloonTrackService: ObservableObject {
         // Single-flight. A foreground resume asks for context from three places at
         // once — the state evaluation, the resume sequence, and the state refresh
         // that follows it — and every APRS poll can add another. Each read merges
-        // and re-runs landing detection on the main actor, so letting them overlap
-        // froze the app on resume with a large track. One read per serial serves
-        // every caller: later callers await the same task instead of starting
-        // another fetch. This is what lets callers ask whenever they need data,
-        // as the design requires, without any of them coordinating.
+        // and re-runs landing detection on the main actor, so overlapping reads
+        // block the main thread for as long as the track is large. One read per
+        // serial serves every caller: later callers await the same task instead of
+        // starting another fetch. That is what lets callers ask whenever they need
+        // data, as the design requires, without any of them coordinating.
         if let inFlight = contextRead, inFlight.serial == serial {
             appLog("BalloonTrackService: Context read for \(serial) already in flight - joining it", category: .service, level: .debug)
             await inFlight.task.value

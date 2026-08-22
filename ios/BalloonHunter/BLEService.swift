@@ -419,11 +419,11 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
 
         // Start scan timeout timer.
         //
-        // The sleep must be allowed to throw. `try?` would swallow the
-        // CancellationError and fall through to handleScanTimeout(), so cancelling
-        // this task on discovery would *run* the timeout instead of suppressing it —
-        // a device found microseconds before the deadline logged "no device found"
-        // and scheduled a pointless rescan while the connection was being made.
+        // The sleep must be allowed to throw. `try?` swallows the CancellationError
+        // and falls through to handleScanTimeout(), so cancelling this task on
+        // discovery would *run* the timeout instead of suppressing it: a device found
+        // just before the deadline would log "no device found" and schedule a rescan
+        // while the connection is being made.
         scanTimeoutTask?.cancel()
         scanTimeoutTask = Task { @MainActor [weak self] in
             guard let self = self else { return }

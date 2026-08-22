@@ -148,9 +148,9 @@ struct TrackingMapView: View {
                     // presenter has published a path — it already decides visibility
                     // (predictionPathVisible sets the path to nil when it must be
                     // hidden, e.g. a confirmed touchdown), and that decision keeps
-                    // the descent line through landed-by-silence. An extra isFlying
-                    // gate here wrongly hid it once the state went aprsLanded. See
-                    // FSD *How a Landing Is Determined*.
+                    // the descent line through landed-by-silence. An isFlying gate
+                    // here would hide it the moment the state becomes aprsLanded.
+                    // See FSD *How a Landing Is Determined*.
                     if let predictionPath = mapPresenter.predictionPath {
                         MapPolyline(predictionPath)
                             .stroke(.blue, lineWidth: 4)
@@ -492,9 +492,9 @@ struct TrackingMapView: View {
         .background(.ultraThinMaterial)
         .cornerRadius(8)
 
-        // Buzzer mute toggle. Only present while the receiver is connected: it
-        // used to stay in the layout at zero opacity, which left a hole between
-        // the surrounding buttons.
+        // Buzzer mute toggle. Removed from the layout while the receiver is
+        // disconnected rather than hidden at zero opacity, which would leave a hole
+        // between the surrounding buttons.
         if mapPresenter.connectionStatus == .connected {
             Button {
                 let newMuteState = !mapPresenter.isBuzzerMuted

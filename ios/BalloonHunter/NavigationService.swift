@@ -57,7 +57,7 @@ final class NavigationService: ObservableObject {
         //
         // It still cannot replace an active route: Maps prompts, and the hunter
         // must end the current navigation first. No API, Shortcuts action or Siri
-        // path exists to do that for them. Measured on device, 21 Aug 2026.
+        // path exists to do that for them.
         let source = MKMapItem.forCurrentLocation()
         MKMapItem.openMaps(with: [source, mapItem], launchOptions: launchOptions)
         appLog("NavigationService: Handed Apple Maps a route from current position to the landing point", category: .general, level: .info)
@@ -67,10 +67,9 @@ final class NavigationService: ObservableObject {
 
     /// Decide whether the moved landing point is worth telling the hunter about.
     ///
-    /// This used to fire whenever the point moved more than 300 m. During a
-    /// descent the prediction moves that far every minute, and distance is the
-    /// wrong measure anyway: 300 m along the same motorway changes nothing, while
-    /// 300 m across a ridge can add half an hour. What matters is the drive.
+    /// Straight-line distance is the wrong measure: during a descent the prediction
+    /// moves 300 m every minute, and 300 m along the same motorway changes nothing
+    /// while 300 m across a ridge can add half an hour. What matters is the drive.
     ///
     /// The cost of asking is real. Apple Maps will not replace a route it is
     /// already following, so every notification the hunter acts on means ending
