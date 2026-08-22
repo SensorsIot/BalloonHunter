@@ -349,3 +349,65 @@ nonisolated struct CloseRangeGuidance {
         return (degrees + 360).truncatingRemainder(dividingBy: 360)
     }
 }
+
+// MARK: - The BLE hunt tail
+
+/// The one piece of sonde data worth keeping on disk.
+///
+/// For the whole flight, APRS carries the same frames the receiver does and
+/// SondeHub serves them on demand, so storing them locally would duplicate an
+/// authoritative source. **One segment is different: the final hunt.** From the last
+/// APRS fix to where the balloon actually lies there is no APRS coverage — that
+/// stretch exists only in this phone's close-range BLE decode, and it is exactly the
+/// stretch that decides where the hunter walks.
+///
+/// Persistence exists to survive backgrounding, nothing more, so only what cannot be
+/// re-fetched is written. The serial is stored *with* the points so a tail can prove
+/// it belongs to the sonde now being hunted — it answers "whose tail is this?", never
+/// "who am I hunting?", which is the picker's question alone.
+///
+/// See FSD *APRS Telemetry → The BLE hunt tail*.
+nonisolated struct HuntTail: Codable {
+
+    /// How long a stored tail stays usable. A hunt does not outlive a day.
+    static let retention: TimeInterval = 24 * 60 * 60
+
+    /// The sonde these points belong to.
+    let serial: String
+    /// When the tail was written.
+    let savedAt: Date
+    /// The BLE stretch beyond APRS coverage.
+    let points: [BalloonTrackPoint]
+
+    /// The part of `track` worth persisting, or `nil` if there is none.
+    ///
+    /// Everything after the newest APRS point is BLE the network never saw. When a
+    /// track holds no APRS points at all — a test sonde, or a hunt run off-grid —
+    /// that is the whole BLE track, so the same rule covers the offline case with no
+    /// special handling.
+    static func from(track: [BalloonTrackPoint], serial: String, at savedAt: Date) -> HuntTail? {
+        guard !track.isEmpty else { return nil }
+
+        let ordered = track.sorted { $0.timestamp < $1.timestamp }
+        let tail: [BalloonTrackPoint]
+        if let lastAPRS = ordered.lastIndex(where: { $0.source == .aprs }) {
+            tail = Array(ordered[(lastAPRS + 1)...])
+        } else {
+            tail = ordered
+        }
+
+        // Only what APRS cannot return is worth writing.
+        let irreplaceable = tail.filter { $0.source == .ble }
+        return irreplaceable.isEmpty ? nil : HuntTail(serial: serial, savedAt: savedAt, points: irreplaceable)
+    }
+
+    /// The points to restore for `serial`, or empty when this tail cannot serve it.
+    ///
+    /// A tail belonging to another sonde is not the hunted sonde's data, and one
+    /// older than `retention` is no longer this hunt.
+    func points(for serial: String, now: Date, retention: TimeInterval = HuntTail.retention) -> [BalloonTrackPoint] {
+        guard serial == self.serial else { return [] }
+        guard now.timeIntervalSince(savedAt) <= retention else { return [] }
+        return points
+    }
+}

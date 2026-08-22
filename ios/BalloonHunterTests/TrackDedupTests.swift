@@ -241,4 +241,114 @@ final class TrackDedupTests: XCTestCase {
         XCTAssertEqual(BalloonTrackService.sondeHubDurationBucket(covering: .greatestFiniteMagnitude), "3d",
                        "an absurd value must clamp, not trap")
     }
+
+    // MARK: - The BLE hunt tail
+    //
+    // The only sonde data worth keeping on disk, because it is the only sonde data
+    // SondeHub cannot return: the stretch from the last APRS fix to where the
+    // balloon actually lies. See FSD *APRS Telemetry → The BLE hunt tail*.
+
+    private let epoch = Date(timeIntervalSince1970: 1_800_000_000)
+
+    /// A flight that APRS covered down to 400 m, after which only BLE heard it.
+    private func flightWithBLETail() -> [BalloonTrackPoint] {
+        let aprs = (0..<5).map { i in
+            pt(47.70 + Double(i) * 1e-3, 7.50 + Double(i) * 1e-3, 2000 - Double(i) * 400,
+               1000 + Double(i) * 10, .aprs)
+        }
+        let ble = (0..<4).map { i in
+            pt(47.71 + Double(i) * 1e-4, 7.51 + Double(i) * 1e-4, 380 - Double(i) * 90,
+               1050 + Double(i) * 10, .ble)
+        }
+        return aprs + ble
+    }
+
+    func testTail_keepsOnlyWhatFollowsTheLastAPRSFix() {
+        let tail = HuntTail.from(track: flightWithBLETail(), serial: "W123", at: epoch)
+        XCTAssertEqual(tail?.points.count, 4, "only the BLE stretch beyond APRS coverage is kept")
+        XCTAssertEqual(tail?.points.first?.altitude, 380)
+        XCTAssertTrue(tail?.points.allSatisfy { $0.source == .ble } ?? false,
+                      "nothing APRS already holds belongs on disk")
+    }
+
+    /// Off-grid: no APRS at all, so the whole BLE track is the tail. The same rule
+    /// covers this case with no special handling.
+    func testTail_withNoAPRSAtAll_keepsTheWholeBLETrack() {
+        let bleOnly = (0..<6).map { i in
+            pt(47.70 + Double(i) * 1e-4, 7.50 + Double(i) * 1e-4, 500 - Double(i) * 80,
+               1000 + Double(i) * 10, .ble)
+        }
+        let tail = HuntTail.from(track: bleOnly, serial: "W123", at: epoch)
+        XCTAssertEqual(tail?.points.count, 6, "with no APRS coverage the whole BLE track is irreplaceable")
+    }
+
+    /// APRS heard it all the way down and BLE added nothing: there is nothing on
+    /// this phone that SondeHub cannot return, so nothing is written.
+    func testTail_whenAPRSCoveredEverything_isNil() {
+        let aprsOnly = (0..<5).map { i in
+            pt(47.70 + Double(i) * 1e-3, 7.50 + Double(i) * 1e-3, 2000 - Double(i) * 400,
+               1000 + Double(i) * 10, .aprs)
+        }
+        XCTAssertNil(HuntTail.from(track: aprsOnly, serial: "W123", at: epoch),
+                     "duplicating an authoritative source is not persistence")
+    }
+
+    func testTail_emptyTrackIsNil() {
+        XCTAssertNil(HuntTail.from(track: [], serial: "W123", at: epoch))
+    }
+
+    /// During flight the receiver and the network both feed the track, so BLE points
+    /// exist *before* the last APRS fix too. Those are not irreplaceable — SondeHub
+    /// holds that stretch — so keeping every BLE point would persist most of the
+    /// flight and duplicate an authoritative source. Only the BLE that follows the
+    /// final APRS fix is the hunt tail.
+    func testTail_excludesBLEHeardBeforeTheLastAPRSFix() {
+        let track = [
+            pt(47.700, 7.500, 2000, 1000, .ble),   // in flight, APRS has this too
+            pt(47.701, 7.501, 1600, 1010, .aprs),
+            pt(47.702, 7.502, 1200, 1020, .ble),   // still in APRS coverage
+            pt(47.703, 7.503,  800, 1030, .aprs),  // ← last APRS fix
+            pt(47.704, 7.504,  400, 1040, .ble),   // the hunt tail starts here
+            pt(47.705, 7.505,  100, 1050, .ble),
+        ]
+        let tail = HuntTail.from(track: track, serial: "W123", at: epoch)
+        XCTAssertEqual(tail?.points.count, 2,
+                       "only the BLE beyond the final APRS fix is irreplaceable")
+        XCTAssertEqual(tail?.points.first?.altitude, 400,
+                       "the tail begins at the first BLE point after APRS coverage ends")
+    }
+
+    // MARK: - Restoring a tail: it must prove it belongs
+
+    func testTail_restoresForItsOwnSerial() {
+        let tail = HuntTail.from(track: flightWithBLETail(), serial: "W123", at: epoch)!
+        let restored = tail.points(for: "W123", now: epoch.addingTimeInterval(3600))
+        XCTAssertEqual(restored.count, 4)
+    }
+
+    /// The serial is stored *with* the points precisely so this can be checked.
+    /// A tail belonging to another sonde is not the hunted sonde's data.
+    func testTail_refusesADifferentSerial() {
+        let tail = HuntTail.from(track: flightWithBLETail(), serial: "W123", at: epoch)!
+        XCTAssertTrue(tail.points(for: "W999", now: epoch.addingTimeInterval(3600)).isEmpty,
+                      "a tail must never be served for a sonde it does not belong to")
+    }
+
+    /// A hunt does not outlive a day.
+    func testTail_expiresAfter24Hours() {
+        let tail = HuntTail.from(track: flightWithBLETail(), serial: "W123", at: epoch)!
+        XCTAssertFalse(tail.points(for: "W123", now: epoch.addingTimeInterval(24 * 3600)).isEmpty,
+                       "exactly 24 h is still within retention")
+        XCTAssertTrue(tail.points(for: "W123", now: epoch.addingTimeInterval(24 * 3600 + 1)).isEmpty,
+                      "past 24 h the tail is stale and must not be restored")
+    }
+
+    /// Persistence exists to survive backgrounding, so a tail must round-trip.
+    func testTail_roundTripsThroughJSON() throws {
+        let tail = HuntTail.from(track: flightWithBLETail(), serial: "W123", at: epoch)!
+        let back = try JSONDecoder().decode(HuntTail.self, from: JSONEncoder().encode(tail))
+        XCTAssertEqual(back.serial, "W123")
+        XCTAssertEqual(back.points.count, 4)
+        XCTAssertEqual(back.points.map { $0.positionKey }, tail.points.map { $0.positionKey })
+    }
 }
