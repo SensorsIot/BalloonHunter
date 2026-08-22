@@ -8,9 +8,15 @@ set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 ruby -ryaml -e '
   plan    = YAML.load_file(ARGV[0])
-  clauses = YAML.load_file(ARGV[1])["clauses"]
+  all_clauses = YAML.load_file(ARGV[1])["clauses"]
+  # Retired items keep their ids so history stays readable, and are counted
+  # nowhere: a withdrawn requirement is not a gap.
+  retired_clauses = all_clauses.select { |c| c["status"] == "deprecated" }
+  clauses = all_clauses - retired_clauses
   caps    = plan["capabilities"]
-  tests   = plan["tests"]
+  all_tests = plan["tests"]
+  retired_tests = all_tests.select { |t| t["status"] == "deprecated" }
+  tests = all_tests - retired_tests
 
   blocked_by = lambda { |t| (t["needs"] || []).select { |n| caps[n] && caps[n]["available"] == "no" } }
 
@@ -85,6 +91,16 @@ ruby -ryaml -e '
     out << "| `#{t["id"]}` #{t["title"]} | #{t["tier"]} | #{miss.join(", ")} | #{how} |"
   end
   out << ""
+
+  unless retired_clauses.empty? && retired_tests.empty?
+    out << "## Retired"
+    out << ""
+    out << "Withdrawn requirements and the tests that carried them. Ids are kept so they are never reused, and counted nowhere above."
+    out << ""
+    retired_clauses.each { |c| out << "- `#{c["id"]}` #{c["text"]} — #{c["note"]}" }
+    retired_tests.each { |t| out << "- `#{t["id"]}` #{t["title"]} — #{t["reason"]}" }
+    out << ""
+  end
 
   out << "## Capabilities"
   out << ""

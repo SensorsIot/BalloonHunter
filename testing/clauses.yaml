@@ -873,12 +873,16 @@ clauses:
     tier: device
     kind: state-transition
     testability: testable
+    status: deprecated
+    note: "The FSD bullet this came from was removed on 2026-08-22. The app has a plain All button and no point-selection mode, and the case the feature covered - a hunt with no landing point - has largely gone away now that the context loader produces a prediction for any selected sonde. Kept rather than deleted so the id stays readable."
   - id: FSD-UI-manual-point
     text: "Tapping Point then the map sets the landing point"
     source_section: "Buttons Row"
     tier: device
     kind: positive
     testability: testable
+    status: deprecated
+    note: "The FSD bullet this came from was removed on 2026-08-22. The app has a plain All button and no point-selection mode, and the case the feature covered - a hunt with no landing point - has largely gone away now that the context loader produces a prediction for any selected sonde. Kept rather than deleted so the id stays readable."
   - id: FSD-UI-heading-toggle
     text: "Heading mode centres and rotates to device heading with zoom-only interaction; free mode allows pan and zoom; zoom is preserved across the switch"
     source_section: "Buttons Row"
@@ -1056,6 +1060,12 @@ clauses:
   - id: FSD-SET-prediction-fields
     text: "Prediction settings carry burst altitude, ascent rate, descent rate, station ID and the prediction server URL, and a change survives leaving the view"
     source_section: "Prediction Settings"
+    tier: device
+    kind: positive
+    testability: testable
+  - id: FSD-UI-show-all
+    text: "The All button zooms the map to show every annotation at once, leaving heading mode first"
+    source_section: "Buttons Row"
     tier: device
     kind: positive
     testability: testable

@@ -826,8 +826,8 @@ tests:
       must_not:
         - "A tap on the map setting a point outside selection mode"
         - "The button stuck in Cancel after a point is set"
-    reason: "the feature is not implemented - the FSD specifies a Point/Cancel mode and a tap-to-set landing point, and the button row has only 'All'. No point-selection state exists anywhere in the source."
-    status: "not done"
+    reason: "the requirement was withdrawn on 2026-08-22, not implemented and no longer specified. Kept so the id is never reused."
+    status: "deprecated"
   - id: D-UI-HEADING
     area: ui
     title: "Heading mode and zoom preservation"
@@ -837,6 +837,7 @@ tests:
     needs: [iphone]
     verifies:
       - FSD-UI-heading-toggle
+      - FSD-UI-show-all
     criteria:
       given: "The map at a chosen zoom in free mode"
       when: "heading mode is entered and left"

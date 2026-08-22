@@ -2055,11 +2055,9 @@ A row for Buttons is placed above the map. It is fixed and covers the entire wid
 
 * **Transport Mode Toggle**: A single button showing the mode in use, car or bicycle, swapping on tap. Changing it recalculates the route. It replaced a segmented control that spent about 100 points on a choice between two things.
 
-* **Point/All/Cancel Button**: Dynamic button functionality:
-  - When **no landing point** exists: Shows "Point" button to enter manual landing point selection mode
-  - In **point selection mode**: Shows "Cancel" button (red) to exit selection mode
-  - When **landing point exists**: Shows "All" button to zoom map to show all annotations
-  - **Point selection workflow**: Tap "Point" → tap on map → landing point is set automatically
+* **All Button**: Zooms the map to show every annotation at once — hunter, balloon,
+  landing point and route. Leaves heading mode first, since that mode owns the
+  camera.
 
 * **Heading Mode Toggle**: Location icon button that toggles between camera positions:
   - **"Heading" mode**: Map centers on iPhone position and aligns to device heading (zoom-only interaction)
