@@ -92,18 +92,16 @@ extension ServiceCoordinator {
         appLog("STARTUP: Step 2 - Services initialized, requesting location", category: .general, level: .info)
         currentLocationService.requestCurrentLocation()
 
-        // Step 3: Inject Persisted Data into Services
+        // Step 3: Nothing is injected, and the step exists to say so. Startup must
+        // not seed an identity before selection has produced one: the hunted serial
+        // is the picker's answer alone, and a name written here would later be
+        // mistaken for proof that tracking had been set up. The BLE hunt tail is
+        // restored by the context loader, for whichever serial is actually chosen.
         await MainActor.run {
             currentStartupStep = 3
-            startupProgress = "Step 3: Restoring State"
+            startupProgress = "Step 3: No Sonde Data Yet"
         }
-        appLog("STARTUP: Step 3 - Injecting persisted data into services", category: .general, level: .info)
-
-        // Nothing is injected. Startup must not seed an identity before selection
-        // has produced one: the hunted serial is the picker's answer alone, and a
-        // name written here would later be mistaken for proof that tracking had been
-        // set up. The BLE hunt tail is restored later, by the context loader, for
-        // whichever serial is actually chosen.
+        appLog("STARTUP: Step 3 - Nothing injected; the hunted serial comes from selection alone", category: .general, level: .info)
 
         // Step 4: Start BLE & APRS (gap filling now works on loaded track)
         await MainActor.run {
@@ -187,9 +185,11 @@ extension ServiceCoordinator {
         if bleCommunicationService.connectionState.canReceiveCommands,
            let aprsRadio = balloonPositionService.aprsService.latestRadioChannel {
             appLog("STARTUP: Step 4c - BLE connected, checking frequency sync", category: .general, level: .info)
-            checkStartupFrequencySync(aprsRadio: aprsRadio)
+            checkFrequencySync(aprsRadio: aprsRadio)
         } else {
-            appLog("STARTUP: Step 4c - BLE not ready, skipping frequency sync", category: .general, level: .info)
+            // Not a failure: the receiver may connect later, and its connection is
+            // itself a trigger (FR-F.1).
+            appLog("STARTUP: Step 4c - receiver not connected yet; the check runs when it connects", category: .general, level: .info)
         }
 
         // Step 4d: Fill whatever the local track is missing, from SondeHub.
@@ -231,9 +231,11 @@ extension ServiceCoordinator {
     // MARK: - Step 2: BLE Connection
     
     private func startBLEConnectionWithTimeout() async -> (connected: Bool, hasMessage: Bool) {
-        // Just start BLE scanning if Bluetooth is available
+        // Start scanning if the radio is already up. If it is not, this is not a
+        // failure and startup does not retry: the radio reports poweredOn to
+        // `centralManagerDidUpdateState`, which starts the scan itself.
         guard bleCommunicationService.centralManager.state == .poweredOn else {
-            appLog("Step 2: Bluetooth not powered on", category: .general, level: .info)
+            appLog("Step 2: Bluetooth radio not up yet - the scan starts when it reports poweredOn", category: .general, level: .info)
             return (connected: false, hasMessage: false)
         }
 

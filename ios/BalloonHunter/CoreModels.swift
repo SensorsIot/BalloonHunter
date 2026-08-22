@@ -251,6 +251,9 @@ struct FrequencySyncProposal: Identifiable, Equatable {
     let frequency: Double
     let probeType: String
     let sondeName: String  // Track which sonde triggered this proposal
+    /// What was asked, so that answering it records exactly this asking and no
+    /// other. See FSD *Keeping the receiver on the hunted frequency* (FR-F.3).
+    let question: FrequencyQuestion
 }
 
 struct AFCData {

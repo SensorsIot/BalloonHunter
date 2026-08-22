@@ -57,7 +57,10 @@ final class ServiceCoordinator: ObservableObject {
 
     // Frequency sync proposal forwarded from APRS service
     @Published var frequencySyncProposal: FrequencySyncProposal? = nil
-    private var startupFrequencySyncDone: Bool = false  // Only sync once per startup/sonde change
+    /// The last frequency proposal the hunter answered, accepted or rejected. A
+    /// question that differs from it may be asked again; one that equals it may
+    /// not. See FSD *Keeping the receiver on the hunted frequency* (FR-F.3).
+    private var lastAnsweredFrequencyQuestion: FrequencyQuestion?
     /// What the sonde context load is doing right now, or `nil` when it is not
     /// running. Loading a whole flight from SondeHub takes seconds, and without
     /// this the hunter watches an unchanged screen and reasonably concludes the app
@@ -130,13 +133,10 @@ final class ServiceCoordinator: ObservableObject {
         // Delegate to BLE service for frequency sync
         bleCommunicationService.acceptFrequencySync(frequency: proposal.frequency, probeType: proposal.probeType, source: "ServiceCoordinator-UserAccepted")
 
-        // Mark startup sync as complete - won't prompt again until sonde change
-        startupFrequencySyncDone = true
-
-        // Clear the proposal
+        lastAnsweredFrequencyQuestion = proposal.question
         frequencySyncProposal = nil
 
-        appLog("ServiceCoordinator: Frequency sync accepted - startup sync complete", category: .service, level: .info)
+        appLog("ServiceCoordinator: Frequency sync accepted - receiver following the hunted sonde", category: .service, level: .info)
     }
 
     /// Reject the frequency sync proposal
@@ -146,39 +146,37 @@ final class ServiceCoordinator: ObservableObject {
         // Delegate to BLE service for rejection handling
         bleCommunicationService.rejectFrequencySync(frequency: proposal.frequency, probeType: proposal.probeType)
 
-        // Mark startup sync as complete - won't prompt again until sonde change
-        startupFrequencySyncDone = true
-
-        // Clear the proposal
+        lastAnsweredFrequencyQuestion = proposal.question
         frequencySyncProposal = nil
 
-        appLog("ServiceCoordinator: Frequency sync rejected - startup sync complete", category: .service, level: .info)
+        appLog("ServiceCoordinator: Frequency sync rejected - not asking again until something changes", category: .service, level: .info)
     }
 
-    /// Check frequency sync (called after sonde selection during startup or manual change)
-    func checkStartupFrequencySync(aprsRadio: RadioChannelData) {
-        // Skip if already done or proposal pending
-        guard !startupFrequencySyncDone else { return }
+    /// Ask whether the receiver should follow the hunted sonde. Called on each of
+    /// the three triggers of FR-F.1-F.3 - a selection, a receiver connection, and a
+    /// changed report for the hunted sonde - because those are exactly the moments
+    /// the answer can change. `FrequencySyncPolicy` decides; this only carries the
+    /// question to the alert.
+    func checkFrequencySync(aprsRadio: RadioChannelData) {
         guard frequencySyncProposal == nil else { return }
+        guard bleCommunicationService.connectionState.canReceiveCommands else { return }
 
-        let aprsFreq = aprsRadio.frequency
-        let bleFreq = bleCommunicationService.radioSettings.frequency
-        let freqMismatch = abs(aprsFreq - bleFreq) > 0.01
+        let question = FrequencySyncPolicy.question(
+            huntedFrequency: aprsRadio.frequency,
+            huntedProbeType: aprsRadio.probeType,
+            receiverFrequency: bleCommunicationService.radioSettings.frequency,
+            receiverProbeType: bleCommunicationService.radioSettings.probeType,
+            connectionGeneration: bleCommunicationService.connectionGeneration)
+
+        guard FrequencySyncPolicy.shouldAsk(question, lastAnswered: lastAnsweredFrequencyQuestion),
+              let question else { return }
 
         let aprsProbeType = aprsRadio.probeType.isEmpty ? "RS41" : aprsRadio.probeType
-        let bleProbeType = bleCommunicationService.radioSettings.probeType
-        let probeTypeMismatch = aprsProbeType != bleProbeType
-
-        // Mark sync as evaluated
-        startupFrequencySyncDone = true
-
-        guard freqMismatch || probeTypeMismatch else {
-            appLog("STARTUP: Frequency matches - APRS: \(String(format: "%.2f", aprsFreq)) MHz, BLE: \(String(format: "%.2f", bleFreq)) MHz", category: .service, level: .info)
-            return
-        }
-
-        appLog("STARTUP: Frequency mismatch - APRS: \(String(format: "%.2f", aprsFreq)) MHz (\(aprsProbeType)), BLE: \(String(format: "%.2f", bleFreq)) MHz (\(bleProbeType))", category: .service, level: .info)
-        frequencySyncProposal = FrequencySyncProposal(frequency: aprsFreq, probeType: aprsProbeType, sondeName: aprsRadio.sondeName)
+        appLog("FREQ: Receiver on \(String(format: "%.2f", bleCommunicationService.radioSettings.frequency)) MHz (\(bleCommunicationService.radioSettings.probeType)), hunted sonde on \(String(format: "%.2f", aprsRadio.frequency)) MHz (\(aprsProbeType)) - proposing the change", category: .service, level: .info)
+        frequencySyncProposal = FrequencySyncProposal(frequency: aprsRadio.frequency,
+                                                      probeType: aprsProbeType,
+                                                      sondeName: aprsRadio.sondeName,
+                                                      question: question)
     }
 
     func initialize() {
@@ -259,6 +257,24 @@ final class ServiceCoordinator: ObservableObject {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] in
                 self?.updatePredictionTimer()
+            }
+            .store(in: &cancellables)
+
+        // Triggers 2 and 3 of FR-F.1/F.2. The receiver connecting, and the hunted
+        // sonde's reported channel changing, are the other two moments the answer
+        // to "is the receiver on the hunted frequency?" can change. Both funnel
+        // into the same owner as the selection trigger; `FrequencySyncPolicy`
+        // decides whether anything is actually asked, so a redundant trigger is
+        // silent rather than a repeated alert.
+        bleCommunicationService.$connectionGeneration
+            .removeDuplicates()
+            .map { _ in () }
+            .merge(with: balloonPositionService.aprsService.$latestRadioChannel.map { _ in () })
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] in
+                guard let self,
+                      let aprsRadio = self.balloonPositionService.aprsService.latestRadioChannel else { return }
+                self.checkFrequencySync(aprsRadio: aprsRadio)
             }
             .store(in: &cancellables)
 
@@ -379,7 +395,9 @@ final class ServiceCoordinator: ObservableObject {
         }
 
         // 2. Set frequency sync flag
-        startupFrequencySyncDone = !checkFrequencySync
+        // A sonde adopted from BLE is one the receiver is already tuned to, so the
+        // rule finds nothing to ask and the old suppression flag is unnecessary.
+        // Asking on every selection is the trigger FR-F.1 names.
 
         // 3. Set the sonde name. One stored copy; BalloonTrackService reads it.
         balloonPositionService.currentBalloonName = name
@@ -425,12 +443,10 @@ final class ServiceCoordinator: ObservableObject {
                 await self.predictionService.triggerPredictionWithPosition(position, trigger: "sonde-context")
             }
 
-            // Check frequency sync if requested and BLE connected
-            if checkFrequencySync {
-                if self.bleCommunicationService.connectionState.canReceiveCommands,
-                   let aprsRadio = self.balloonPositionService.aprsService.latestRadioChannel {
-                    self.checkStartupFrequencySync(aprsRadio: aprsRadio)
-                }
+            // Trigger 1 of FR-F.1: a sonde was selected, so the hunted channel may
+            // have changed.
+            if let aprsRadio = self.balloonPositionService.aprsService.latestRadioChannel {
+                self.checkFrequencySync(aprsRadio: aprsRadio)
             }
         }
 

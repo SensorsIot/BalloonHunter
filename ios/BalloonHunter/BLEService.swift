@@ -297,6 +297,12 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
     // MARK: - Settings Properties
     // Radio/Sonde settings (from Type 0/1/2 packets)
     @Published var radioSettings: RadioSettings = .default
+
+    /// Counts connections to the receiver. A physical box may come back on any
+    /// channel, so "the receiver connected" has to be distinguishable from "the
+    /// receiver has been connected all along" — that is what makes the frequency
+    /// question askable again (FR-F.1) rather than answered forever.
+    @Published private(set) var connectionGeneration: Int = 0
     // Device hardware configuration (from Type 3 packets)
     @Published var deviceSettings: DeviceSettings = .default
 
@@ -371,6 +377,18 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
         switch central.state {
         case .poweredOn:
             publishHealthEvent(.healthy, message: "Bluetooth powered on")
+            // `CBCentralManager` answers its state here, asynchronously, and not to
+            // whoever asked first: a caller reading `centralManager.state` in the
+            // milliseconds after init sees `.unknown` and walks away. This callback
+            // is therefore the only place that knows scanning may begin, so it
+            // starts it — otherwise a launch that loses that race never looks for
+            // the receiver again, and the hunter has a connected MySondyGo the app
+            // cannot see. Re-entry is harmless: `startScanning` cancels its own
+            // pending retry and restarts the timeout.
+            appLog("🟢 BLE: Bluetooth powered on", category: .ble, level: .info)
+            if connectionState == .notConnected {
+                startScanning()
+            }
         case .poweredOff:
             appLog("BLE: Bluetooth is powered off - please enable Bluetooth in Settings", category: .ble, level: .error)
             connectionState = .notConnected
@@ -498,6 +516,7 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
         let deviceName = peripheral.name ?? "Unknown"
         appLog("🟢 BLE: SUCCESSFULLY CONNECTED to \(deviceName)", category: .ble, level: .info)
+        connectionGeneration += 1
         // Connection established
 
         // connectionState remains .notConnected until first packet received

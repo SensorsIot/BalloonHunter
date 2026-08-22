@@ -505,3 +505,68 @@ nonisolated enum RouteRenewalPolicy {
             && sinceLastHunterRenewal >= minimumInterval
     }
 }
+
+// MARK: - Frequency sync
+
+/// One asking of "is the receiver on the hunted sonde's frequency?" — the channel
+/// being proposed, and which connection it was proposed for.
+///
+/// The frequency is carried quantised so that equality is exact: two readings that
+/// agree within the tolerance are the same question, and asking again would show
+/// the hunter an alert for a change they cannot see.
+nonisolated struct FrequencyQuestion: Equatable {
+    let quantisedFrequency: Int
+    let probeType: String
+    let connectionGeneration: Int
+}
+
+/// When the receiver may be asked to follow the hunted sonde.
+///
+/// See FSD *Keeping the receiver on the hunted frequency*. The three triggers of
+/// FR-F.1–F.3 are not three code paths: a selection changes the hunted channel, a
+/// connection changes the generation, and a retuned sonde changes the reported
+/// channel — so each one produces a question that differs from the one already
+/// answered, and nothing else does.
+nonisolated enum FrequencySyncPolicy {
+    /// Two channels closer than this are the same channel. One owner for the value.
+    static let toleranceMHz: Double = 0.01
+
+    static func quantise(_ frequencyMHz: Double) -> Int? {
+        guard frequencyMHz.isFinite, frequencyMHz > 0 else { return nil }
+        let steps = (frequencyMHz / toleranceMHz).rounded()
+        guard steps.isFinite, steps.magnitude < Double(Int.max) else { return nil }
+        return Int(steps)
+    }
+
+    /// The question raised by the current state, or nil when there is nothing to
+    /// ask — the receiver already matches, or the hunted channel is not known.
+    static func question(huntedFrequency: Double,
+                         huntedProbeType: String,
+                         receiverFrequency: Double,
+                         receiverProbeType: String,
+                         connectionGeneration: Int) -> FrequencyQuestion? {
+        guard let hunted = quantise(huntedFrequency) else { return nil }
+        let probe = huntedProbeType.isEmpty ? "RS41" : huntedProbeType
+
+        // Whether the receiver is off-channel is a tolerance comparison — the
+        // app's existing rule, kept: closer than the tolerance is not a mismatch.
+        // Quantisation answers a different question below (is this the same asking
+        // as the one already answered?) and must not be used for this one, where
+        // it would turn two readings 5 kHz apart into a mismatch or not depending
+        // on which side of a step boundary they fell.
+        let offChannel = !receiverFrequency.isFinite
+            || abs(huntedFrequency - receiverFrequency) > toleranceMHz
+        guard offChannel || probe != receiverProbeType else { return nil }
+
+        return FrequencyQuestion(quantisedFrequency: hunted,
+                                 probeType: probe,
+                                 connectionGeneration: connectionGeneration)
+    }
+
+    /// FR-F.3: ask only what has not already been answered.
+    static func shouldAsk(_ question: FrequencyQuestion?,
+                          lastAnswered: FrequencyQuestion?) -> Bool {
+        guard let question else { return false }
+        return question != lastAnswered
+    }
+}

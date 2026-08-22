@@ -45,6 +45,7 @@ struct DataPanelView: View {
                             .lineLimit(1)
                             .multilineTextAlignment(.center)
                         Text(showingPlaceholders ? "N/A" : (balloonPositionService.currentPositionData?.sondeName ?? "N/A"))
+                            .accessibilityIdentifier("panel.serial")
                             .frame(minWidth: 100, maxWidth: .infinity, alignment: .center)
                             .lineLimit(1)
                             .multilineTextAlignment(.center)

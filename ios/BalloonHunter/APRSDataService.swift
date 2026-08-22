@@ -164,8 +164,33 @@ final class APRSDataService: ObservableObject {
 
     // MARK: - Public Interface
 
+    /// Whether the app is on screen. The timer belongs to this service, so the
+    /// question "may it run now?" is answered here and nowhere else: the state
+    /// machine starts polling on transitions, and while `bluetooth-central` keeps
+    /// the app alive those transitions keep arriving behind a locked screen. A
+    /// caller asking to start while the app is away is refused rather than
+    /// obeyed — see FSD *What runs in the background*.
+    private var isAppInForeground = true
+
+    /// Told by the app lifecycle, which is the only thing that knows.
+    func setAppInForeground(_ foreground: Bool) {
+        guard isAppInForeground != foreground else { return }
+        isAppInForeground = foreground
+        if foreground {
+            appLog("APRSDataService: App in foreground - polling allowed again", category: .service, level: .info)
+            startPolling()
+        } else {
+            appLog("APRSDataService: App backgrounded - polling stopped and refused until it returns", category: .service, level: .info)
+            stopPolling()
+        }
+    }
+
     /// Start APRS telemetry polling (called when BLE telemetry becomes stale)
     func startPolling() {
+        guard isAppInForeground else {
+            appLog("APRSDataService: Start request refused - the app is in the background", category: .service, level: .debug)
+            return
+        }
         guard !isPollingActive else {
             appLog("APRSDataService: Polling already active, ignoring start request", category: .service, level: .debug)
             return

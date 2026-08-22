@@ -40,6 +40,16 @@
                ReferencedContainer = "container:BalloonHunter.xcodeproj">
             </BuildableReference>
          </TestableReference>
+         <TestableReference
+            skipped = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "A7F0E00D2E5C000500000001"
+               BuildableName = "BalloonHunterUITests.xctest"
+               BlueprintName = "BalloonHunterUITests"
+               ReferencedContainer = "container:BalloonHunter.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
       </Testables>
    </TestAction>
    <LaunchAction

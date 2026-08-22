@@ -52,6 +52,7 @@ struct DistanceOverlayView: View {
         VStack {
             Spacer()
             Text(formattedDistance)
+                .accessibilityIdentifier("map.distance")
                 .font(.headline)
                 .foregroundColor(.white)
                 .padding(.horizontal, 12)
@@ -352,6 +353,7 @@ struct TrackingMapView: View {
                     // from hung. Purely a readout of coordinator state.
                     if let progress = coordinator.sondeContextProgress {
                         SondeContextProgressView(message: progress)
+                            .accessibilityIdentifier("context.progress")
                     }
 
                     // Map type toggle button (positioned below built-in map compass)
@@ -443,6 +445,7 @@ struct TrackingMapView: View {
         }
         .background(.ultraThinMaterial)
         .cornerRadius(8)
+        .accessibilityIdentifier("map.settings")
 
         // Change Sonde button
         Button {
@@ -454,6 +457,7 @@ struct TrackingMapView: View {
         }
         .background(.ultraThinMaterial)
         .cornerRadius(8)
+        .accessibilityIdentifier("map.changeSonde")
 
         // Transport mode. A segmented control spent about 100 points on a choice
         // between two things; this shows the mode in use and swaps on tap.

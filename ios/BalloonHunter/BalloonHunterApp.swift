@@ -48,6 +48,9 @@ struct BalloonHunterApp: App {
     @StateObject var appSettings: AppSettings
     @State private var animateLoading = false
     @State private var notificationDelegate: NotificationDelegate?
+    /// Whether the app has actually been in the background since the last resume.
+    /// The scene phase alone cannot say: `.inactive` covers alerts and launches too.
+    @State private var hasBeenAway = false
     
     init() {
         let services = AppServices()
@@ -202,13 +205,35 @@ struct BalloonHunterApp: App {
                 // that SondeHub cannot return. The flight itself is not stored.
                 appServices.persistenceService.saveHuntTail(appServices.balloonTrackService.currentHuntTail())
                 appLog("BalloonHunterApp: Entered background - hunt tail persisted", category: .lifecycle, level: .info)
+                hasBeenAway = true
 
                 // Foreground-only: stop continuous hunter-position tracking so there
                 // is no background-location footprint.
                 appServices.currentLocationService.stopForegroundTracking()
+
+                // And stop asking SondeHub. While the receiver is connected,
+                // `bluetooth-central` keeps the app alive, so this timer otherwise
+                // keeps firing behind a locked screen for data nobody is looking at.
+                // Stopping it is not enough on its own: the state machine restarts
+                // polling on transitions, and BLE telemetry keeps those coming while
+                // away. So the service is told the app is gone and refuses every
+                // start until it is told otherwise.
+                appServices.balloonPositionService.aprsService.setAppInForeground(false)
             }
 
-            if newScenePhase == .active && (oldScenePhase == .background || oldScenePhase == .inactive) {
+            // Resume is "the app came back from being away", and only `.background`
+            // means away. The scene also passes through `.inactive` for a cold
+            // launch, a permission alert, a notification banner, the app switcher
+            // and a control-centre pull — none of which is an absence, and each of
+            // which would otherwise run the whole resume sequence, refetching the
+            // context because a dialog appeared. `hasBeenAway` carries that one
+            // meaning; `isStartupComplete` keeps a launch out of it. Continuous
+            // location tracking is unaffected: it starts from the authorization
+            // callback, which fires on launch.
+            if newScenePhase == .active,
+               hasBeenAway,
+               serviceCoordinator.isStartupComplete {
+                hasBeenAway = false
                 // App returned to foreground - refresh services and state
                 appLog("BalloonHunterApp: App became active, refreshing services.", category: .lifecycle, level: .info)
                 // Resume continuous hunter-position tracking.
@@ -230,6 +255,13 @@ struct BalloonHunterApp: App {
         appLog("BalloonHunterApp: Step 1 - Requesting current user location", category: .lifecycle, level: .info)
         appServices.currentLocationService.requestCurrentLocation()
 
+        // 1b. Resume polling. It was stopped on the way out, and nothing else
+        // restarts it: the state machine configures predictions and routing, never
+        // the APRS timer, which only startup starts. Without this the app would
+        // come back permanently deaf to SondeHub.
+        appLog("BalloonHunterApp: Step 1b - Resuming APRS polling", category: .lifecycle, level: .info)
+        appServices.balloonPositionService.aprsService.setAppInForeground(true)
+
         // 2. Trigger state machine evaluation
         // Note: Continuous BLE scanning handles reconnection automatically
         // State machine will check current conditions and transition if needed
@@ -238,11 +270,15 @@ struct BalloonHunterApp: App {
         appServices.balloonPositionService.triggerStateEvaluation()
         let currentState = appServices.balloonPositionService.currentState
 
-        // 3. Check CURRENT state after evaluation - if flying, fill track gaps
-        // This ensures we make decisions based on reality NOW, not what happened before backgrounding
-        if currentState == .liveBLEFlying || currentState == .aprsFlying,
-           let hunted = appServices.balloonPositionService.currentBalloonName {
-            appLog("BalloonHunterApp: Step 3 - Currently flying (\(currentState)) - reading balloon context to fill any gap while away", category: .lifecycle, level: .info)
+        // 3. Read the sonde's context for whatever was missed. This runs for the
+        // hunted sonde whatever the state, not only a flying one: the hunter comes
+        // back to the app to see where the sonde is now, what the track looks like,
+        // where it is expected to land and how to get there — and a landed sonde
+        // may also have been reported found while the app was away. The read is
+        // delta-sized from the last fetch and single-flight, so it costs one small
+        // request; the landing point and route follow from it as they always do.
+        if let hunted = appServices.balloonPositionService.currentBalloonName {
+            appLog("BalloonHunterApp: Step 3 - Reading balloon context for '\(hunted)' (state \(currentState)) to fill the gap while away", category: .lifecycle, level: .info)
             // Not awaited: resume must not sit behind a network fetch before it
             // refreshes services below. `readBalloonContext` is single-flight, so
             // this shares whatever read the state machine has already started.
@@ -250,7 +286,7 @@ struct BalloonHunterApp: App {
                 await balloonTrackService.readBalloonContext(serial: hunted)
             }
         } else {
-            appLog("BalloonHunterApp: Step 3 - Not flying (\(currentState)) - skipping forced detection", category: .lifecycle, level: .info)
+            appLog("BalloonHunterApp: Step 3 - No sonde is being hunted, nothing to read", category: .lifecycle, level: .info)
         }
 
         // 4. If state didn't change, refresh current state to ensure services are active
@@ -319,6 +355,7 @@ struct SondeSelectionSheet: View {
                     Text("Select Sonde")
                         .font(.title2)
                         .fontWeight(.bold)
+                        .accessibilityIdentifier("picker.title")
 
                     if isRefreshing {
                         HStack(spacing: 6) {
@@ -355,6 +392,7 @@ struct SondeSelectionSheet: View {
                     Text("No sondes found")
                         .foregroundColor(.secondary)
                         .padding()
+                        .accessibilityIdentifier("picker.empty")
                 }
 
                 // Manual entry
@@ -364,6 +402,7 @@ struct SondeSelectionSheet: View {
                         .foregroundColor(.secondary)
 
                     TextField("e.g., V3240531", text: $manualSerial)
+                        .accessibilityIdentifier("picker.manualSerial")
                         .textFieldStyle(.roundedBorder)
                         .font(.system(.body, design: .monospaced))
                         .autocapitalization(.allCharacters)
@@ -402,6 +441,7 @@ struct SondeSelectionSheet: View {
                             .cornerRadius(12)
                     }
                     .disabled(selectedSondeSerial == nil)
+                    .accessibilityIdentifier("picker.confirm")
 
                 }
                 .padding(.horizontal, 20)
@@ -470,6 +510,7 @@ struct SondeRowView: View {
         .padding(.vertical, 4)
         .background(isSelected ? Color.blue.opacity(0.1) : Color.clear)
         .cornerRadius(8)
+        .accessibilityIdentifier("picker.row.\(sonde.serial)")
     }
 
     private func formatSondeTime(_ dateString: String) -> String {

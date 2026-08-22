@@ -18,12 +18,53 @@ tiers:
   device: "A real iPhone with the MySondyGo receiver present. Executed by hand."
   field: "A real hunt with a live sonde. Executed by hand, once per opportunity."
 
-equipment:
-  iphone: "iPhone with the app installed via devicectl."
-  receiver: "MySondyGo, powered, tuned to the sonde being hunted."
-  test_sonde: "A repowered RS41 on the bench, transmitting, absent from SondeHub."
-  live_sonde: "A sonde currently flying or recently landed within receiver range."
-  network: "Reachable SondeHub. Its absence is itself a test condition."
+# What the world has to look like for a test to mean anything. A test declares one
+# situation; testing/situation.sh reads the app's log, says which situation is
+# actually present, and runs what that allows. A test run outside its situation is
+# not a pass, it is a test that did not run.
+#
+# The four hardware situations are cumulative in what they add, not in severity:
+# a receiver alone proves the link, a flight alone proves SondeHub, and only both
+# together prove the handover between them.
+situations:
+  S-ANY:
+    what: "An iPhone with the app installed. No receiver and no sonde required."
+    detect: "always"
+    satisfies: []
+  S-RECEIVER:
+    what: "A MySondyGo connected over BLE, decoding nothing - no sonde in range. Proves the link and the tuning commands, and nothing about telemetry."
+    detect: "BLE connected, and no telemetry frames for any serial"
+    create: "Tune the receiver off the sonde's frequency. The signal stops without touching the BLE link, so this situation can be made on demand rather than waited for - and reversed the same way."
+    satisfies: [S-ANY]
+  S-SONDE:
+    what: "At least one sonde on SondeHub for the station within the last 24 h, and no BLE telemetry. Enough to select, load a context, draw overlays and route - the whole Type A half of the app, with no receiver involved."
+    detect: "the picker lists at least one sonde, and 'BLE available: false'"
+    satisfies: [S-ANY]
+  S-FLIGHT:
+    what: "A sonde airborne now, reported by SondeHub, with no BLE telemetry for it. Adds live telemetry, re-prediction and the ascent-to-descent transition."
+    detect: "state aprsFlying, and 'BLE available: false'"
+    satisfies: [S-SONDE, S-ANY]
+  S-LANDED:
+    what: "A sonde down and still lying out, its flight on SondeHub, the receiver switched off. The Type A recovery precondition."
+    detect: "state aprsLanded, and 'BLE available: false'"
+    satisfies: [S-SONDE, S-ANY]
+  S-FLIGHT-BLE:
+    what: "The receiver decoding a sonde that is still flying. The only situation that proves the BLE-to-APRS handover and the chase."
+    detect: "state liveBLEFlying"
+    create: "Tune the receiver to a sonde that is up. Ascent and descent are both this situation; the ones that need the sonde falling declare S-DESCENT-BLE."
+    satisfies: [S-FLIGHT, S-SONDE, S-RECEIVER, S-ANY]
+  S-DESCENT-BLE:
+    what: "The receiver decoding a sonde after burst, falling. The landing detector, the descent-rate reading and the re-prediction cannot be exercised in ascent, because none of them has an input until the sonde turns."
+    detect: "state liveBLEFlying with a negative vertical speed, after a burst point"
+    create: "Wait for the burst. It is the one stage of a flight that cannot be arranged."
+    satisfies: [S-FLIGHT-BLE, S-FLIGHT, S-SONDE, S-RECEIVER, S-ANY]
+  S-TEST-SONDE:
+    what: "The receiver decoding a repowered bench sonde that SondeHub holds nothing for, while a real hunt is in progress."
+    detect: "five consecutive decodes of a serial other than the hunted one"
+    satisfies: [S-RECEIVER, S-ANY]
+
+  network: "Every situation above assumes SondeHub is reachable. Its absence is a
+    separate test condition, not a degraded form of these."
 
 # ------------------------------------------------------------- atomic (unit)
 atomic:
@@ -70,13 +111,24 @@ atomic:
       No route to somewhere already stood on; renewal on landing-point movement unthrottled and on hunter movement throttled; close-range handover radius.
     last_result: "30 passing"
 
+  - id: U-FREQ-SYNC
+    kind: atomic
+    scenario: standard
+    tier: unit
+    verifies: [FR-F.3]
+    implemented_by: "FrequencySyncPolicyTests"
+    covers: >
+      The three triggers that make the question askable again - selection, a receiver connection, a changed reported frequency - and that an answered proposal stays silent while none of them fires. Both boundaries: answered-then-unchanged is silent, answered-then-reconnected asks again.
+    last_result: "14 passing"
+    status: passed
+
 # ----------------------------------------------------------------- workflows
 workflows:
   - id: W-STARTUP
     kind: workflow
     scenario: standard
     tier: device
-    needs: [iphone, network]
+    situation: S-SONDE
     children: [U-TRACK-MERGE, U-PREDICTION-POLICY]
     start_state: >
       App fully quit. Verify - not assume - that no hunt is in progress.
@@ -98,12 +150,18 @@ workflows:
     evidence_required:
       - "balloonhunter.log.csv covering launch to 'STARTUP: Complete'"
       - "The Documents listing, showing only userSettings.json and hunttail.json"
-    status: not_run
+    status: passed
+    last_run: "2026-08-22 13:31, iPhone, situation S-FLIGHT-BLE"
+    evidence: "testing/evidence/ui-cycle-device-20260822-133218.csv"
+    observed: >
+      Auto-select of the ascending sonde at 10280 m; no 'Already tracking'; no sonde identity before Step 4b decided.
+    not_covered: >
+      The picker branch - a sonde was airborne, so selection was automatic. Needs a run with nothing in the air. The overlays drawing is asserted from the log, not seen.
   - id: W-BACKGROUND
     kind: workflow
     scenario: standard
     tier: device
-    needs: [iphone, network]
+    situation: S-SONDE
     start_state: >
       A hunt in progress with a drawn track.
     steps:
@@ -111,22 +169,40 @@ workflows:
         observe: "the count is recorded before backgrounding"
       - do: "Send the app to the background; wait at least a minute."
         observe: "log: 'Entered background - hunt tail persisted' exactly once"
+      - do: "Watch what the app does while it is away."
+        observe: "no SondeHub request at all between the background line and the resume line"
       - do: "Bring it back to the foreground."
-        observe: "log: '=== Foreground Resume Sequence Started ==='"
+        observe: "log: '=== Foreground Resume Sequence Started ===' then 'Step 1b - Resuming APRS polling'"
       - do: "Watch the context read."
-        observe: "log: 'Context read ... <n>s since last fetch -> duration=30m'"
+        observe: "log: 'Step 3 - Reading balloon context for <serial>' then 'Context read ... <n>s since last fetch -> duration=30m'"
+      - do: "Watch the next polls."
+        observe: "SondeHub requests resume at the normal cadence; position, track, landing point and route are current"
+      - do: "Touch a system alert or the app switcher without leaving the app."
+        observe: "no resume sequence - an interruption is not an absence"
     must_not:
       - "Two 'hunt tail persisted' lines per cycle, which means the save is firing on .inactive in both directions."
+      - "Any SondeHub request while the app is in the background - bluetooth-central keeps it alive, so a timer left running keeps firing behind a locked screen."
+      - "No SondeHub request after the resume, which means the app came back deaf: nothing but startup and this resume ever starts that timer."
       - "A full 3d fetch on resume, which means the window is sized from the newest frame rather than the last fetch."
+      - "The context read being skipped because the sonde is landed - the hunter came back to see where it is, and it may have been reported found."
       - "The landing marker moving while the app was away and nothing arrived."
+      - "A resume sequence triggered by a permission alert or any other .inactive bounce."
     evidence_required:
       - "The log across the whole background and foreground cycle"
-    status: not_run
+    status: passed
+    last_run: "2026-08-22 14:11, iPhone, 70 s dwell, situation S-FLIGHT-BLE"
+    evidence: "testing/evidence/ui-cycle-device-20260822-141157.csv"
+    observed: >
+      One 'hunt tail persisted' per cycle. Zero SondeHub requests across the whole absence, including one the state machine attempted and was refused. On return: 'Step 1b - Resuming APRS polling', a context read in state noTelemetry - the state the old flying-only guard would have skipped - sized '67s since last fetch -> duration=30m, holding 4260 points', and polling back at cadence.
+    not_covered: >
+      The landing marker not moving while away - needs a landed sonde.
+    history: >
+      The run before this one measured five background polls against an FSD that says nothing is polled there. Stopping the timer on the way out was not enough: the state machine restarts polling on transitions, and BLE telemetry kept transitions arriving behind the locked screen. The gate now asserts both halves - silence while away, and requests after the return.
   - id: W-SONDE-CHANGE
     kind: workflow
     scenario: standard
     tier: device
-    needs: [iphone, network]
+    situation: S-SONDE
     start_state: >
       A hunt in progress on sonde A, with a drawn track and a landing point.
     steps:
@@ -142,12 +218,67 @@ workflows:
       - "The picker appearing with an empty list."
     evidence_required:
       - "The log from picker open to B's first drawn overlay"
+    status: passed
+    last_run: "2026-08-22 13:32, iPhone, situation S-FLIGHT-BLE"
+    evidence: "testing/evidence/ui-cycle-device-20260822-133218.csv"
+    observed: >
+      W4140048 -> W4214536 through the picker, 'Clearing all old sonde data', the track emptied before the new one loaded.
+    not_covered: >
+      That sonde A's stored hunt tail is not restored for B - the tail held 1 point and both serials were re-fetched from scratch.
+  - id: W-FREQ-ON-CONNECT
+    kind: workflow
+    scenario: standard
+    tier: device
+    situation: S-RECEIVER
+    verifies: [FR-F.1]
+    start_state: >
+      A hunt in progress on a sonde whose frequency is known. The receiver switched off, or tuned to a different frequency.
+    steps:
+      - do: "Set the receiver to a frequency that is not the hunted sonde's."
+        observe: "no telemetry for the hunted serial"
+      - do: "Switch the receiver on, or let it reconnect."
+        observe: "log: 'SUCCESSFULLY CONNECTED'"
+      - do: "Watch the screen."
+        observe: "the frequency-sync alert appears, naming the hunted sonde's frequency"
+      - do: "Accept it."
+        observe: "the receiver retunes and telemetry for the hunted serial starts"
+      - do: "Disconnect and reconnect the receiver once more."
+        observe: "with the frequencies now equal, no alert appears"
+    must_not:
+      - "A connection with a mismatched frequency and no alert - the hunter would sit in front of a silent receiver."
+      - "The app retuning the receiver without the alert being accepted."
+      - "The alert repeating while nothing has changed."
+    evidence_required:
+      - "The log across both connections, and a photograph or screenshot of the alert"
+    blocked_by: "Situation only - the receiver is on the hunted sonde's frequency, and taking it off during a live flight would cost the campaign its BLE phases. Run after landing."
+    status: not_run
+  - id: W-FREQ-CHANGED
+    kind: workflow
+    scenario: deviation
+    tier: device
+    situation: S-FLIGHT-BLE
+    verifies: [FR-F.2]
+    start_state: >
+      A hunt in progress with the receiver connected and tuned to the hunted sonde.
+    steps:
+      - do: "Wait for or arrange a SondeHub report giving the hunted sonde a different frequency."
+        observe: "log: the reported frequency differs from the receiver's"
+      - do: "Watch the screen."
+        observe: "the alert appears for the new value"
+      - do: "Reject it."
+        observe: "the receiver keeps its frequency; the alert does not return while nothing changes"
+    must_not:
+      - "The app holding a proposal for the superseded value."
+      - "A silent retune."
+    evidence_required:
+      - "The log showing both frequencies and the proposal"
+    blocked_by: "Situation only - needs a sonde whose reported frequency changes."
     status: not_run
   - id: W-TEST-SONDE
     kind: workflow
     scenario: negative
     tier: device
-    needs: [iphone, receiver, test_sonde, network]
+    situation: S-TEST-SONDE
     children: [U-TEST-SONDE]
     start_state: >
       A hunt in progress on a real sonde. A repowered test sonde on the bench, transmitting, and confirmed absent from SondeHub for 24 h.
@@ -167,21 +298,62 @@ workflows:
     evidence_required:
       - "The log across all five decodes and the refusal"
     status: not_run
-  - id: W-HUNT
+  # The two hunt types of FSD "Hunt Phases -> Hunt Types". Both are acceptance
+  # workflows; neither substitutes for the other, because they exercise different
+  # sources: A drives on SondeHub alone and meets BLE at the end, B carries BLE
+  # from the air to the ground and survives losing it.
+  - id: W-HUNT-RECOVERY
     kind: workflow
     scenario: standard
     tier: field
-    needs: [iphone, receiver, live_sonde, network]
+    situation: S-LANDED
+    verifies: [FR-H.1, FR-H.2, FR-L.1, FR-L.3]
     children: [U-LANDING, U-PREDICTION-POLICY, U-ROUTING]
     start_state: >
-      A sonde flying or recently down within reach. Receiver powered and tuned. This is the acceptance workflow: it proves what one step produces is what the next consumes, which the atomic cases cannot show.
+      Type A. A sonde that landed earlier and is still lying out, its flight on SondeHub. The receiver is switched OFF and stays off until the last step, so everything up to that point is proven to work without BLE.
     steps:
-      - do: "Tune the receiver to the sonde and confirm it decodes."
-        observe: "the data panel shows the serial and a signal strength"
+      - do: "With the receiver off, launch the app and take the sonde through the picker."
+        observe: "the track draws, a landing point appears, and a route is built to it"
+      - do: "Read the landing point against SondeHub's own last position for that serial."
+        observe: "they agree, or differ only by the predicted descent"
+      - do: "Drive toward the landing point."
+        observe: "the route rebuilds after about 100 m of hunter movement, not continuously; the landing marker does not wander"
+      - do: "Close to within 200 m."
+        observe: "the route disappears; the distance overlay counts down"
+      - do: "Switch the receiver on, already tuned to that serial."
+        observe: "the data panel shows the serial decoding; no picker appears; the track and landing point are unchanged"
+      - do: "Walk in until frames arrive from the sonde on the ground."
+        observe: "log: 'Landing detected - locking position'; the marker moves to the observed position"
+      - do: "Find the sonde."
+        observe: "the distance overlay agrees with reality to within a few metres"
+    must_not:
+      - "Selection, landing point or route waiting on a receiver that is switched off."
+      - "The picker reappearing when the receiver is switched on."
+      - "The log line 'is a test sonde' naming the hunted serial."
+      - "The track or landing point being cleared when the first BLE frames arrive."
+      - "The landing marker moving between predictions while driving."
+    evidence_required:
+      - "The log from launch to the find, pulled before the ring buffer rotates"
+      - "The final distance-overlay reading against where the sonde actually lay"
+    status: not_run
+  - id: W-HUNT-CHASE
+    kind: workflow
+    scenario: standard
+    tier: field
+    situation: S-FLIGHT-BLE
+    verifies: [FR-H.3, FR-L.1, FR-L.2, FR-L.3]
+    children: [U-LANDING, U-PREDICTION-POLICY, U-ROUTING]
+    start_state: >
+      Type B. A sonde still in the air, within receiver range. Receiver powered and tuned. The hunt is carried by BLE from flight to touchdown, including a spell out of range.
+    steps:
+      - do: "Tune the receiver to the flying sonde and confirm it decodes."
+        observe: "the data panel shows the serial, a signal strength and a falling or rising altitude"
       - do: "Launch the app and take the sonde through the picker."
         observe: "the track, landing point and route all draw"
       - do: "Drive toward the landing point."
         observe: "the route rebuilds after about 100 m of movement, not continuously"
+      - do: "Drive on until the BLE link drops out of range."
+        observe: "the hunt keeps the same serial and continues from SondeHub; no picker appears"
       - do: "Continue while APRS coverage ends."
         observe: "log: 'Landed by silence (aprsStale) - keeping predicted landing'; the marker stays on the prediction"
       - do: "Close to within 200 m."
@@ -193,6 +365,7 @@ workflows:
       - do: "After someone reports the find, relaunch."
         observe: "the balloon marker is green"
     must_not:
+      - "The hunt being cleared or the picker returning when the BLE link drops."
       - "The landing marker sitting at the last-heard altitude position during the drive."
       - "The route still drawn while standing next to the sonde."
       - "The marker locking to a position the receiver never observed."
@@ -200,4 +373,161 @@ workflows:
     evidence_required:
       - "The log for the whole hunt, pulled before the ring buffer rotates"
       - "The final distance-overlay reading against where the sonde actually lay"
+    status: not_run
+
+# ------------------------------------------------- campaign: one real flight
+# The workflows above each start from a rig arranged to suit them. This campaign
+# does the opposite: it follows one balloon from launch to its last APRS frame and
+# takes what that flight offers, in the order it offers it. Every phase begins in
+# the state the previous phase left - that is the whole point, and no rearranged
+# rig can show it.
+#
+# Run it by watching the situation: testing/situation.sh reports which phase the
+# flight is in, and each phase names the situation it needs. A phase missed is
+# missed for that flight; there is no going back to it.
+#
+# What this campaign cannot reach, and must not be read as covering: the hunt
+# itself - driving to the landing point and walking in with the receiver until it
+# hears the sonde on the ground. That needs a car and a field, and it is where
+# FR-H.2 (a receiver switched on late) and the confirmed touchdown of FR-L.2 are
+# proven. They stay with W-HUNT-RECOVERY and W-HUNT-CHASE.
+campaign:
+  - id: C-1-APRS-ONLY
+    kind: workflow
+    scenario: standard
+    tier: device
+    situation: S-FLIGHT
+    phase: "Launched and climbing, heard by SondeHub, not yet by the receiver"
+    verifies: [FR-H.1]
+    start_state: >
+      A sonde airborne and reported by SondeHub. The receiver is tuned away from it, so the app has APRS and nothing else. Create it with the frequency knob rather than waiting for range.
+    steps:
+      - do: "Launch the app."
+        observe: "log: 'Step 4b - LandingDetector says phase=ascending -> autoSelect'; the picker does not appear"
+      - do: "Watch the context load."
+        observe: "log: 'Context read ... never fetched -> duration=3d'; the red track draws"
+      - do: "Watch two APRS polls."
+        observe: "log: 'duration=30m (poll - latest only)' every 15 s; altitude rising"
+      - do: "Check the landing point and the route."
+        observe: "both exist, from the prediction alone - no BLE has been involved"
+    must_not:
+      - "The app waiting on BLE for anything: selection, context, landing point or route."
+      - "A 3d fetch on every poll, which would mean the poll window is not the delta."
+      - "The picker appearing while a sonde is demonstrably airborne."
+    evidence_required:
+      - "The log from launch to the second poll"
+    last_run: "2026-08-22 13:21-13:29, iPhone, W4140048 climbing, receiver blind"
+    evidence: "testing/evidence/campaign-results.txt"
+    observed: >
+      Auto-select without the picker; every poll on duration=30m; a route built from the prediction with no BLE line in the window.
+    not_covered: >
+      The map itself - that the red track, the landing marker and the route are drawn is asserted from the log, not seen.
+    status: passed
+  - id: C-2-BLE-ACQUIRES
+    kind: workflow
+    scenario: standard
+    tier: device
+    situation: S-FLIGHT-BLE
+    phase: "The receiver picks up the same balloon the app is already tracking"
+    verifies: [FR-F.1]
+    start_state: >
+      C-1 complete and still running. Now tune the receiver back onto the hunted sonde.
+    steps:
+      - do: "Tune the receiver to the hunted sonde's frequency."
+        observe: "log: 'SUCCESSFULLY CONNECTED' if the link was down, then a Type 1 packet for the hunted serial"
+      - do: "Watch the state."
+        observe: "log: 'DataState: aprsFlying -> liveBLEFlying'"
+      - do: "Watch the track."
+        observe: "BLE points extend the same track; the point count grows without a jump or a duplicate leg"
+      - do: "Check the frequency proposal."
+        observe: "either the frequencies already agree, or the sync alert appears once"
+    must_not:
+      - "A second selection, or the picker returning, when BLE telemetry starts."
+      - "The log line 'is a test sonde' naming the hunted serial - the test-sonde rule applies to a retune to a DIFFERENT serial."
+      - "The track being cleared and refetched because a new source arrived."
+      - "Two positions for the same instant drawn as separate points."
+    evidence_required:
+      - "The log across the transition, showing the state change and the track count on both sides"
+    last_run: "2026-08-22 13:42, iPhone, aprsFlying -> liveBLEFlying at 13:42:21"
+    evidence: "testing/evidence/campaign-results.txt"
+    observed: >
+      The handover in flight; BLE telemetry for the hunted serial; no second selection and no clear after it.
+    not_covered: >
+      That the track extended continuously without a doubled leg - visual.
+    status: passed
+  - id: C-3-BURST-AND-DESCENT
+    kind: workflow
+    scenario: standard
+    tier: device
+    situation: S-DESCENT-BLE
+    phase: "Burst, then falling under the parachute"
+    verifies: [FR-L.3]
+    start_state: >
+      C-2 complete, the sonde still climbing. This phase cannot be arranged - it starts when the balloon bursts.
+    steps:
+      - do: "Watch the moment of burst."
+        observe: "log: 'Burst point found at index <n> with altitude <max>m'; vertical speed turns negative"
+      - do: "Watch the landing point."
+        observe: "it moves as the descent develops, on the prediction timer - not on every frame"
+      - do: "Watch the route."
+        observe: "it is renewed when the landing point moves, and not renewed while only the hunter is still"
+      - do: "Read the descent rate in the data panel."
+        observe: "it agrees in sign and rough magnitude with the vertical speed in the log"
+    must_not:
+      - "A landing declared during the descent."
+      - "The predicted-descent line disappearing while the sonde is still falling."
+      - "The landing marker jumping to the sonde's current position, which is not where it will land."
+    evidence_required:
+      - "The log from the last ascent frame to a stable descent rate"
+    status: not_run
+  - id: C-4-BLE-LOST
+    kind: workflow
+    scenario: deviation
+    tier: device
+    situation: S-FLIGHT-BLE
+    phase: "The balloon goes out of receiver range while still falling"
+    verifies: [FR-H.3]
+    start_state: >
+      C-3 in progress, BLE telemetry arriving. Take the signal away - tune the receiver off the sonde, which is the same loss the app sees when the balloon drops behind terrain.
+    steps:
+      - do: "Tune the receiver away from the sonde."
+        observe: "log: 'Telemetry LOST' after the stale window; no BLE frames"
+      - do: "Watch the state."
+        observe: "log: 'DataState: liveBLEFlying -> aprsFlying'"
+      - do: "Check the hunt."
+        observe: "the same serial is still hunted; the track keeps its BLE points and continues from APRS"
+    must_not:
+      - "The hunt being cleared, or the picker returning, on BLE loss."
+      - "The BLE points already collected being discarded."
+      - "A landing declared because BLE went quiet."
+    evidence_required:
+      - "The log across the loss, showing the serial unchanged and the track count not falling"
+    status: not_run
+  - id: C-5-LAST-APRS
+    kind: workflow
+    scenario: standard
+    tier: device
+    situation: S-FLIGHT
+    phase: "SondeHub loses it too - the last frame of the flight"
+    verifies: [FR-L.1, FR-L.3]
+    start_state: >
+      C-4 complete, the sonde descending on APRS alone. This phase arrives on its own, when the ground receivers lose line of sight.
+    steps:
+      - do: "Watch the APRS frames stop."
+        observe: "log: 'APRS landing check - age=...' climbing past the threshold"
+      - do: "Watch the state."
+        observe: "log: 'Landed by silence (aprsStale) - keeping predicted landing'"
+      - do: "Check the landing marker."
+        observe: "it sits on the prediction, not on the last-heard position, which was still in the air"
+      - do: "Check the prediction."
+        observe: "it runs once if there was none, and then stops - the marker does not wander"
+      - do: "Check the route."
+        observe: "it leads to the predicted landing point"
+    must_not:
+      - "The landing marker moving to the last-heard coordinate, which is a point in the sky."
+      - "A confirmed touchdown declared from silence."
+      - "Repeated predictions once an estimate exists."
+    evidence_required:
+      - "The log from the last APRS frame to the state change and the final marker position"
+      - "The last-heard altitude, to show the sonde was still airborne when the feed stopped"
     status: not_run

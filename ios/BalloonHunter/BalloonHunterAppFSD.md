@@ -1368,6 +1368,47 @@ compares the fetched serial against it — so a context read that returns before
 first frame is discarded. Whether that happens depends on which arrives first, which
 is precisely the kind of order-dependence a single stored copy removes.
 
+#### Keeping the receiver on the hunted frequency
+
+A receiver tuned elsewhere hears nothing, and hears it silently — the app shows no
+signal and cannot tell that from a sonde out of range. So the question *"is the
+receiver on the hunted sonde's frequency?"* has to be asked at every moment its
+answer can change, not once per selection.
+
+Its answer changes on exactly three events, and each one is a trigger:
+
+| Event | Why the answer can change |
+|---|---|
+| A sonde is selected | The hunt now has a different frequency |
+| The receiver connects | It is a physical box with its own last setting, which nobody in the app chose |
+| SondeHub reports a different frequency for the hunted sonde | The sonde was retuned, or the first report was wrong |
+
+The app never changes the receiver silently: each trigger raises the existing
+proposal alert, and the hunter accepts or rejects it. A rejected proposal stays
+rejected for that same question — a fresh trigger is a new question.
+
+*Requirements in this section are numbered `FR-F.n`.*
+
+- **FR-F.1** [Must] When the BLE receiver reaches the connected state and its
+  frequency or probe type differs from the hunted sonde's, the app shall raise the
+  frequency-sync proposal — on every such connection, not only the first after
+  launch.
+  *Verification:* device — `W-FREQ-ON-CONNECT`.
+  *Prohibited:* a connection with a mismatch and no proposal; the receiver being
+  retuned without the hunter accepting.
+
+- **FR-F.2** [Must] When the hunted sonde's reported frequency or probe type
+  changes while the receiver is connected, the app shall raise the proposal for the
+  new value.
+  *Verification:* device — `W-FREQ-CHANGED`.
+  *Prohibited:* the app continuing to hold a proposal for the superseded value.
+
+- **FR-F.3** [Must] The app shall not re-raise a proposal the hunter has answered
+  until one of the three triggers above occurs again.
+  *Verification:* unit — `U-FREQ-SYNC`, covering answered-then-unchanged (silent)
+  and answered-then-reconnected (asked again).
+  *Prohibited:* a repeating alert while nothing has changed.
+
 #### Rejecting foreign telemetry
 
 Telemetry whose serial differs from the hunted sonde is discarded in `BLECommunicationService` before publication. A single such packet is a sample, not a change: acting on one allowed a bench unit to clear a live hunt and write its own position into the flight track.
@@ -1483,6 +1524,49 @@ The app's behaviour is organised around **what the hunter is doing**, not what t
 | 3 | on the road | Am I still driving to the right place? |
 | 4 | on foot | Which way, and how far? |
 
+### Hunt Types
+
+A hunt begins in one of two situations. Both are ordinary, and neither is a
+degraded form of the other. The phases above are the same in both; what differs is
+**where the position comes from, and when the receiver is switched on.**
+
+| | **Type A — recovery** | **Type B — chase** |
+|---|---|---|
+| At selection the sonde is | already on the ground | still in the air |
+| Where the hunt starts | wherever the hunter is, at any time after the flight | at the launch, or on joining a flight in progress |
+| Destination | the predicted landing point, replaced by the observed position once touchdown is confirmed | the live prediction, renewed as telemetry arrives |
+| Telemetry source | SondeHub alone for most of the hunt | BLE while in range, SondeHub outside it |
+| The receiver is | switched on by the hunter near the sonde, to home in on the beacon | on for the whole hunt |
+| It ends | at the sonde on the ground | at the sonde on the ground |
+
+Type A is the common case: coverage ends while the sonde is still descending, so
+the hunter drives to an *estimate* and only meets the real signal at the end. Type
+B is the case where the receiver carries the hunt from the air to the ground.
+
+*Requirements in this section are numbered `FR-H.n`. The tests that discharge them
+are declared in [`testing/test-plan.yaml`](../../testing/test-plan.yaml).*
+
+- **FR-H.1** [Must] The app shall complete selection, context load, landing point
+  and route for a landed sonde **with no BLE receiver connected**, using SondeHub
+  data alone.
+  *Verification:* workflow — `W-HUNT-RECOVERY`, run with the receiver switched off.
+  *Prohibited:* any of those four steps waiting on BLE; an empty map or absent
+  route because no receiver answered.
+
+- **FR-H.2** [Must] When a receiver already tuned to the hunted serial is switched
+  on mid-hunt, the app shall adopt its frames as telemetry for the hunt in progress
+  — without a second selection, without clearing the track, and without the
+  test-sonde refusal, which applies only to a **retune to a different serial**.
+  *Verification:* workflow — `W-HUNT-RECOVERY`, step "switch the receiver on".
+  *Prohibited:* the picker reappearing; the track or landing point being cleared;
+  the log line `is a test sonde` naming the hunted serial.
+
+- **FR-H.3** [Must] In a chase, losing the BLE link shall not end or redefine the
+  hunt: the serial is kept and the hunt continues from SondeHub.
+  *Verification:* workflow — `W-HUNT-CHASE`, step "drive on until the BLE link
+  drops out of range".
+  *Prohibited:* a hunt cleared on BLE loss; a return to the picker.
+
 ### Hunt Identity
 
 **The serial identifies the hunt.** Telemetry never redefines it, and elapsed time never defines it.
@@ -1510,7 +1594,14 @@ They answer different questions: startup asks what is being hunted and what is k
 
 #### What runs in the background, and the resume sequence
 
-**Nothing is polled in the background.** The app declares only
+**Nothing is polled in the background — and the app has to stop it, not merely
+refrain from starting it.** `bluetooth-central` keeps the app alive while the
+receiver is connected, so a timer left running keeps firing behind a locked
+screen. The APRS poll is therefore stopped when the app leaves the foreground and
+started again when it returns; nothing else starts or stops it, so those two are a
+pair and neither may exist alone.
+
+The app declares only
 `UIBackgroundModes: bluetooth-central` in `Info.plist`, and location is **"When In
 Use"** — never "Always". `bluetooth-central` keeps the app alive only while a BLE
 peripheral stays connected, and because **BLE state restoration is not
@@ -1524,11 +1615,14 @@ harder permission for data the backfill already recovers.
 `handleForegroundResume()` then runs, in order:
 
 1. **Request the current user location** — for the map and routing.
-2. **Check BLE connection health** — reconnect if the link dropped while away.
-3. **Trigger state-machine evaluation**, and if the state is a flying one, call
-   `readBalloonContext(serial:)` to delta-fetch whatever accumulated while
-   suspended and re-run track-based landing detection.
-4. **Refresh the current state** if no transition occurred, so each state's
+2. **Resume APRS polling**, which was stopped on the way out.
+3. **Trigger state-machine evaluation.**
+4. **Read the sonde context** for the hunted sonde — whatever the state, not only a
+   flying one. The hunter opens the app to see where the sonde is now, what the
+   track looks like, where it is expected to land and how to get there, and a
+   landed sonde may have been reported found while the app was away. The read is
+   delta-sized from the last fetch and single-flight, so it costs one small request.
+5. **Refresh the current state** if no transition occurred, so each state's
    services are configured to match reality now.
 
 **The state machine decides what is active — never hardcoded resume logic.** Which

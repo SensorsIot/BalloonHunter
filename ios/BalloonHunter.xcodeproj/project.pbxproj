@@ -53,6 +53,11 @@
 			path = BalloonHunterTests;
 			sourceTree = "<group>";
 		};
+		A7F0DFF12E5BFFFF0000009A /* BalloonHunterUITests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = BalloonHunterUITests;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -84,6 +89,7 @@
 			isa = PBXGroup;
 			children = (
 				A7F0DFF02E5BFFFF00000099 /* BalloonHunterTests */,
+				A7F0DFF12E5BFFFF0000009A /* BalloonHunterUITests */,
 				4771180F2E3B511A00C79172 /* BalloonHunter */,
 				4771180E2E3B511A00C79172 /* Products */,
 			);
@@ -157,6 +163,9 @@
 			);
 			dependencies = (
 				A7F0E0122E5C000500000001 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				A7F0DFF12E5BFFFF0000009A /* BalloonHunterUITests */,
 			);
 			name = BalloonHunterUITests;
 			productName = BalloonHunterUITests;
