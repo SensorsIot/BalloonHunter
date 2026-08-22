@@ -45,18 +45,27 @@ xcodebuild -project BalloonHunter.xcodeproj -scheme BalloonHunter \
 The suite runs on the simulator and needs no hardware. A device build additionally
 proves the stricter concurrency settings compile.
 
-## CI
+## The gate is a pre-push hook, not a hosted runner
 
-`.github/workflows/ios-tests.yml` runs the suite on every push to `main` and every
-pull request that touches `ios/`. A red run blocks the merge, so the gate no longer
-depends on someone remembering.
+The suite runs on this machine, before the push, and refuses it when red.
 
-The workflow discovers its toolchain rather than pinning one: it selects the newest
-Xcode on the runner and asks `xcodebuild -showdestinations` for a simulator UDID. A
-device *name* is ambiguous — the same iPhone exists under several runtimes and
-xcodebuild refuses a destination it cannot resolve to one device — so the UDID is
-what it uses. On failure the `.xcresult` bundle is uploaded, because a red run
-without it means reproducing the failure locally to find out what broke.
+```
+git config --global core.hooksPath ~/Documents/Github/claude/githooks
+```
+
+The hook dispatches on what the push touches, so an unrelated change costs nothing.
+For Swift it builds and runs the full suite — about twenty seconds incremental —
+and prints the failing test when it refuses.
+
+**A hosted macOS runner is not usable for this.** Its images carry several Xcode
+versions and no iOS simulator runtimes, so `xcodebuild` finds only a placeholder
+destination and the job fails before building; making it work means downloading
+gigabytes per run for a suite that finishes in under a second here.
+
+**What that trades away:** the gate protects this machine only. A pull request from
+someone else, or a push from a second machine without the hook, is unchecked. That
+is the right trade while this is a solo project and the wrong one as soon as it is
+not.
 
 Running the suite locally before committing still matters: CI reports after the
 push, and the loop is faster here.
