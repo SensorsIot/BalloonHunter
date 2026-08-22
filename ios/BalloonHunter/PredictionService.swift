@@ -182,7 +182,6 @@ final class PredictionService: ObservableObject {
     private let predictionCache: PredictionCache
     private weak var serviceCoordinator: ServiceCoordinator?
     private let userSettings: UserSettings
-    private let balloonTrackService: BalloonTrackService?
     private weak var balloonPositionService: BalloonPositionService?
     private weak var landingPointTrackingService: LandingPointTrackingService?
     
@@ -220,7 +219,6 @@ final class PredictionService: ObservableObject {
         self.predictionCache = predictionCache
         self.userSettings = userSettings
         self.serviceCoordinator = nil // Will be set later to avoid circular dependency
-        self.balloonTrackService = nil // Will be set later if needed
         self.balloonPositionService = nil // Will be set later to avoid circular dependency
         self.landingPointTrackingService = nil // Will be set later for service chain
 
@@ -228,30 +226,6 @@ final class PredictionService: ObservableObject {
         publishHealthEvent(.healthy, message: "Prediction service initialized with shared dependencies")
     }
     
-    // MARK: - Full Constructor (with scheduling)
-    init(
-        predictionCache: PredictionCache,
-        serviceCoordinator: ServiceCoordinator,
-        userSettings: UserSettings,
-        balloonTrackService: BalloonTrackService
-    ) {
-        // Initialize API session
-        let config = URLSessionConfiguration.default
-        config.timeoutIntervalForRequest = 30.0
-        config.timeoutIntervalForResource = 60.0
-        self.session = URLSession(configuration: config)
-        
-        // Initialize scheduling dependencies
-        self.predictionCache = predictionCache
-        self.serviceCoordinator = serviceCoordinator
-        self.userSettings = userSettings
-        self.balloonTrackService = balloonTrackService
-        self.balloonPositionService = nil // Will be set later to avoid circular dependency
-        self.landingPointTrackingService = nil // Will be set later for service chain
-        
-        // PredictionService initialized with scheduling
-        publishHealthEvent(.healthy, message: "Prediction service initialized")
-    }
 
     // MARK: - Configuration
 

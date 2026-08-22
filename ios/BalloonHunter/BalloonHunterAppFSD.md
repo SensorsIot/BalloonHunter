@@ -459,7 +459,6 @@ The codebase is organized into logical layers with clear separation of responsib
 
 **Utility Layer:**
 - `Settings.swift` - UserSettings and AppSettings with persistence management
-- `DebugCSVLogger.swift` - Development telemetry logging and debugging support
 
 #### BalloonHunterApp.swift:
 
@@ -545,10 +544,6 @@ Trajectory prediction against SondeHub's Tawhiri API, with the co-located
 Specified in *Services → Prediction Service*; the descent-rate rule is in
 *Descent Rate and Parachute Behaviour*, and when predictions run is in
 *How a Landing Is Determined*.
-
-#### DebugCSVLogger.swift:
-
-Utility that records incoming telemetry frames (excluding development sondes) to a CSV file in the app’s documents directory for offline analysis.
 
 #### Settings.swift:
 
@@ -1117,7 +1112,7 @@ this merge.
    **Summary**: Track-based landing detection runs conditionally (Scenarios 1 and 3 only). Track recording behavior depends on data source availability: stops in `aprsLanded` (Scenario 2) when no BLE available, continues in `liveBLELanded` (Scenario 4) when BLE active because hunter needs live updates during approach.
 
 6. **Staleness** — A 1 Hz timer flips `isTelemetryStale = true` whenever the latest telemetry is more than 3 s old.
-7. **Persistence** — Saves the track every 10 telemetry points via `saveBalloonTrack`. Helpers expose the full track for app-shutdown persistence (`saveOnAppClose`). CSV logging for each telemetry sample is routed to `DebugCSVLogger`.
+7. **Persistence** — Nothing is written during a run. On entering the background the BLE hunt tail is saved; the flight itself is never stored, because SondeHub holds it and the context loader fetches it.
 8. **Motion metrics publishing** — After each telemetry sample the service emits a `BalloonMotionMetrics` snapshot so downstream consumers can pick either the raw or smoothed values without re-computing them; smoothed values and descent rate are reset to zero once the balloon is landed.
 
 ### Landing Point Tracking Service

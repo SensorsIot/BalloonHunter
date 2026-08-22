@@ -1596,16 +1596,6 @@ final class LandingPointTrackingService: ObservableObject {
     }
 
     /// Inject persisted landing points from startup sequence
-    func injectPersistedData(landingPoints: [LandingPredictionPoint]) {
-        guard !landingPoints.isEmpty else {
-            appLog("LandingPointTrackingService: No persisted landing points to inject", category: .service, level: .info)
-            return
-        }
-
-        self.landingHistory = landingPoints
-        self.lastLandingPrediction = landingPoints.last
-        appLog("LandingPointTrackingService: Injected \(landingPoints.count) persisted landing points", category: .service, level: .info)
-    }
 
     // Set reference to RouteCalculationService for service chain
     func setRouteCalculationService(_ routeCalculationService: RouteCalculationService) {
@@ -1682,13 +1672,6 @@ final class LandingPointTrackingService: ObservableObject {
 
         lastLandingPrediction = newPoint
 
-        // Save landing points immediately (per FSD)
-        persistenceService.saveLandingPoints(landingHistory)
-    }
-
-    func persistCurrentHistory() {
-        // Save current landing history
-        persistenceService.saveLandingPoints(landingHistory)
     }
 
     func resetHistory() {
@@ -1706,10 +1689,7 @@ final class LandingPointTrackingService: ObservableObject {
         currentSondeName = nil
         pendingLandingPoint = nil
 
-        // Clear landing points from disk so old sonde landing points don't reload on next startup
-        persistenceService.saveLandingPoints([])
-
-        appLog("LandingPointTrackingService: All data cleared for new sonde (including persisted landing points)", category: .service, level: .info)
+        appLog("LandingPointTrackingService: All data cleared for new sonde", category: .service, level: .info)
     }
 }
 

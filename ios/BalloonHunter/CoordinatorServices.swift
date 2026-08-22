@@ -83,7 +83,6 @@ extension ServiceCoordinator {
         // Nothing belonging to a sonde is loaded before selection has said which
         // sonde that would be — see FSD *Startup*. The BLE hunt tail is read later
         // by the context loader, for the serial actually chosen.
-        let landingPoints: [LandingPredictionPoint] = []
 
         // Step 2: Service Initialization (already done in init) + Request location
         await MainActor.run {
@@ -100,12 +99,11 @@ extension ServiceCoordinator {
         }
         appLog("STARTUP: Step 3 - Injecting persisted data into services", category: .general, level: .info)
 
-        // Nothing sonde-specific is injected. Startup must not seed an identity
-        // before selection has produced one: the hunted serial is the picker's
-        // answer alone, and a name written here would later be mistaken for proof
-        // that tracking had been set up. The BLE hunt tail is restored later, by the
-        // context loader, for whichever serial is actually chosen.
-        landingPointTrackingService.injectPersistedData(landingPoints: landingPoints)
+        // Nothing is injected. Startup must not seed an identity before selection
+        // has produced one: the hunted serial is the picker's answer alone, and a
+        // name written here would later be mistaken for proof that tracking had been
+        // set up. The BLE hunt tail is restored later, by the context loader, for
+        // whichever serial is actually chosen.
 
         // Step 4: Start BLE & APRS (gap filling now works on loaded track)
         await MainActor.run {

@@ -14,7 +14,6 @@ Grouped by the phase they serve:
 
 | type | phase | decides |
 |---|---|---|
-| `HuntState` | 1, starting up | same hunt or a new one; what may be drawn when nothing is arriving |
 | `DepartureTime` | 2, stationary | when to leave in order to meet the landing |
 | `NavigationHandoff` | 3, on the road | when a changed drive is worth interrupting for |
 | `CloseRangeGuidance` | 4, on foot | how far and which way, and whose position to trust |
@@ -120,71 +119,6 @@ nonisolated enum StartupSelection: Equatable {
 
 // MARK: - Phase 1: Is this still the same hunt?
 
-nonisolated struct HuntState {
-
-    /// How long a hunt stays current once nothing is arriving.
-    let staleAfter: TimeInterval
-
-    init(staleAfter: TimeInterval = 6 * 60 * 60) {
-        self.staleAfter = staleAfter
-    }
-
-    /// What the app should do with what it remembers.
-    enum Decision: Equatable {
-        /// Same sonde, and recent enough to still be the hunt in progress.
-        /// Draw the track, the landing point and the route.
-        case resumeHunt
-
-        /// Same sonde, but nothing has arrived for longer than a hunt lasts.
-        /// Say so and draw nothing, while continuing to wait for data.
-        case tooOldToShow
-
-        /// A different sonde. The stored hunt is not this one; discard it.
-        case startNewHunt
-
-        /// Nothing stored to make a decision about.
-        case nothingStored
-    }
-
-    /// What is known when the app comes up.
-    struct StoredHunt: Equatable {
-        /// Serial the stored track belongs to.
-        let serial: String
-        /// When the last data for it arrived.
-        let lastDataAt: Date
-    }
-
-    /// Decide what to do with a stored hunt.
-    ///
-    /// - Parameters:
-    ///   - stored: what was on disk, or `nil` if nothing was.
-    ///   - hunting: the serial now being hunted, or `nil` if none is chosen yet.
-    ///   - now: the current time.
-    func decide(stored: StoredHunt?, hunting: String?, now: Date = Date()) -> Decision {
-        guard let stored else { return .nothingStored }
-
-        // A different sonde is a different hunt, whatever its age.
-        if let hunting, hunting != stored.serial { return .startNewHunt }
-
-        // Same sonde: age decides only whether it is worth showing.
-        let age = now.timeIntervalSince(stored.lastDataAt)
-        return age <= staleAfter ? .resumeHunt : .tooOldToShow
-    }
-
-    /// Whether the stored flight may be drawn on the map.
-    func mayDisplay(stored: StoredHunt?, hunting: String?, now: Date = Date()) -> Bool {
-        decide(stored: stored, hunting: hunting, now: now) == .resumeHunt
-    }
-
-    /// Whether the stored flight must be cleared before hunting `hunting`.
-    ///
-    /// Only a different sonde clears. Age never does: re-fetching the same serial
-    /// returns the same flight, so discarding it loses the receiver's own detail
-    /// for nothing.
-    func mustClear(stored: StoredHunt?, hunting: String?) -> Bool {
-        decide(stored: stored, hunting: hunting) == .startNewHunt
-    }
-}
 
 // MARK: - Phase 2: When to leave
 

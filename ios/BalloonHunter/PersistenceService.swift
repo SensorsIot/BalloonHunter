@@ -17,7 +17,6 @@ final class PersistenceService: ObservableObject {
 
     // MARK: - File Names
     private let userSettingsFile = "userSettings.json"
-    private let landingPointsFile = "landingPoints.json"
 
     init() {
         // Load only userSettings in init for backward compatibility
@@ -27,6 +26,7 @@ final class PersistenceService: ObservableObject {
         self.deviceSettings = nil
         self.radioSettings = nil
 
+        removeRetiredFiles()
         appLog("PersistenceService: Initialized - settings and the BLE hunt tail; the flight itself is not stored", category: .service, level: .info)
     }
 
@@ -75,25 +75,7 @@ final class PersistenceService: ObservableObject {
         appLog("PersistenceService: radioSettings updated in memory: freq=\(String(format: "%.2f", radioSettings.frequency))MHz type=\(radioSettings.probeType)", category: .service, level: .debug)
     }
 
-    // MARK: - Landing Points
 
-    func saveLandingPoints(_ landingPoints: [LandingPredictionPoint]) {
-        let encoder = JSONEncoder()
-        if let encoded = try? encoder.encode(landingPoints) {
-            saveToDocumentsDirectory(data: encoded, filename: landingPointsFile)
-            appLog("PersistenceService: Landing points saved (\(landingPoints.count) points)", category: .service, level: .debug)
-        }
-    }
-
-    func loadLandingPoints() -> [LandingPredictionPoint]? {
-        let decoder = JSONDecoder()
-        if let data = Self.loadFromDocumentsDirectory(filename: landingPointsFile),
-           let landingPoints = try? decoder.decode([LandingPredictionPoint].self, from: data) {
-            appLog("PersistenceService: Landing points loaded (\(landingPoints.count) points)", category: .service, level: .debug)
-            return landingPoints
-        }
-        return nil
-    }
 
     // MARK: - The BLE hunt tail
 
@@ -136,6 +118,20 @@ final class PersistenceService: ObservableObject {
             try data.write(to: fileURL)
         } catch {
             appLog("PersistenceService: Failed to save \(filename): \(error)", category: .service, level: .error)
+        }
+    }
+
+    /// Files earlier versions wrote and nothing reads any more.
+    ///
+    /// `balloontrack.json` and `sondeName.json` are gone because the flight comes
+    /// from SondeHub and the hunted serial is the picker's answer; `landingPoints.json`
+    /// was written on every new landing point and never once read back. Left alone
+    /// they would sit in Documents forever — the track file was 129 KB — and, worse,
+    /// invite someone to start reading them again. Safe to delete this method once
+    /// no installed build still writes them.
+    private func removeRetiredFiles() {
+        for filename in ["balloontrack.json", "sondeName.json", "landingPoints.json"] {
+            deleteFromDocumentsDirectory(filename: filename)
         }
     }
 
