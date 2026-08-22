@@ -239,11 +239,10 @@ struct BalloonHunterApp: App {
 
         // 3. Check CURRENT state after evaluation - if flying, fill track gaps
         // This ensures we make decisions based on reality NOW, not what happened before backgrounding
-        if currentState == .liveBLEFlying || currentState == .aprsFlying {
-            appLog("BalloonHunterApp: Step 3 - Currently flying (\(currentState)) - triggering APRS fetch with forced track-based landing detection", category: .lifecycle, level: .info)
-            await MainActor.run {
-                appServices.balloonTrackService.fillTrackGapsFromAPRS(forceDetection: true)
-            }
+        if currentState == .liveBLEFlying || currentState == .aprsFlying,
+           let hunted = appServices.balloonPositionService.currentBalloonName {
+            appLog("BalloonHunterApp: Step 3 - Currently flying (\(currentState)) - reading balloon context to fill any gap while away", category: .lifecycle, level: .info)
+            await appServices.balloonTrackService.readBalloonContext(serial: hunted)
         } else {
             appLog("BalloonHunterApp: Step 3 - Not flying (\(currentState)) - skipping forced detection", category: .lifecycle, level: .info)
         }

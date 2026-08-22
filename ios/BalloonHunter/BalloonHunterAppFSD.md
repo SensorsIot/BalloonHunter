@@ -303,7 +303,7 @@ Each state defines explicit entry functionality and exit criteria:
 **State: `aprsFlying`**
 - **Functionality**:
   - Enables APRS polling
-  - **Triggers APRS track fill** (BalloonTrackService.fillTrackGapsFromAPRS()) — NEW
+  - **Reads balloon context** (BalloonTrackService.readBalloonContext()) — the delta-fetch keeps the track complete (only when the previous state was not `startup`)
   - Calls chain: Prediction with APRS balloon position → Landing point tracking → Routing
   - Map shows balloon track, landing point, landing point track, predicted path, route
   - Frequency sync is **not** performed here. It runs once per startup and once per sonde change, and asks the user before changing anything — see *Startup → Step 4c: Frequency Sync*.
@@ -316,7 +316,7 @@ Each state defines explicit entry functionality and exit criteria:
 - **Functionality**:
   - Enables APRS polling
   - **Updates landing point** to current balloon position and triggers route calculation — NEW
-  - **Triggers APRS track fill** (BalloonTrackService.fillTrackGapsFromAPRS()) — NEW
+  - **Reads balloon context** (BalloonTrackService.readBalloonContext()) — the delta-fetch keeps the track complete (only when the previous state was not `startup`)
   - Calls chain: Landing point tracking with APRS balloon position → Routing
   - Map shows balloon track, landing point, landing point track
   - Data panel shows motion metrics as zero
@@ -911,15 +911,26 @@ The APRS service filters out ground-based test sondes to prevent them from being
 - Suspend polling when asked
 - The APRS service only supplies raw telemetry frames
 
-#### APRS Telemetry Gap Filling
+#### APRS Telemetry: the delta-fetch (`readBalloonContext`)
 
-**Purpose**: The APRS service fetches complete APRS track data from SondeHub to fill gaps in the local BLE track. This ensures the user always receives all available telemetry data for the current sonde, even if BLE connection was interrupted or established mid-flight.
+**Purpose**: keep the local track complete with the sonde's whole APRS history, while
+never re-downloading history the track already holds. `readBalloonContext(serial:)` is
+the single entry point — the *only* thing that fetches the red track. Callers do not
+gap-hunt or size the request; they just ask for context and get a complete, current
+track back.
 
 **API Endpoint**: `GET /sondes/telemetry?serial=<serial>&duration=<duration>`
-- Default duration: `3d` (SondeHub retains data for ~3 days)
 - Returns nested JSON: `{ "serial": { "timestamp": { telemetry_fields } } }`
-- Response size: ~9.6 MB uncompressed (685 KB gzipped) for 10,000 points
-- Response time: ~9 seconds (server processing ~9s, download <0.2s)
+- Duration is **chosen by the fetcher from the gap**, not fixed. SondeHub accepts only
+  the buckets `15s, 1m, 30m, 1h, 3h, 6h, 12h, 1d, 3d`; `sondeHubDurationBucket(covering:)`
+  picks the smallest bucket that covers the gap.
+
+**How the delta is decided** (`gapSinceNewestFrame`):
+- Gap = `now − newest-held-frame-time + 60 s` margin.
+- **Empty track → gap is unbounded → `3d`** (a fresh selection loads the whole flight).
+- A track a few minutes stale → `1m`/`30m` — a small, fast request, not the 3-day payload.
+- This is why polling a multi-hour flight never re-fetches 3 days: after the first load
+  each `readBalloonContext` pulls only the seconds since the newest frame it already has.
 
 **APRS Point Fields** (parsed from SondeHub response):
 - Essential tracking: `serial`, `datetime`, `lat`, `lon`, `alt`
@@ -928,17 +939,23 @@ The APRS service filters out ground-based test sondes to prevent them from being
 
 **Timeout Configuration**:
 - Regular polling: 5 seconds (for quick site endpoint responses)
-- APRS telemetry: 30 seconds (allows for 9s typical response + network buffer)
+- APRS telemetry: 30 seconds (allows for a large first `3d` load + network buffer)
 
-**Gap Filling Process**:
-1. Fetch complete APRS track for current sonde serial number
-2. Compare local track timestamps with APRS telemetry timestamps
-3. Filter to only new points (not already in local track)
-4. Convert to `BalloonTrackPoint` format (lat/lon/alt/timestamp/speeds)
-5. Merge into local track and sort by timestamp
-6. Persist combined track for future sessions
+**Process** (`readBalloonContext`):
+1. Size the request from the gap since the newest held frame (full `3d` if the track is empty).
+2. Fetch that window for the current serial.
+3. Merge by physical position — `Array.mergingByPosition` on `BalloonTrackPoint.positionKey`
+   (~1 m: 5 decimals of lat/lon, 1 m of altitude). A genuine new position is inserted; an
+   APRS copy of a position already held (e.g. a BLE point 17 s ahead) is dropped.
+4. Persist the combined track, publish `trackUpdated`, run track-based landing detection.
+5. If the fetch is empty *and* the track is still empty, fall back to per-frame streaming
+   recovery.
 
-This mechanism ensures users see the complete balloon flight path even if they connect to MySondyGo after launch.
+There is no separate gap-hunting function. The former `fillTrackGapsFromAPRS` (which always
+pulled a fixed `3d` window and diffed by timestamp) was replaced by this delta-fetch:
+timestamp diffing was fragile against the BLE/APRS relay skew, and the fixed `3d` window
+re-downloaded the entire history on every foreground return or BLE↔APRS handoff. The
+position-keyed merge and gap-sized bucket fix both.
 
 ### Current Location Service
 
@@ -1111,34 +1128,42 @@ Build the flight history, smooth velocities, detect landings, derive descent met
 Selecting a sonde (startup **and** every new sonde go through `startTrackingSonde`)
 does four things, in one ordered chain, each owned by one place:
 
-1. **`readBalloonContext(serial)`** — *one* SondeHub fetch: load the whole track
-   and publish the latest position (its last point), with the recovery status
-   checked in parallel. This is the single data read. It replaces the old pair
-   `forceImmediateFetch` (position) + startup `fillTrackGapsFromAPRS` (track),
-   which fetched the same 3-day payload **twice** (~15 s doubled for a large
-   sonde).
+1. **`readBalloonContext(serial)`** — *the* SondeHub track read: keep the whole
+   track complete and publish the latest position (its last point), with the
+   recovery status checked separately by the caller. It is a **delta-fetch**: it
+   sizes the request from the gap since the newest frame it already holds — the
+   whole flight (`3d`) when the track is empty, only the last minutes when it is
+   nearly current — and merges the result by physical position. It replaces the
+   old pair `forceImmediateFetch` (position) + startup `fillTrackGapsFromAPRS`
+   (track), which fetched a fixed 3-day payload **twice**.
 2. **track overlay** — the red track + balloon marker draw from that data
    immediately; nothing downstream is waited on.
 3. **prediction overlay** — one prediction from the published position → the blue
    path + landing point. Then re-prediction is flying-only (`PredictionPolicy`).
 4. **route overlay** — the green route follows from the landing point.
 
-`fillTrackGapsFromAPRS` is **no longer** the startup loader — it is demoted to
-*mid-flight gap repair* (a BLE-loss handoff), and the state machine only calls it
-when the previous state was not `startup`, so it never re-fetches the track the
-context read just loaded. Recovery-status and the continuous poll run in parallel.
+`readBalloonContext` is the **only** function that fetches the red track. There is
+no separate gap-repair path: the same delta-fetch serves selection, a BLE-loss
+handoff, a foreground return, and each APRS state entry. On a state entry the
+state machine calls it only when the previous state was not `startup`, so
+selection's context read is never immediately repeated. Recovery-status and the
+continuous poll run separately.
 
 The **live poll** (`fetchSondeBySerial`) fetches only a short window
 (`pollTelemetryWindow`, 30 min) because it uses just the latest frame — so it is
-cheap even for a long flight and never re-downloads the 3-day history. If that
+cheap even for a long flight and never re-downloads the history. If that
 window is empty (a landed/stale sonde) it returns quietly; it does **not** fall
-back to the slow full streaming. The only full-history fetches are
-`readBalloonContext` (the 3-day track once per selection) and its
-`recoverPositionViaStreaming` fallback for a sonde older than 3 days.
+back to the slow full streaming. The only full-history fetch is
+`readBalloonContext`'s first load of an empty track (and its
+`recoverPositionViaStreaming` fallback for a sonde older than 3 days); every
+later `readBalloonContext` pulls only the delta.
 
-2a. **APRS track filling, deduplicated by physical position** — `fillTrackGapsFromAPRS(sondeName:forceDetection:)` fetches SondeHub telemetry and merges it with `Array.mergingByPosition` (`BalloonTrackPoint.positionKey`, rounded to ~1 m: 5 decimals of lat/lon, 1 m of altitude). A genuine gap — no point at that location — is filled; an APRS copy of a position the track already holds is dropped.
+2a. **Track merge, deduplicated by physical position** — `readBalloonContext` merges
+its fetched points with `Array.mergingByPosition` (`BalloonTrackPoint.positionKey`,
+rounded to ~1 m: 5 decimals of lat/lon, 1 m of altitude). A genuine new position is
+inserted; an APRS copy of a position the track already holds is dropped.
 
-   Position, not timestamp, is the identity because BLE and APRS decode the *same* sonde frame and report identical GPS position, but their timestamps differ by the relay latency — BLE stamps the phone's arrival time (direct RF decode), APRS carries the sonde's frame time as recorded by SondeHub. A per-second timestamp key could not tell an APRS point was a copy of one BLE already held, and inserted both; position is immune to the skew and needs no time-window constant. Live APRS is otherwise suppressed while BLE is the active source, so APRS enters the track only through this fill.
+   Position, not timestamp, is the identity because BLE and APRS decode the *same* sonde frame and report identical GPS position, but their timestamps differ by the relay latency — BLE stamps the phone's arrival time (direct RF decode), APRS carries the sonde's frame time as recorded by SondeHub. A per-second timestamp key could not tell an APRS point was a copy of one BLE already held, and inserted both; position is immune to the skew and needs no time-window constant. Live APRS is otherwise suppressed while BLE is the active source, so APRS enters the track only through this merge.
 
    > **Measured — W4214924, 21 Aug 2026.** BLE dropped, returned briefly for ~6 s near 1551 m, then dropped again. A backfill re-inserted APRS copies of those 6 BLE points 17 s later with identical lat/lon/alt, producing an interleaved sawtooth and repeated `RED TRACK JUMP` warnings. Under a 1 s timestamp key the copies landed in different slots and were not caught; position keying drops them.
 
@@ -1146,11 +1171,11 @@ back to the slow full streaming. The only full-history fetches are
 
    It runs when the state machine enters an APRS state, on a sonde change, at startup, and on returning from the background mid-flight.
 
-   **Background telemetry — by design, the app does not poll in the background; it backfills on foreground.** iOS suspends the app in the background (the `bluetooth-central` mode only keeps it alive while a BLE peripheral is connected, and even then no state restoration means a full close stops everything). Rather than fight this with a `location` background mode and its battery/permission cost, the app relies on SondeHub retaining the whole flight: on return to the foreground the fill fetches the recent history (`duration=3d`) and merges it by position, reconstructing whatever was missed while suspended — however long the app was away. This covers both outcomes: a balloon still flying on resume (foreground step 3, forced; and entering `aprsFlying`) and one that landed while the app was away (entering `aprsLanded`, line 463). The position dedup makes the backfill safe against any BLE points already in the track. The only thing not recoverable is BLE's ~17 s-ahead precision during the gap — SondeHub isn't fed BLE — but APRS fills the positions, so the track is complete.
+   **Background telemetry — by design, the app does not poll in the background; it backfills on foreground.** iOS suspends the app in the background (the `bluetooth-central` mode only keeps it alive while a BLE peripheral is connected, and even then no state restoration means a full close stops everything). Rather than fight this with a `location` background mode and its battery/permission cost, the app relies on SondeHub retaining the whole flight: on return to the foreground `readBalloonContext` fetches exactly the window since its newest held frame — a short delta after a brief absence, up to `3d` if the track was empty — and merges it by position, reconstructing whatever was missed while suspended — however long the app was away. This covers both outcomes: a balloon still flying on resume (foreground step 3, forced; and entering `aprsFlying`) and one that landed while the app was away (entering `aprsLanded`, line 463). The position dedup makes the backfill safe against any BLE points already in the track. The only thing not recoverable is BLE's ~17 s-ahead precision during the gap — SondeHub isn't fed BLE — but APRS fills the positions, so the track is complete.
 
    Landing detection runs afterwards only in two cases: the track was already loaded and its last packet is over 20 minutes old, or the caller forced it. Skipping it on routine updates matters — detection takes over a second on a large track.
 
-   **Task cancellation:** any fill already running is cancelled before a new one starts, and by `clearAllData()` on a sonde change. Without this, a fetch begun for the previous sonde can write its results after the change completes.
+   **Stale-fetch guard:** after the fetch returns, `readBalloonContext` re-checks `currentBalloonName == serial` on the main actor before inserting. A fetch begun for the previous sonde that finishes after a sonde change is discarded rather than written into the new sonde's track — the serial guard makes explicit task cancellation unnecessary.
 
 3. **Speed smoothing** — Maintains Hampel buffers (window 10, k=3) to reject outliers, applies deadbands near zero, and feeds an exponential moving average (τ = 10 s) to publish smoothed horizontal/vertical speeds alongside the raw telemetry values within `motionMetrics`.
 4. **Adjusted descent rate** — Looks back 60 s over the track, computes interval descent rates, takes the median, and keeps a 20-entry rolling average; the latest value is exposed through `motionMetrics` (and zeroed when the balloon is landed).
@@ -1185,15 +1210,16 @@ back to the slow full streaming. The only full-history fetches are
 
    **Scenario 1: the app was not running during the flight.**
    The stored track's last packet is over 20 minutes old, so the flight happened
-   while the app was closed. `fillTrackGapsFromAPRS()` fetches what was missed and
-   then runs the track-based detection above over the whole flight, looking for
-   the blackout or the stationary period that marks where it came down.
+   while the app was closed. `readBalloonContext()` fetches what was missed (a full
+   `3d` load when the stored track is empty, otherwise the delta since its newest
+   frame) and then runs the track-based detection above over the whole flight,
+   looking for the blackout or the stationary period that marks where it came down.
 
    **Scenario 2: APRS-Only Mode After Landing Detected (No BLE)**
    When the balloon has landed and BLE is not available (state machine is in `aprsLanded`), APRS polling continues at a reduced frequency to confirm the balloon remains landed, but track recording must stop to prevent unnecessary data accumulation. The hunter no longer needs continuous track updates once the balloon is stationary on the ground with no BLE connection. Detection method: The state machine has already transitioned to `aprsLanded` based on age-based landing detection (APRS telemetry older than 120 seconds) or track-based landing detection. In `processPositionData()`, check the current state before recording track points. If state is `aprsLanded`, skip appending the point to `currentBalloonTrack`. APRS polling remains enabled (not disabled) to periodically verify landing status.
 
    **Scenario 3: App Returns from Background During Flight**
-   When the user backgrounds the app during an active flight and later returns to the foreground, the app must fetch any APRS data accumulated during the background period and run track-based landing detection to determine if the balloon landed while the app was inactive. Detection method: Monitor app lifecycle using SwiftUI's `scenePhase` environment variable. When `scenePhase` transitions from `.background` to `.active`, check if the current state is a flying state (`liveBLEFlying` or `aprsFlying`). If flying, set a flag indicating "background return during flight" and trigger `balloonPositionService.refreshCurrentState()`, which calls `fillTrackGapsFromAPRS()`. Pass this flag to `fillTrackGapsFromAPRS()` so it knows to run track-based detection regardless of the number of points added. Track recording continues normally for all telemetry sources.
+   When the user backgrounds the app during an active flight and later returns to the foreground, the app must fetch any APRS data accumulated during the background period and run track-based landing detection to determine if the balloon landed while the app was inactive. Detection method: Monitor app lifecycle using SwiftUI's `scenePhase` environment variable. When `scenePhase` transitions from `.background` to `.active`, check if the current state is a flying state (`liveBLEFlying` or `aprsFlying`). If flying, the foreground-resume path calls `readBalloonContext(serial:)` for the hunted sonde, which delta-fetches whatever accumulated while the app was suspended, merges it by position, and runs track-based detection (`detectTrackBasedLanding()`) over the resulting track. Track recording continues normally for all telemetry sources.
 
    **Scenario 5: Landing Detected with BLE Active**
    When the balloon has landed but BLE remains connected and active (state machine is in `liveBLELanded`), track recording must continue because the hunter needs real-time position updates as they approach the balloon on foot or by vehicle. BLE provides live telemetry as the hunter gets closer, which is critical for final navigation to the landing site. Detection method: The state machine has already transitioned to `liveBLELanded` based on real-time BLE landing detection (5-packet window showing net speed below 3 km/h and altitude below 3000 meters). APRS polling stops (already implemented via `aprsService.disablePolling()` in the `liveBLELanded` state handler). In `processPositionData()`, the state check allows track recording to continue for all states except `startup`, `waitingForAPRS`, and `noTelemetry`. Since `liveBLELanded` is not in the exclusion list, BLE track points continue to be recorded and published. Track recording continues as long as BLE remains active, regardless of landing status.
@@ -1824,8 +1850,8 @@ knowing where the balloon lies:**
   the track-based stationary/blackout rules. That is when the marker locks to the
   actual point and prediction stops.
 - **One prediction on sonde selection, then flying-only.** `startTrackingSonde`
-  is the single place that reads the whole SondeHub context — telemetry, track
-  (`fillTrackGapsFromAPRS`) and recovery — and then makes **one** prediction to
+  is the single place that reads the whole SondeHub context — track and latest
+  position (`readBalloonContext`) plus recovery — and then makes **one** prediction to
   establish the landing point and route, flying or landed. Startup and every new
   sonde come through here, so a landed sonde selected cold still gets a landing
   and a route (without this it had neither). After that first estimate,
@@ -1952,12 +1978,12 @@ The coordinator runs `performCompleteStartupSequence()` in eight stages, waiting
     *   **Inject persisted data**: Load validated data from Step 1 into services
     *   **Track loaded**: BalloonTrackService now has persisted track points
     *   **Landing history loaded**: LandingPointTrackingService has previous predictions
-    *   **Critical**: Track MUST be populated before APRS starts (gap filling requires existing track)
+    *   **Critical**: Track is populated before APRS starts, so `readBalloonContext`'s delta-fetch sizes its request from the newest restored frame (a small delta) instead of re-loading the whole `3d` history
 
 **Step 4: Service Startup + Answer Detection (100ms-~4s) [PARALLEL]**
     *   Progress label: "Step 4: BLE & APRS"
     *   **BLE Service**: Start scanning (if Bluetooth powered on)
-    *   **APRS Service**: Start polling station data (gap filling now works on persisted track)
+    *   **APRS Service**: Start polling station data (`readBalloonContext` delta-fetches against the persisted track)
     *   **Wait for both definitive answers**:
         - BLE: Bluetooth off OR connection state enum published (after first packet)
         - APRS: Telemetry data received OR network error

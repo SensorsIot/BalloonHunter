@@ -237,8 +237,8 @@ extension ServiceCoordinator {
         // rest of the flight stayed missing. The merge only writes into seconds
         // the track has no point for, so live BLE data is never displaced.
         if let hunted = balloonPositionService.currentBalloonName {
-            appLog("STARTUP: Step 4d - Filling track gaps for '\(hunted)' from SondeHub (have \(balloonTrackService.currentBalloonTrack.count) points)", category: .general, level: .info)
-            balloonTrackService.fillTrackGapsFromAPRS(sondeName: hunted)
+            appLog("STARTUP: Step 4d - Reading balloon context for '\(hunted)' from SondeHub (have \(balloonTrackService.currentBalloonTrack.count) points)", category: .general, level: .info)
+            Task { [weak balloonTrackService] in await balloonTrackService?.readBalloonContext(serial: hunted) }
         }
 
         // Step 5: State Machine Handoff & UI Transition

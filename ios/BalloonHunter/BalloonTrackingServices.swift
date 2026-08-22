@@ -454,19 +454,19 @@ final class BalloonPositionService: ObservableObject {
                     await predictionService.triggerPredictionWithPosition(position, trigger: "state-machine")
                 }
             }
-            // Mid-flight gap repair (BLE lost → APRS). At startup the sonde-context
-            // read already loaded the whole track, so don't re-fetch it here.
-            if previous != .startup {
-                balloonTrackService?.fillTrackGapsFromAPRS(sondeName: currentBalloonName)
+            // Mid-flight BLE→APRS handoff: top up the track from SondeHub (a small
+            // delta covering the BLE-loss stretch). At startup the sonde-context
+            // read already owns the load, so skip it here.
+            if previous != .startup, let name = currentBalloonName {
+                Task { [weak balloonTrackService] in await balloonTrackService?.readBalloonContext(serial: name) }
             }
 
         case .aprsLanded:
             // APRS-only mode with old/stale data indicating landing
             aprsService.enablePolling()
             updateLandingPosition()
-            // Mid-flight gap repair only; the startup context read owns the load.
-            if previous != .startup {
-                balloonTrackService?.fillTrackGapsFromAPRS(sondeName: currentBalloonName)
+            if previous != .startup, let name = currentBalloonName {
+                Task { [weak balloonTrackService] in await balloonTrackService?.readBalloonContext(serial: name) }
             }
             checkRecoveryStatus()
         }
@@ -725,7 +725,7 @@ final class BalloonPositionService: ObservableObject {
     /// Re-applies the current state's logic to ensure services are properly configured
     func refreshCurrentState() {
         appLog("BalloonPositionService: Refreshing current state (\(currentState)) service configuration", category: .service, level: .info)
-        // handleStateTransition already calls fillTrackGapsFromAPRS for APRS fallback states
+        // handleStateTransition already calls readBalloonContext for APRS fallback states
         handleStateTransition(to: currentState)
     }
 
@@ -838,8 +838,8 @@ final class BalloonTrackService: ObservableObject {
     ///
     /// This service used to keep its own copy, written only when telemetry
     /// arrived. Between selecting a sonde and its first frame the copy read
-    /// `nil`, and `fillTrackGapsFromAPRS` compares the serial it fetched against
-    /// this — so a fill that finished first was thrown away. Getter-only by
+    /// `nil`, and `readBalloonContext` compares the serial it fetched against
+    /// this — so a fetch that finished first was thrown away. Getter-only by
     /// design: a mirror that can be assigned is a mirror that can lag.
     var currentBalloonName: String? { balloonPositionService.currentBalloonName }
     var currentEffectiveDescentRate: Double?
@@ -867,7 +867,6 @@ final class BalloonTrackService: ObservableObject {
     let balloonPositionService: BalloonPositionService
     private var aprsService: APRSDataService?
     private var cancellables = Set<AnyCancellable>()
-    private var currentAPRSFillTask: Task<Void, Error>?  // Track in-flight APRS fill for cancellation
 
     // Track management
     private var smoothingCounter = 0
@@ -1261,22 +1260,27 @@ final class BalloonTrackService: ObservableObject {
     }
 
 
-    /// Fill track gaps from APRS telemetry
-    /// Runs asynchronously and does not block UI
-    /// - Parameters:
-    ///   - sondeName: Explicit sonde name (optional, uses currentBalloonName if nil)
-    ///   - forceDetection: Force track-based landing detection regardless of track size (for background return scenario)
-    /// Read the whole sonde context from SondeHub in one fetch: load the full
-    /// track and publish the latest position (so the one fetch drives the map,
-    /// prediction and route), while the recovery status is checked in parallel.
-    /// This is the single data read at sonde selection — it replaces the old
-    /// `forceImmediateFetch` (position) + startup `fillTrackGapsFromAPRS` (track),
-    /// which fetched the same 3-day payload twice. `fillTrackGapsFromAPRS` is now
-    /// only mid-flight gap repair. See FSD *Reading a sonde: the four steps*.
+    /// Read the sonde context from SondeHub and keep the track complete, in one
+    /// delta-fetch: fetch only the window since the newest frame already held (the
+    /// whole flight when the track is empty), merge it by physical position, and
+    /// publish the latest position — so the one call drives the map, prediction and
+    /// route. Recovery status is checked separately by the caller.
+    ///
+    /// This is the *only* function that fetches the red track. It serves sonde
+    /// selection, a BLE-loss handoff, a foreground return, and each APRS state
+    /// entry alike — there is no separate gap-repair path. It replaced the old
+    /// `forceImmediateFetch` (position) + `fillTrackGapsFromAPRS` (fixed-3d track),
+    /// which fetched a 3-day payload twice and diffed by the skew-fragile timestamp.
+    /// Runs asynchronously and does not block UI.
+    /// See FSD *Reading a sonde: the four steps* and *APRS Telemetry: the delta-fetch*.
     func readBalloonContext(serial: String) async {
         guard let aprsService else { return }
-        async let recovery: Void = aprsService.checkRecovery(serial: serial)   // parallel, tiny
-        let points = await aprsService.fetchAPRSTelemetryToFillGaps(serial: serial, localTrack: currentBalloonTrack)
+        // Fetch only what we don't already hold: the window from the newest frame
+        // in the retained track to now (a small margin covers the BLE/APRS skew),
+        // or the whole flight when we hold nothing. The track stays complete;
+        // position-dedup keeps a re-drawn stretch from doubling BLE points.
+        let duration = Self.sondeHubDurationBucket(covering: gapSinceNewestFrame())
+        let points = await aprsService.fetchAPRSTelemetryToFillGaps(serial: serial, duration: duration, localTrack: currentBalloonTrack)
         await MainActor.run {
             guard currentBalloonName == serial else { return }   // sonde changed while fetching
             if !points.isEmpty {
@@ -1289,102 +1293,32 @@ final class BalloonTrackService: ObservableObject {
             }
             detectTrackBasedLanding()
         }
-        // Sonde older than the 3-day window (nothing returned, no track): fall
-        // back to the full streaming fetch so the marker/prediction still have a
-        // position. Rare — a re-hunt of a completed flight beyond SondeHub's
-        // telemetry retention.
+        // Sonde older than the fetched window with no track at all: fall back to
+        // the full streaming fetch for a position. Rare — a re-hunt beyond
+        // SondeHub's telemetry retention.
         if points.isEmpty && currentBalloonTrack.isEmpty {
             await aprsService.recoverPositionViaStreaming(serial: serial)
         }
-        _ = await recovery
     }
 
-    func fillTrackGapsFromAPRS(sondeName: String? = nil, forceDetection: Bool = false) {
-        // Use provided sonde name or fall back to currentBalloonName
-        guard let effectiveSondeName = sondeName ?? currentBalloonName else {
-            appLog("BalloonTrackService: Cannot fill gaps - no sonde name available", category: .service, level: .debug)
-            return
+    /// Seconds of history `readBalloonContext` must fetch: from the newest frame
+    /// already held (plus a margin for the ~17 s BLE/APRS skew) to now, or a huge
+    /// value when nothing is held (whole flight).
+    private func gapSinceNewestFrame() -> TimeInterval {
+        guard let newest = currentBalloonTrack.map({ $0.timestamp }).max() else {
+            return .greatestFiniteMagnitude
         }
+        return Date().timeIntervalSince(newest) + 60
+    }
 
-        guard let aprsService = aprsService else {
-            appLog("BalloonTrackService: Cannot fill gaps - APRS service not available", category: .service, level: .debug)
-            return
-        }
-
-        // Cancel any existing APRS fill task (don't wait for it to finish)
-        currentAPRSFillTask?.cancel()
-
-        // Create new APRS fill task and let it run independently
-        currentAPRSFillTask = Task {
-            do {
-                appLog("BalloonTrackService: Starting APRS track fill for '\(effectiveSondeName)' (current track has \(currentBalloonTrack.count) points)", category: .service, level: .info)
-
-                // Check cancellation before starting
-                try Task.checkCancellation()
-
-                // Debug: Show local track endpoints
-                if let firstPoint = currentBalloonTrack.first {
-                    appLog("BalloonTrackService: Local track first point - lat: \(String(format: "%.5f", firstPoint.latitude)), lon: \(String(format: "%.5f", firstPoint.longitude)), alt: \(String(format: "%.0f", firstPoint.altitude))m", category: .service, level: .info)
-                }
-                if let lastPoint = currentBalloonTrack.last {
-                    appLog("BalloonTrackService: Local track last point - lat: \(String(format: "%.5f", lastPoint.latitude)), lon: \(String(format: "%.5f", lastPoint.longitude)), alt: \(String(format: "%.0f", lastPoint.altitude))m", category: .service, level: .info)
-                }
-                if let landing = landingPosition {
-                    appLog("BalloonTrackService: Landing point - lat: \(String(format: "%.5f", landing.latitude)), lon: \(String(format: "%.5f", landing.longitude))", category: .service, level: .info)
-                }
-
-                let newPoints = await aprsService.fetchAPRSTelemetryToFillGaps(
-                    serial: effectiveSondeName,
-                    localTrack: currentBalloonTrack
-                )
-
-                // Check cancellation before processing results
-                try Task.checkCancellation()
-
-                if !newPoints.isEmpty {
-                // Verify sonde hasn't changed while we were fetching historical data
-                await MainActor.run {
-                    appLog("BalloonTrackService: Processing \(newPoints.count) APRS points for sonde '\(effectiveSondeName)'", category: .service, level: .info)
-
-                    guard currentBalloonName == effectiveSondeName else {
-                        appLog("BalloonTrackService: Sonde changed from '\(effectiveSondeName)' to '\(currentBalloonName ?? "nil")' during APRS fill - discarding \(newPoints.count) points", category: .service, level: .info)
-                        return
-                    }
-
-                    // Track size before insertion for scenario detection
-                    let trackSizeBeforeInsertion = currentBalloonTrack.count
-
-                    // SLOT-BASED INSERTION: Only insert APRS points if second slot is empty
-                    // BLE data always takes priority (fills slots first as it arrives live)
-                    let pointsAdded = insertAPRSPoints(newPoints)
-                    appLog("BalloonTrackService: Added \(pointsAdded) APRS points (slot-based), total track now has \(currentBalloonTrack.count) points", category: .service, level: .info)
-                    trackUpdated.send()
-                    saveCurrentTrack()
-
-                    // Conditional track-based landing detection based on scenarios
-                    // Scenario 1: Track load when last packet > 20 minutes old (app started after flight ended)
-                    //             This indicates app wasn't running during flight, loading historical APRS data
-                    // Scenario 3: Background return (forceDetection = true)
-                    let lastPacketAge = currentBalloonTrack.last.map { Date().timeIntervalSince($0.timestamp) } ?? 0
-                    let isHistoricalTrackLoad = lastPacketAge > 1200 // 20 minutes - indicates historical data load
-                    let shouldRunDetection = isHistoricalTrackLoad || forceDetection
-
-                    if shouldRunDetection {
-                        let trigger = isHistoricalTrackLoad ? "historical track load (last packet \(Int(lastPacketAge/60))min old)" : forceDetection ? "background return" : "unknown"
-                        appLog("BalloonTrackService: Running track-based landing detection on \(currentBalloonTrack.count) points (trigger: \(trigger))", category: .service, level: .info)
-                        detectTrackBasedLanding()
-                    } else {
-                        appLog("BalloonTrackService: Skipping track-based landing detection (added \(pointsAdded) points to existing \(trackSizeBeforeInsertion)-point track, last packet age: \(Int(lastPacketAge/60))min)", category: .service, level: .debug)
-                    }
-                }
-                } else {
-                    appLog("BalloonTrackService: No new APRS points to add", category: .service, level: .debug)
-                }
-            } catch is CancellationError {
-                // Task was cancelled (sonde change) - this is expected, don't log as error
-                appLog("BalloonTrackService: APRS track fill cancelled - likely due to sonde change", category: .service, level: .info)
-            }
-        }
+    /// Smallest SondeHub `duration` bucket that covers `seconds`. SondeHub only
+    /// accepts a fixed set (`15s,1m,30m,1h,3h,6h,12h,1d,3d`), so a delta rounds up.
+    static func sondeHubDurationBucket(covering seconds: TimeInterval) -> String {
+        let buckets: [(TimeInterval, String)] = [
+            (15, "15s"), (60, "1m"), (1800, "30m"), (3600, "1h"),
+            (10800, "3h"), (21600, "6h"), (43200, "12h"), (86400, "1d"), (259200, "3d")
+        ]
+        return buckets.first { seconds <= $0.0 }?.1 ?? "3d"
     }
 
     /// Send local notification when track is truncated due to detected landing
@@ -1567,10 +1501,6 @@ final class BalloonTrackService: ObservableObject {
     // MARK: - Sonde Change
 
     func clearAllData() {
-        // Cancel any in-flight APRS fill task
-        currentAPRSFillTask?.cancel()
-        currentAPRSFillTask = nil
-
         // Clear all track data from memory. The sonde name is not cleared here:
         // it is owned by BalloonPositionService, whose own clearAllData() resets
         // it as part of the same sonde change.

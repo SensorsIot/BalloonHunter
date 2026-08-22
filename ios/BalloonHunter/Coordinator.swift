@@ -363,8 +363,10 @@ final class ServiceCoordinator: ObservableObject {
         // landed sonde is predicted once here and does not drift.
         Task { [weak self] in
             guard let self else { return }
-            // ① One fetch: full track + latest position (published), recovery in parallel.
+            // ① Read the balloon context — the retained track topped up from
+            //    SondeHub, latest position published. Recovery is a sibling call.
             await self.balloonTrackService.readBalloonContext(serial: name)
+            await self.balloonPositionService.aprsService.checkRecovery(serial: name)
 
             // ② track is drawn from that data. ③ prediction from the published
             // position → ④ route. One ordered chain, no second fetch.
