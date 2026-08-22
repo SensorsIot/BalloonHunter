@@ -305,7 +305,7 @@ Each state defines explicit entry functionality and exit criteria:
   - **Reads balloon context** (BalloonTrackService.readBalloonContext()) — the delta-fetch keeps the track complete (only when the previous state was not `startup`)
   - Calls chain: Prediction with APRS balloon position → Landing point tracking → Routing
   - Map shows balloon track, landing point, landing point track, predicted path, route
-  - Frequency sync is **not** performed here. It runs once per startup and once per sonde change, and asks the user before changing anything — see *Startup → Step 4c: Frequency Sync*.
+  - Frequency sync is **not** performed here. It runs once per startup and once per sonde change, and asks the user before changing anything — see *Startup → Step 3: Load the sonde context*.
 - **Transitions**:
   1. `bleTelemetryState.hasTelemetry` → `liveBLEFlying`
   2. `balloonPhase == .landed` → `aprsLanded`
@@ -319,7 +319,7 @@ Each state defines explicit entry functionality and exit criteria:
   - Calls chain: Landing point tracking → Routing
   - Map shows balloon track, landing point, landing point track, and the predicted descent line (kept for the drive)
   - Data panel shows motion metrics as zero
-  - Frequency sync is **not** performed here. It runs once per startup and once per sonde change, and asks the user before changing anything — see *Startup → Step 4c: Frequency Sync*.
+  - Frequency sync is **not** performed here. It runs once per startup and once per sonde change, and asks the user before changing anything — see *Startup → Step 3: Load the sonde context*.
 - **Transitions**:
   1. `bleTelemetryState.hasTelemetry` → `liveBLEFlying` or `liveBLELanded` (based on `balloonPhase`)
   2. `balloonPhase != .landed` → `aprsFlying`
@@ -369,7 +369,7 @@ Architecture enforces a clean separation of responsibilities while embracing a m
   - Combine-Driven Data Flow
     Services publish changes via @Published properties or actors; the coordinator and presenter subscribe, transform, and re-publish derived values. This provides a single reactive pipeline from BLE/APRS/location inputs to UI outputs.
   - Environment-Driven UI: Views observe the coordinator, presenter, and settings objects through @EnvironmentObject. User actions (toggle heading, trigger prediction, open Maps) bubble up through intent methods defined on the presenter/coordinator instead of mutating state locally.
-  - Persistence & Caching: PersistenceService handles simple file-based persistence (current track, landing history, user settings) using a single-sonde snapshot model. Caching actors prevent redundant prediction/route work. Both are injected once through AppServices, reinforcing a single source of truth.
+  - Persistence & Caching: PersistenceService handles simple file-based persistence — user settings, and the retained BLE hunt tail keyed by serial. The flight itself is not stored; SondeHub holds it and the context loader fetches it. Caching actors prevent redundant prediction/route work. Both are injected once through AppServices, reinforcing a single source of truth.
 
 #### Direct vs Coordinated Communication Patterns
 
@@ -592,16 +592,10 @@ Discover and connect to MySondyGo devices over Bluetooth Low Energy, subscribe t
   **A cancelled timer must not run its own body.** Both the scan timeout and the
   retry sleep on a `Task` that is cancelled when a device is found. `try? await
   Task.sleep(...)` swallows the `CancellationError` and falls through to the next
-  line, so cancelling ran the very handler it was meant to call off: a device
-  discovered 38 ms before the deadline logged "no MySondyGo device found" and
-  scheduled a rescan while the connection was being established. The sleep is
-  therefore awaited with `do/catch` and returns on cancellation.
-
-  > **Measured — 22 Aug 2026.** Discovery at 02:32:31.307, spurious timeout at
-  > 02:32:31.310, connect at 02:32:31.543. The false timeout's 10 s retry came due
-  > at ~02:32:41.31; the first BLE packet — the only thing that moves
-  > `connectionState` off `.notConnected` — arrived at 02:32:41.135. The rescan of
-  > a live connection was avoided by 175 ms.
+  line, so cancelling runs the very handler it was meant to call off — logging a
+  timeout for a device that was just discovered, and scheduling a rescan while the
+  connection is being established. The sleep is therefore awaited with `do/catch`
+  and returns on cancellation.
 
   **Known gap, not yet closed:** the retry guard tests `connectionState ==
   .notConnected`, which stays true from `connect()` until the first packet, so it
@@ -738,11 +732,20 @@ The APRS service filters out ground-based test sondes to prevent them from being
 
 #### APRS Telemetry: the delta-fetch (`readBalloonContext`)
 
+**`readBalloonContext(serial:)` is the canonical sonde data loader. Nothing else
+loads sonde data — not startup, not persistence restore, not a state transition.**
+Everything that belongs to the hunted sonde arrives through this one function:
+the retained BLE hunt tail from disk, the SondeHub track, the latest position and the
+recovery status. Callers do not gap-hunt, size a request, or read a file; they ask for
+context and get the complete, current picture back.
+
 **Purpose**: keep the local track complete with the sonde's whole APRS history, while
-never re-downloading history the track already holds. `readBalloonContext(serial:)` is
-the single entry point — the *only* thing that fetches the red track. Callers do not
-gap-hunt or size the request; they just ask for context and get a complete, current
-track back.
+never re-downloading history the track already holds.
+
+**An empty answer is a normal outcome.** A sonde SondeHub has not heard of in 24 h is
+a test sonde: there is no APRS track, the hunt runs on BLE alone, and if that serial
+later does reach SondeHub its track appears at the next context read. The two feeds
+never coordinate — one simply finds nothing.
 
 **API Endpoint**: `GET /sondes/telemetry?serial=<serial>&duration=<duration>`
 - Returns nested JSON: `{ "serial": { "timestamp": { telemetry_fields } } }`
@@ -766,7 +769,35 @@ track back.
 - Regular polling: 5 seconds (for quick site endpoint responses)
 - APRS telemetry: 30 seconds (allows for a large first `3d` load + network buffer)
 
+#### The BLE hunt tail — the only thing SondeHub cannot give back
+
+**Persistence exists for one reason: to survive backgrounding.** iOS suspends and
+may terminate the app while the hunter is driving or using another app, and anything
+held only in memory is gone when it comes back. That is the whole justification —
+not archiving, not history.
+
+It follows that only data which cannot be re-fetched is worth writing. For the whole
+flight, APRS carries the same frames the receiver does and SondeHub serves them on
+demand, so storing them locally would duplicate an authoritative source. **One
+segment is different: the final hunt.** From the last APRS position to where the
+balloon actually lies there is no APRS coverage — that stretch exists only in this
+phone's close-range BLE decode, and it is exactly the stretch that decides where the
+hunter walks.
+
+- **What is kept:** the BLE points that follow the newest APRS point in the track.
+  When a hunt has no APRS points at all (a test sonde, or no network), that rule
+  degrades to keeping the whole BLE track — the same rule covers the off-grid case
+  with no special handling.
+- **Keyed by serial, kept 24 h.** Older than that and it is discarded on load; a hunt
+  does not outlive a day.
+- **Only the context loader reads it.** It is requested for the hunted serial and
+  merged into the track by position, like any other source. Nothing else opens it.
+
+This replaces persisting the full track: the flight comes from SondeHub, the tail
+comes from disk, and the context loader is the one place they are put together.
+
 **Process** (`readBalloonContext`):
+0. Restore the retained BLE hunt tail for this serial, if one is held and still within 24 h.
 1. Size the request from the gap since the newest held frame (full `3d` if the track is empty).
 2. Fetch that window for the current serial.
 3. Merge by physical position — `Array.mergingByPosition` on `BalloonTrackPoint.positionKey`
@@ -777,29 +808,23 @@ track back.
    recovery.
 
 **Single-flight — one read per serial serves every caller.** A second call for a
-serial already being read does not start another fetch; it awaits the one in
-flight. This is what lets callers ask whenever they need data, as the design
-requires, without any of them coordinating.
-
-   > **Measured — foreground resume, 22 Aug 2026.** Resume asks for context from
-   > three places within milliseconds: the state evaluation (step 2), the resume
-   > sequence itself (step 3), and the state refresh that follows (step 4, via
-   > `refreshCurrentState` → `handleStateTransition`). Each read merges and re-runs
-   > `detectTrackBasedLanding()` **on the main actor**, which the track-based rules
-   > note costs over a second on a large track. Three of those overlapping on a
-   > 5 510-point track froze the app on resume. Single-flight collapses them to one.
+serial already being read does not start another fetch; it awaits the one in flight.
+This is what lets callers ask whenever they need data, as the design requires,
+without any of them coordinating. It matters because several callers legitimately ask
+at once — a foreground resume triggers the state evaluation, the resume sequence and
+the state refresh within milliseconds — and each read merges and re-runs landing
+detection on the main actor.
 
 **The resume sequence never awaits a context read.** It starts one and moves on to
 refreshing services; blocking resume behind a network fetch (up to the 30 s
 telemetry timeout) is what made the app look dead on return from the background.
 Every call site is fire-and-forget for the same reason.
 
-**There is no separate gap-hunting function**, and there must not be one. An
-earlier design kept a second path that always pulled a fixed `3d` window and
-diffed it by timestamp; both halves were wrong. Timestamp diffing is fragile
-against the BLE/APRS relay skew, and a fixed `3d` window re-downloaded the entire
-history on every foreground return and every BLE↔APRS handoff. The position-keyed
-merge and the gap-sized bucket replace both, in this one function.
+**There is no separate gap-hunting function**, and there must not be one. A second
+path that pulls a fixed `3d` window and diffs it by timestamp fails twice over:
+timestamp diffing is fragile against the BLE/APRS relay skew, and a fixed window
+re-downloads the entire history on every foreground return and every BLE↔APRS
+handoff. The position-keyed merge and the gap-sized bucket do both jobs here.
 
 ### Current Location Service
 
@@ -861,14 +886,22 @@ stops location, since tracking already runs.
 3. **Settings changes** - Save userSettings immediately
 4. **App shutdown** - Final save of all state
 
-####   Persisted Files (4 total):
+####   Persisted Files:
 
-1. **userSettings.json** - UserSettings (immediate save on change)
-2. **sondeName.json** - Current sonde name String (must always match balloontrack.json data)
-3. **balloontrack.json** - Current sonde's `[BalloonTrackPoint]` (batched saves)
-4. **landingPoints.json** - Current sonde's `[LandingPredictionPoint]` (immediate save on each new point)
+**Persistence exists to survive backgrounding**, nothing more. Only what cannot be
+re-fetched is written.
 
-**Consistency constraint:** sondeName.json and balloontrack.json must always correspond to the same sonde. When sonde changes, both files are overwritten together.
+1. **userSettings.json** - UserSettings (immediate save on change). Not sonde-specific; the only file startup reads before a sonde is selected.
+2. **BLE hunt tail** - the BLE points beyond the newest APRS point, stored **with the serial they belong to** and kept for 24 h. The only sonde data on disk, because it is the only sonde data SondeHub cannot return — see *The BLE hunt tail*.
+
+**The full track is not persisted.** SondeHub holds the flight and serves it on
+demand, so storing a second copy locally would duplicate an authoritative source and,
+worse, invite startup to read it before knowing which sonde it belongs to. Landing
+predictions are likewise not restored: the prediction made when the sonde context
+loads re-establishes the landing point and route.
+
+**Who may read the tail:** only `readBalloonContext`, the canonical sonde data loader.
+Nothing else opens sonde data, so there is no second path that can disagree with it.
 
 ####   Data it Publishes:
 
@@ -894,7 +927,7 @@ UserSettings(
 #### Types of Data:
 
 * **User Settings:** Forecast parameters (burstAltitude, ascentRate, descentRate, stationId) persist across sessions so users don't re-enter them.
-* **Sonde Name:** Current sonde name - must always correspond to the track data in balloontrack.json.
+* **Sonde Name:** the serial the retained BLE hunt tail belongs to. Stored with the tail itself, so the two can never disagree.
 * **Current Track:** A single sonde's track points with timestamps, stored **together with the serial they belong to** (`{ sondeName, points }`). Binding the two in one file is what makes the association verifiable: `BalloonTrackPoint` carries no serial, so a track holding two sondes' points is otherwise indistinguishable from a clean one. On load, a track naming a different sonde is discarded, as is one in the older bare-array format that names no owner and therefore cannot be vouched for. Batched saves during a run survive a forced close.
 * **Landing Predictions:** Single sonde's landing prediction history for map display. Each new landing point saved immediately. **The trail starts at burst.** Before then the prediction rests on an assumed burst altitude, so successive estimates wander for reasons that say nothing about the landing; drawing them buries the convergence that follows. Gated on `BalloonPhase.isAfterBurst`.
 
@@ -947,7 +980,7 @@ Build the flight history, smooth velocities, detect landings, derive descent met
 #### Inputs
 
 - `BalloonPositionService.$currentTelemetry` for every telemetry sample.
-- `PersistenceService` to load/save current track (single-sonde snapshot).
+- `PersistenceService` to save the BLE hunt tail (read back only by the context loader).
 
 #### Publishes
 
@@ -960,7 +993,7 @@ Build the flight history, smooth velocities, detect landings, derive descent met
 
 #### Behavior
 
-1. **Sonde management** — When a new sonde appears, the service clears the previous track and counters, then starts fresh. At app startup, persisted track from previous session (if any) is loaded from balloontrack.json.
+1. **Sonde management** — When a new sonde appears, the service clears the previous track and counters, then starts fresh. At startup the track begins **empty**: it is filled only once a sonde has been selected, by the context loader (*Startup Step 3*).
 2. **Track updates with position-based deduplication** — Each telemetry sample is converted into a `BalloonTrackPoint`; if a previous point exists the service recomputes horizontal speed via great-circle distance and vertical speed via altitude delta for consistency. Every point also carries its `source` (`.ble` or `.aprs`), so the origin of any sample is recorded rather than inferred.
 
    **The live BLE stream keeps one point per second.** Full rate matters here: smoothing and real-time landing detection run on it, and a balloon sitting on the ground must keep laying down samples so the vector and stationary-period detectors can see it has stopped. Cross-source duplication never happens on the live path, because live APRS is suppressed while BLE is active (below). Map updates immediately on each BLE point and once per APRS batch.
@@ -972,15 +1005,21 @@ Build the flight history, smooth velocities, detect landings, derive descent met
 Selecting a sonde (startup **and** every new sonde go through `startTrackingSonde`)
 does four things, in one ordered chain, each owned by one place:
 
-1. **`readBalloonContext(serial)`** — the SondeHub track read: it keeps the track
-   complete and publishes the latest position (its last point). How it sizes and
-   merges its fetch is specified in *APRS Service → APRS Telemetry: the
-   delta-fetch*; recovery status is checked separately by the caller.
+1. **`readBalloonContext(serial)`** — the canonical sonde data loader: the retained
+   BLE hunt tail, the SondeHub track delta merged onto it, the latest position and
+   the recovery status. Nothing else loads sonde data. How it sizes and merges its
+   fetch is specified in *APRS Service → APRS Telemetry: the delta-fetch*.
 2. **track overlay** — the red track + balloon marker draw from that data
    immediately; nothing downstream is waited on.
 3. **prediction overlay** — one prediction from the published position → the blue
-   path + landing point. Then re-prediction is flying-only (`PredictionPolicy`).
+   path + landing point. When it re-runs afterwards is `PredictionPolicy`'s decision —
+   see *How a Landing Is Determined → When prediction runs*.
 4. **route overlay** — the green route follows from the landing point.
+
+Steps 2–4 have a real dependency order, and orchestration is what enforces it: each
+of prediction, landing point and route **runs only on data sufficient for it** and
+otherwise does not run at all. No position, no prediction; no landing point, no
+route. They refuse their inputs rather than inventing placeholders.
 
 **When it runs:** on a sonde change, at startup, on returning to the foreground
 mid-flight, and on entering an APRS state — the last only when the previous state
@@ -999,8 +1038,6 @@ an APRS point was a copy of one BLE already held, and inserted both; position is
 immune to the skew and needs no time-window constant. Live APRS is otherwise
 suppressed while BLE is the active source, so APRS enters the track only through
 this merge.
-
-   > **Measured — W4214924, 21 Aug 2026.** BLE dropped, returned briefly for ~6 s near 1551 m, then dropped again. A backfill re-inserted APRS copies of those 6 BLE points 17 s later with identical lat/lon/alt, producing an interleaved sawtooth and repeated `RED TRACK JUMP` warnings. Under a 1 s timestamp key the copies landed in different slots and were not caught; position keying drops them.
 
 **Accepted limitation:** position keying collapses same-position samples in *backfilled* data to one point. Pre-launch pad samples are irrelevant. The one case it affects is a balloon that lands, keeps transmitting, and is only seen via a backfill (e.g. the app was backgrounded) — track-based *stationary-period* detection cannot fire on a single collapsed point there. Live landings are unaffected (BLE per-second), and a balloon that goes silent is still caught by the APRS-age rule, so the exposure is narrow and deliberate.
 
@@ -1032,7 +1069,7 @@ this merge.
      changes latitude or longitude, so position alone would call a fast descent a
      landing. Altitude is what separates the two.
 
-**User notification**: whenever truncation occurs — blackout or stationary period — the app sends a short local notification saying why points were removed (e.g. "Landing detected: Removed 147 post-landing track points from recovery period"), so the track shortening is never a silent surprise. Track-based detection takes priority over every other landing test, and runs after a context read and on a restored track at startup.
+**User notification**: whenever truncation occurs — blackout or stationary period — the app sends a short local notification saying why points were removed (e.g. "Landing detected: Removed 147 post-landing track points from recovery period"), so the track shortening is never a silent surprise. Track-based detection takes priority over every other landing test, and runs after every context read, which includes the one at startup.
 
 5b. **Track-based landing detection trigger scenarios** — To avoid unnecessary CPU-intensive analysis (1.5+ seconds on 10K+ point tracks), track-based landing detection runs conditionally based on specific scenarios rather than on every APRS poll. The following scenarios determine when detection should run and when track recording should continue or stop:
 
@@ -1067,7 +1104,7 @@ Maintain the list of landing predictions for the active sonde, deduplicate noisy
 
 - Landing predictions (coordinate, prediction time, optional ETA) produced by `PredictionService` / coordinator.
 - `BalloonTrackService.currentBalloonName` to detect sonde changes (a read-only view of the position service's value).
-- `PersistenceService` for load/save operations (single-sonde snapshot).
+- `PersistenceService` for saving landing predictions during the session.
 
 #### Publishes
 
@@ -1077,7 +1114,7 @@ Maintain the list of landing predictions for the active sonde, deduplicate noisy
 #### Behavior
 
 - When the active sonde changes, the previous history is cleared (new sonde starts with empty landing history), and `lastLandingPrediction` is updated.
-- New landing predictions are deduplicated against the last point (25 m threshold) to avoid jitter; if it's a new location, it is appended and immediately saved to landingPoints.json.
+- New landing predictions are deduplicated against the last point (25 m threshold) to avoid jitter; if it's a new location, it is appended. The history is per-session and is not restored at startup — the prediction made when the sonde context loads re-establishes the landing point.
 - Each new landing point triggers immediate persistence (not batched).
 - `resetHistory()` wipes the array and published “last” value so each balloon starts with a clean slate.
 - The tracking map observes `landingHistory` to draw the purple polyline and dots for past landing predictions.
@@ -1156,7 +1193,7 @@ measured constraint taken from these very structs.
 
 #### Notes
 
-- Predictions are skipped entirely if no telemetry is available. **Re-prediction** is flying-only (`PredictionPolicy.shouldPredict`), so a landed balloon is never re-predicted — with one deliberate exception: the single prediction made on sonde selection runs whether the sonde is flying or landed, so a landed sonde selected cold still gets a landing point and a route. See *How a Landing Is Determined*.
+- Predictions are skipped entirely if no telemetry is available. Beyond that, `PredictionPolicy.shouldPredict` decides, and it turns on whether the balloon's position is **known** rather than on whether it is landed: a sonde that is down but never seen on the ground still needs an estimate. The rule is tabulated in *How a Landing Is Determined → When prediction runs*.
 - The service lives on the main actor so published state updates remain synchronous with the UI.
 - CSV logging and other long-term diagnostics remain outside this service to keep it focused on API orchestration.
 
@@ -1244,7 +1281,7 @@ The service includes a retry mechanism for when route calculation is triggered b
    - Logs warning
 
 **Startup Optimization**:
-- User location request moved to Step 1 of startup sequence (before track loading)
+- The user location request is issued in startup Step 1, so the fix has arrived by the time the route needs it
 - Gives GPS maximum time (~7s typical) to get fix before route calculation is needed
 - Route appears automatically when both location and landing point are available
 
@@ -1338,7 +1375,7 @@ Act as the single orchestration layer: subscribe to all service publishers, mana
 
 #### Behavior
 
-1.  **Startup orchestration** — Drives the multi-step startup sequence: show logo, initialise services, attempt BLE connection/settings, load persisted track/landing data, and finally reveal the tracking map.
+1.  **Startup orchestration** — Drives the five-step startup sequence: start services empty and listening, select the sonde, load its context, draw the overlays in order, hand over to the state machine. See *Startup*.
 
 **Landing Point Coordination**
 
@@ -1381,19 +1418,31 @@ The `ServiceCoordinator` is responsible for cross-service coordination to determ
 
 A launch site commonly has several sondes aloft or recently landed. Exactly one is hunted at a time, and **which one is decided by selection, never inferred from telemetry**. The receiver picks up whatever is on frequency; that is a fact about radio, not a statement of intent.
 
-#### Choosing at startup (Startup step 4b)
+#### Choosing at startup (Startup step 2)
 
-1. **Gather** the station's sondes from `/sondes/site/{id}`, discard ground tests (within 1 km of the uploader), keep the last 24 hours, sort newest first. This list exists so the picker has something to offer; it is not evidence that any of it is still aloft.
+**Selection always selects.** Showing the picker is an internal detail of the one
+selection function, not a second code path: sometimes it answers without asking,
+sometimes it asks first, but it always returns a hunted serial. Callers neither know
+nor care which happened.
+
+1. **Gather** candidates from both feeds, which run independently and never consult each other:
+   the station's sondes from `/sondes/site/{id}` (ground tests within 1 km of the uploader discarded, last 24 hours, newest first), and **any serial BLE has decoded**.
+   The station list exists so the picker has something to offer; it is not evidence that any of it is still aloft.
 2. **Read `balloonPhase`.** `LandingDetector` has already judged the telemetry that arrived, and `BalloonPositionService` publishes its verdict. Startup performs no classification of its own — see *Balloon Phase Detection* for the priority chain and its thresholds.
-3. **Auto-select** when the phase is airborne (ascending or descending), taking the serial from the telemetry the detector judged. A sonde absent from the SondeHub list still selects, so a live decode of an unlisted sonde is not lost.
-4. **Otherwise show the picker** — landed, or `unknown` — with the most recent pre-selected and a 5-second auto-confirm. `unknown` is not airborne: the detector could not tell, and that must never be read as "still flying".
+3. **Select the airborne sonde without asking** when the phase is airborne (ascending or descending), taking the serial from the telemetry the detector judged. A sonde absent from the SondeHub list still selects, so a live decode of an unlisted sonde is not lost.
+4. **Otherwise ask** — landed, or `unknown` — with the most recent pre-selected and a 5-second auto-confirm. `unknown` is not airborne: the detector could not tell, and that must never be read as "still flying".
 
-**One owner for flying-versus-landed.** Startup once re-decided from the raw
-sonde list on vertical speed alone, with no notion of how old the frame was. On
-21 August 2026 that auto-selected W4214520 from a frame 6.8 h old — 2.4 seconds
-after `LandingDetector` had classified that same sonde as landed. The picker
-never appeared. The detector is the only authority; nothing else may answer
-this question.
+**A BLE sonde SondeHub has never heard of is a test sonde**, not an error. If the
+selected serial has no SondeHub entry in the last 24 h, there is no APRS track to
+draw and the hunt runs on BLE alone. Nothing needs to be coordinated for this: the
+context loader simply finds nothing, and if that sonde later does reach SondeHub the
+track appears on its own at the next context read.
+
+**One owner for flying-versus-landed.** `LandingDetector` is the only authority;
+nothing else may answer this question. Startup must not re-derive it from a raw
+sonde list, because a bare vertical-speed field carries no notion of how old the
+frame is — a stale frame from a sonde that has long since landed still reads as
+moving.
 
 #### Choosing during a hunt (Change Sonde)
 
@@ -1403,22 +1452,26 @@ The picker lists serial, type, age, altitude and frequency. Opening it shows the
 
 Every selection path funnels through one method, so tracking setup exists in exactly one place:
 
-1. Clear all data for the previous sonde (see *Sonde Change Flow*).
+1. Clear the previous sonde's data — **only when there is a different previous sonde** (see *Sonde Change Flow*). At startup there is nothing to clear, because services start empty.
 2. Set the sonde name in the position and track services.
 3. Tell the BLE service which sonde is hunted, so telemetry for any other serial is dropped before it enters the app.
-4. Set the APRS override, then read the balloon context (`readBalloonContext`) and check recovery — the one track/position read, followed by the single prediction. See *Reading a sonde: the four steps*.
+4. Set the APRS override, then load the sonde context (`readBalloonContext`) — the canonical loader, which brings the BLE hunt tail, the SondeHub track, the latest position and the recovery status — followed by the single prediction. See *Reading a sonde: the four steps*.
 5. Check frequency sync, unless the sonde came from BLE and the receiver is already tuned to it.
 6. Trigger state evaluation.
 
+**It must run for the sonde it is given, every time it is asked.** There is no
+"already tracking" shortcut based on the stored name: a name being set proves only
+that something wrote it, never that the setup above has run. Skipping on that basis
+costs the hunt its APRS override, its recovery check and the prediction that creates
+the landing point.
+
 **One name for the hunted sonde.** `BalloonPositionService.currentBalloonName`
 is the only stored copy. `BalloonTrackService` exposes it read-only rather than
-keeping its own, because a mirror that lags the original silently discards work:
-it was written only from arriving telemetry, so between selecting a sonde and the
-first frame it read `nil`, and `readBalloonContext`'s stale-fetch guard — which
-compares the fetched serial against it — threw the fetch away. On 21 August 2026 that discarded 11 121
-points and cancelled the retry, leaving the hunter with an empty track. Whether it
-happened at all depended on which arrived first, so the same selection sometimes
-worked.
+keeping its own. A mirror written only from arriving telemetry reads `nil` between
+selecting a sonde and its first frame, and `readBalloonContext`'s stale-fetch guard
+compares the fetched serial against it — so a context read that returns before the
+first frame is discarded. Whether that happens depends on which arrives first, which
+is precisely the kind of order-dependence a single stored copy removes.
 
 #### Rejecting foreign telemetry
 
@@ -1478,11 +1531,12 @@ Sequential steps to clear all old sonde data:
 
 #### Persistence Data
 
-The persisted files and their consistency rule are specified once, in *Services →
-Persistence Service*. What matters for a sonde change: the sonde-specific files are
-overwritten with the new sonde's data rather than purged, so no explicit delete is
-needed, and the previous sonde survives only in the CSV logs (write-only, never
-loaded).
+The persisted files are specified once, in *Services → Persistence Service*. What
+matters for a sonde change: the only sonde data on disk is the BLE hunt tail, stored
+with the serial it belongs to, so a tail for the previous sonde can never be served
+for the new one — the context loader asks for the hunted serial and gets nothing if
+the stored tail names another. It ages out after 24 h; the previous sonde otherwise
+survives only in the CSV logs (write-only, never loaded).
 
 ## Hunt Phases
 
@@ -1578,7 +1632,7 @@ The hunter is driving. Two screens: **Apple Maps on CarPlay does the navigating*
 - There is **no API to update a running Apple Maps navigation session**. Not MapKit, not the Maps URL scheme, not App Intents, not CarPlay. Relaunching directions is the only mechanism that exists.
 - `MKMapItem.openInMaps(launchOptions:)` is documented as blocking: *"the system suspends interaction with your app until the Maps app finishes launching."* Each update therefore takes the iPhone screen.
 - The scene-aware overload `openInMaps(launchOptions:from:completionHandler:)` accepts a `UIScene`, and Apple DTS directs developers to pass the **CarPlay** scene so Maps opens on the head unit instead of the phone. This is the mechanism that would let updates reach CarPlay without stealing the hunt display - but an app only has a CarPlay scene if it holds a CarPlay entitlement, which this app does not.
-- **Tested on device, 21 Aug 2026: Apple Maps offers to "Add a stop".** Calling
+- **Apple Maps offers to "Add a stop".** Calling
   `openInMaps` while navigation is running does not replace the destination; it
   treats the new one as a waypoint on the existing trip. For a moving landing
   prediction that is worse than not updating at all, because the hunter would be
@@ -1610,10 +1664,9 @@ which is exactly what the setting holds, and the predictor scales it with
 altitude itself. On the SondeHub path the app applies **no correction of any kind**
 to the request - what is in Settings is what is sent, from launch to landing.
 
-The app used to substitute the sonde's *observed* rate below 10 000 m. That was a
-category error - handing Tawhiri a figure already scaled for altitude so it scaled
-it again - and it has been removed, along with the 10 000 m threshold's influence
-on the prediction.
+The observed rate must never be substituted for the configured one. Handing Tawhiri
+a figure that is already scaled for altitude makes it scale it a second time, which
+is a category error rather than a refinement.
 
 Adapting the rate to what the sonde is actually doing is real work and is **not
 done here**. It belongs to the own predictor (see the prospective data collection
@@ -1627,7 +1680,7 @@ below 10 km is coming down soon and near enough to matter.
 
 **Requirement: abnormal parachute behaviour must be detected as early as possible.** Two failure modes, opposite in sign:
 
-- **Slow descent** - the sonde stays aloft far longer than modelled and drifts well beyond the prediction. Observed on W4214915 (31 July 2026): ~2.3 m/s near the ground against an assumed 5.0, giving 22 extra minutes below 10 km alone and a landing roughly 50 km from the first prediction.
+- **Slow descent** - the sonde stays aloft far longer than modelled and drifts well beyond the prediction. The `W4214915` fixture in `RealFlightTests` shows ~2.3 m/s near the ground against an assumed 5.0: 22 extra minutes below 10 km alone, and a landing roughly 50 km from the first prediction.
 - **Partially opened parachute** - fast descent and a hard landing. This is the case that causes harm and is the more important of the two to catch.
 
 **Candidate method for the own predictor, not implemented in the app:** compare
@@ -1671,8 +1724,8 @@ landing.**
 SondeHub is fed by ground receivers with line-of-sight to the sonde; as the
 balloon descends behind terrain the network loses it, typically several hundred
 metres up. The last APRS frame therefore carries a **non-zero descent rate — the
-balloon is still falling** when the feed stops. On W4214924 (21 Aug 2026) the
-final SondeHub frame was 389 m, −4.3 m/s; on W4214915, 1 173 m, still descending.
+balloon is still falling** when the feed stops, typically a few hundred to a couple
+of thousand metres above the ground.
 So for nearly every flight there is **no touchdown in the APRS data at all.**
 
 **Only a close-range BLE receiver sees the real touchdown.** The hunter's own
@@ -1695,29 +1748,29 @@ knowing where the balloon lies:**
   reached this way keeps the **prediction** as the landing point and the car route
   target — **the last-heard-at-altitude position is never the destination**, and
   the predicted-landing marker and its connecting line stay visible for the whole
-  drive. (The original defect was the app locking the landing point to the
-  last-heard position and hiding the prediction — freezing a marker at altitude
-  with the real estimate elsewhere and no line between them.)
+  drive. Locking the landing point to the last-heard position instead would freeze
+  a marker at altitude with the real estimate elsewhere and no line between them.
 - The **confirmed touchdown position comes only from a fixed, near-ground
   observation** — in practice close-range BLE — detected by `vectorAnalysis` or
   the track-based stationary/blackout rules. That is when the marker locks to the
   actual point and prediction stops.
-- **One prediction on sonde selection, then flying-only.** `startTrackingSonde`
-  is the single place that reads the whole SondeHub context — track and latest
-  position (`readBalloonContext`) plus recovery — and then makes **one** prediction to
-  establish the landing point and route, flying or landed. Startup and every new
-  sonde come through here, so a landed sonde selected cold still gets a landing
-  and a route (without this it had neither). After that first estimate,
-  re-prediction is **flying-only** (`PredictionPolicy.shouldPredict`): a landed
-  balloon is never re-predicted, so its landing does not **drift** (re-predicting
-  a fixed position wandered ~240 m per foreground resume as the "now" forecast
-  advanced), and a mid-session landing simply keeps the last flying estimate
-  (`currentLandingPoint` is not cleared).
+- **When prediction runs** (`PredictionPolicy.shouldPredict`). The question is not
+  "is it landed?" but **"do we know where it is?"**:
+
+  | situation | predict? |
+  |---|---|
+  | **Flying** — telemetry still arriving | **Yes**, on the timer. Each run has fresh telemetry, so each answer is better than the last |
+  | **Landed by silence** (`aprsLanded` via `aprsStale`) — APRS coverage ended while it was still descending, so it is down but its position is unknown | **Yes, if no prediction is available.** The predicted landing point is the only estimate of where it lies, so a sonde selected in this state without one must get one |
+  | **Landed by silence, prediction already available** | **No.** No new telemetry is arriving, so re-running changes the answer only because the wind forecast moved — the marker would wander under the hunter as they drive to it |
+  | **Confirmed touchdown** — a fixed, near-ground observation | **Never.** The position is known; there is nothing left to estimate |
+
+  A mid-session landing therefore keeps the last flying estimate rather than
+  clearing it (`currentLandingPoint` is not cleared).
 - **`launch_datetime` must be in the future** — SondeHub's Tawhiri rejects a past
-  launch, so it is never the sonde's telemetry time. Because predictions run only
-  while flying, the balloon is moving *now*, so the request launches just ahead of
-  now and forecasts forward with current winds. The landing drift was cured by not
-  re-predicting a landed balloon, so no launch-time anchoring is needed; the
+  launch, so it is never the sonde's telemetry time. The request launches just ahead
+  of now and forecasts forward with current winds. Drift is prevented by not
+  re-predicting once the estimate exists and nothing new is arriving, so no
+  launch-time anchoring is needed; the
   displayed landing *time* is still anchored to the telemetry timestamp
   (`anchoredLandingTime`).
 - The distinguishing datum is **vertical speed**: the last APRS frame has one
@@ -1731,9 +1784,9 @@ the blue descent polyline is decided **only** in `MapPresenter`
 (`predictionPathVisible`): it publishes the polyline through flight and through
 landed-by-silence, and sets it to `nil` on a confirmed touchdown or a no-data
 state. `TrackingMapView` draws it whenever the presenter has published one — it
-does **not** re-gate on flight state. (Regression guarded: the view once drew it
-only `if isFlying`, so the line vanished the moment the state became `aprsLanded`
-even though the presenter had published it and the route and markers were shown.
+does **not** re-gate on flight state. A view that re-gates on `isFlying` makes the
+line vanish the moment the state becomes `aprsLanded`, even though the presenter has
+published it and the route and markers are shown.
 For a sonde lost near the ground the line is short — target and last fix only a
 couple hundred metres apart — but it is drawn; for a flight caught higher it is
 the full descent curve.)
@@ -1757,7 +1810,7 @@ descending >10 km, red descending <10 km, grey unknown.)
 
 `APRSDataService.checkRecovery(serial:)` fetches and publishes `recoveryStatus`;
 it never throws, so a failed check just leaves the colour unchanged. It is part of
-the `startTrackingSonde` context read (startup and every new sonde — reset to
+the sonde context load (startup and every new sonde — reset to
 none, then checked, since a freshly chosen sonde may already have been found),
 runs again **on entering a landed state** (a mid-session landing), on **foreground
 resume** when landed, and **every 5 minutes** while landed (`ServiceCoordinator`
@@ -1805,76 +1858,109 @@ BLE-derived position and a GPS fix both exist, per *Data Ageing Across Phases*.
 
 ## Startup
 
-The coordinator runs `performCompleteStartupSequence()` in eight stages, waiting for definitive service answers before handing control to the state machine. Stages 4b, 4c and 4d are numbered as sub-steps of 4 because they run after both services have answered and before handover; they update the progress label but not `currentStartupStep`.
+**Startup answers one question first — which sonde is hunted — and only then touches
+anything belonging to a sonde.** Nothing sonde-specific is read, injected or
+published before selection has produced an answer. This is the ordering rule the
+whole sequence exists to enforce, and every step below is placed by it.
+
+Loading sonde data before selection has run is therefore forbidden, not merely
+discouraged. It answers a question that has not been asked, and it seeds state — the
+hunted serial above all — that later steps then mistake for evidence that setup has
+already happened.
 
 ### Service Answer Detection
+
+Selection (Step 2) needs a candidate, so it waits for the feeds to say something
+definite — but only that far, and it never waits for both when one already answers
+with an airborne sonde.
+
 - **BLE Service Answer**: Connection state enum published after first packet is parsed (any state except `.scanning`)
 - **APRS Service Answer**: Data received OR network error occurred
-- **15-Second Safety Timeout**: If either service fails to answer, displays "💀 Something horrible happened"
+- **15-Second Safety Timeout**: If neither feed answers, the hunt cannot be identified; the app says so and waits rather than guessing.
+
+Neither feed waits on the other, and neither is required: BLE with no network is a
+normal hunt, and so is APRS with no receiver.
 
 ### Startup Steps
-**Step 1: Load Persisted Data**
-    *   Progress label: "Step 1: Loading Data"
-    *   **Load from disk**: Read all 4 JSON files (userSettings.json, sondeName.json, balloontrack.json, landingPoints.json)
-    *   **Validate ownership**: The track is stored with the serial it belongs to, so a track naming a different sonde — or an older one naming none — is discarded rather than drawn (see *Persistence Service*)
-    *   **Handle errors**: If corrupted or unattributable, start with a clean track and rebuild it in stage 4d
-    *   **No injection yet**: Data loaded but not yet injected into services
 
-**Step 2: Service Initialization (0-100ms)**
-    *   Progress label: "Step 2: Services"
-    *   AppServices dependency injection and core service instantiation
-    *   Initial property setup across all services
-    *   **Services constructed with empty state** (no data loading in init)
+Five steps, each one **encapsulated function with a single responsibility**. The
+orchestrator does nothing but call them in order and hand over. No step reaches
+into another's state, and no step is allowed to do a job that belongs to a
+different one — in particular, **only step 3 loads sonde data**.
 
-**Step 3: Inject Persisted Data**
-    *   Progress label: "Step 3: Restoring State"
-    *   **Inject persisted data**: Load validated data from Step 1 into services
-    *   **Track loaded**: BalloonTrackService now has persisted track points
-    *   **Landing history loaded**: LandingPointTrackingService has previous predictions
-    *   **Critical**: Track is populated before APRS starts, so `readBalloonContext`'s delta-fetch sizes its request from the newest restored frame (a small delta) instead of re-loading the whole `3d` history
+**Step 1: Start empty, start listening, start locating**
+    *   Progress label: "Step 1: Services"
+    *   Services are constructed with **empty balloon state**. No track, no serial,
+        no landing points — nothing about a sonde is known yet, and nothing about a
+        sonde is loaded.
+    *   **BLE and APRS both start immediately.** They are independent and never talk
+        to each other: BLE scans for a receiver, APRS polls the station list. Each
+        simply publishes what it finds, and selection reads both.
+    *   `requestCurrentLocation()` starts here, not later: a GPS fix takes several
+        seconds and the green route in step 4 needs one. Asking early means it has
+        arrived by the time it is wanted.
+    *   The state machine is held (`isStartupComplete = false`) so it cannot act on
+        half-built state.
+    *   `userSettings.json` is the only file read — it is not sonde-specific.
 
-**Step 4: Service Startup + Answer Detection (100ms-~4s) [PARALLEL]**
-    *   Progress label: "Step 4: BLE & APRS"
-    *   **BLE Service**: Start scanning (if Bluetooth powered on)
-    *   **APRS Service**: Start polling station data (`readBalloonContext` delta-fetches against the persisted track)
-    *   **Wait for both definitive answers**:
-        - BLE: Bluetooth off OR connection state enum published (after first packet)
-        - APRS: Telemetry data received OR network error
-    *   **No individual timeouts** - let each service handle its own timing
-    *   **Coordinator timeout**: 15 seconds maximum (only if services don't answer)
+**Step 2: Select the sonde**
+    *   Progress label: "Step 2: Select Sonde"
+    *   **Selection always selects.** Whether the picker is shown is an internal
+        detail of this one function, not a different code path: when a sonde is
+        positively airborne it selects that one and shows nothing; otherwise it
+        presents the list and selects what the hunter (or the auto-confirm) chooses.
+        One function, one responsibility — see *Sonde Selection*.
+    *   Candidates come from both feeds: the SondeHub station list, and any serial
+        BLE has decoded. **A BLE sonde with no SondeHub entry is still selectable** —
+        that is the normal off-grid case, not an error.
+    *   This is the only place the hunted identity is decided, and the first moment
+        it exists. Everything after it is that sonde's data.
 
-**Step 4b: Sonde Selection**
-    *   Progress label: "Step 4: Select Sonde"
-    *   Auto-select the sonde positively confirmed airborne, or present the picker — see *Sonde Selection* for the classification rule and the undetermined case
-    *   Selection funnels through `startTrackingSonde`, which clears any previous sonde's data
+**Step 3: Load the sonde context**
+    *   Progress label: "Step 3: Loading Sonde"
+    *   `readBalloonContext(serial:)` is **the canonical sonde data loader — nothing
+        else loads sonde data, ever.** It assembles the complete picture for the
+        selected serial: the retained BLE hunt tail from disk, the SondeHub track
+        delta merged onto it by position, the latest position, and the recovery
+        status. See *APRS Telemetry: the delta-fetch*.
+    *   An empty SondeHub answer is **normal, not a failure**: a sonde absent from
+        SondeHub for 24 h is a test sonde and simply has no APRS track to show. The
+        hunt continues on BLE alone, and the track appears by itself once that sonde
+        does reach SondeHub — no coordination between the two feeds is needed or
+        wanted.
+    *   Frequency sync runs here, once the hunted sonde is known and if the receiver
+        is ready for commands. It is evaluated **once**: it compares frequency (0.01 MHz tolerance) and sonde type, and on a mismatch raises a proposal for the hunter to accept or decline. Declining records a 5-minute cooldown for that frequency/type pair; it is not repeated while hunting and resets on a sonde change.
 
-**Step 4c: Frequency Sync**
-    *   Runs only if the receiver is ready for commands and APRS has published a radio channel
-    *   Compares frequency (0.01 MHz tolerance) and sonde type; on a mismatch, raises a proposal for the user to accept or decline
-    *   Evaluated **once**. Declining records a 5-minute cooldown for that frequency/type pair. Not repeated while hunting; reset on sonde change
+**Step 4: Draw the overlays, in order**
+    *   Progress label: "Step 4: Drawing"
+    *   The four overlays have a fixed dependency order, and orchestration is what
+        enforces it: **red track** (from the context) → **one prediction** → **blue
+        path and landing point** → **green route** to that landing point.
+    *   Each of prediction, landing point and route **only runs on data that is
+        actually sufficient for it**, and says so rather than producing a placeholder:
+        no position, no prediction; no landing point, no route. They are not guarded
+        after the fact — they refuse to run without their inputs.
+    *   The prediction here is the *only* one a landed sonde will ever get, because
+        a sonde that is down but was never seen on the ground has no other estimate
+        of where it lies — see *How a Landing Is Determined → When prediction runs*.
 
-**Step 4d: Read Balloon Context**
-    *   `readBalloonContext(serial:)` fetches from SondeHub whatever the flight path is missing and merges it in
-    *   Runs unconditionally, not only when the track is empty: a track holding a few minutes of BLE is still missing everything before the app was started, and SondeHub is the only source for it
-    *   The request is sized from the gap since the newest held frame — a full `3d` load for an empty track, a short delta for a restored one — and the merge is keyed on **physical position**, so live BLE data is never displaced or duplicated. See *APRS Telemetry: the delta-fetch*
-
-**Step 5: State Machine Handoff & UI Transition**
+**Step 5: Hand over to the state machine**
     *   Progress label: "Step 5: Startup Complete"
-    *   **State Machine**: Call `balloonPositionService.completeStartup()`
-    *   **Service answers available** - state machine can make informed decisions
-    *   **Startup Complete**: Set `isStartupComplete = true`
-    *   **UI Transition**: Hide logo, show tracking map
-    *   **State Machine Control**: All timeout and source decisions now handled by state machine
-    *   **Service Coordination**: 60-second prediction timer controlled by state machine state
-    *   **Map framing**: The first map opens on every overlay there is — flown track, predicted path, route, balloon and hunter. Because those arrive over the following second or two, a window stays open for 8 s during which each arriving overlay refits the camera; afterwards the map never moves on its own.
+    *   `balloonPositionService.completeStartup()` → `isStartupComplete = true`
+    *   UI transition: hide logo, show tracking map.
+    *   All timeout and source decisions now belong to the state machine, including
+        the 60-second prediction timer.
+    *   **Map framing**: the first map opens on every overlay there is — flown track,
+        predicted path, route, balloon and hunter. Because those arrive over the
+        following second or two, a window stays open for 8 s during which each
+        arriving overlay refits the camera; afterwards the map never moves on its own.
 
 ### Key Improvements
-- **Separated data loading from service construction**: Persisted data loaded in Step 1, services constructed clean in Step 2
-- **No artificial timeouts**: Coordinator waits for actual service responses
-- **Parallel service startup**: BLE and APRS start simultaneously
-- **Immediate handoff**: Once both services answer, control goes to state machine
-- **Fault tolerance**: Handles BLE disconnects, network failures, device unavailability, and corrupted persistence
-- **Consistent ~4-second startup**: Fast persistence load (~50ms) + optimized service startup
+- **Nothing sonde-specific loads before the sonde is known**: services start empty in Step 1; all sonde data arrives through the one context loader in Step 3
+- **One responsibility per step**: selection decides identity, the context loader loads data, orchestration draws in dependency order. No step does another's job
+- **No artificial timeouts**: the coordinator waits for actual service responses
+- **Parallel, independent feeds**: BLE and APRS start together and never coordinate; either alone is a workable hunt
+- **Fault tolerance**: handles BLE disconnects, network failures, device unavailability, and a sonde SondeHub has never heard of
 
 ## Tracking View
 
@@ -1924,7 +2010,7 @@ The overlays must remain accurately positioned and correctly cropped within the 
 
 * User Position: The iPhone's current position is continuously displayed and updated on the map, represented by a runner.  
 * Balloon Live Position: If Telemetry is available, the balloon's real-time position is displayed using a balloon marker (balloon.fill). While flying its colour is green ascending, orange descending above 10 km, red descending below 10 km, grey unknown; once landed the colour reports recovery instead — see *Recovery status — is it found?*.  
-* Balloon Track: The map overlay shall show the current balloon track as a thin red line. At startup, persisted track (if any) is loaded from balloontrack.json. New telemetry points are appended to the array as they are received. The array is automatically cleared if a different sonde name is received (new sonde). It is updated when a new point is added to the track. The track should appear on the map when it is available.  
+* Balloon Track: The map overlay shall show the current balloon track as a thin red line. It starts empty and is filled by the context loader once a sonde is selected. New telemetry points are appended to the array as they are received. The array is automatically cleared if a different sonde name is received (new sonde). It is updated when a new point is added to the track. The track should appear on the map when it is available.  
 * Balloon Predicted Path: The complete predicted flight path from the Sondehub API is displayed as a thick blue line. While the balloon is ascending, a distinct marker indicates the predicted burst location; the burst marker is visible only while ascending. Visibility of the path itself is decided in one place — `MapPresenter.predictionPathVisible` — and the view draws whatever the presenter publishes. There is no "Prediction on/off" button. See *How a Landing Is Determined → Drawing the predicted-descent line*.  
 * Landing point: Shall be visible if a valid landing point is available  
 * Planned Route from User to Landing Point: The recommended route from the user's current location to the predicted landing point is retrieved from Apple Maps and displayed on the map as a green overlay path. When bicycle mode is selected the in-app overlay still uses walking directions (MapKit limitation) but the Apple Maps button launches native cycling navigation. The route should appear on the map when it is available.  
