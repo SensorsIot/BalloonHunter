@@ -1675,6 +1675,11 @@ Sending the raw instantaneous rate is a category error: at 20 km a sonde falls a
 
 ### How a Landing Is Determined
 
+*Requirements in this chapter are numbered `FR-L.n`. The tests that discharge them
+are declared in [`testing/test-plan.yaml`](../../testing/test-plan.yaml), not
+listed here.*
+
+
 This is foundational, and easy to get wrong: **losing the APRS signal is not a
 landing.**
 
@@ -1702,18 +1707,24 @@ knowing where the balloon lies:**
 
 **Consequences that follow and must hold:**
 
-- `aprsStale` says the flight is over, not where the balloon is. So a landing
-  reached this way keeps the **prediction** as the landing point and the car route
-  target — **the last-heard-at-altitude position is never the destination**, and
-  the predicted-landing marker and its connecting line stay visible for the whole
-  drive. Locking the landing point to the last-heard position instead would freeze
-  a marker at altitude with the real estimate elsewhere and no line between them.
-- The **confirmed touchdown position comes only from a fixed, near-ground
-  observation** — in practice close-range BLE — detected by `vectorAnalysis` or
-  the track-based stationary/blackout rules. That is when the marker locks to the
-  actual point and prediction stops.
-- **When prediction runs** (`PredictionPolicy.shouldPredict`). The question is not
-  "is it landed?" but **"do we know where it is?"**:
+- **FR-L.1** [Must] When the landing reason is `aprsStale`, the app shall keep the
+  predicted landing point as both the landing marker and the route destination, and
+  shall not set either to the last-heard telemetry position.
+  *Verification:* unit — `PredictionPolicy` / `LandingDetector.confirmsTouchdown`;
+  device — a sonde whose APRS coverage ends while descending, checked against the
+  log line `Landed by silence (aprsStale) - keeping predicted landing`.
+  *Prohibited:* the landing marker moving to the last-heard coordinate; the
+  predicted-descent line disappearing while the state is `aprsLanded`.
+
+- **FR-L.2** [Must] The app shall treat a landing as a confirmed touchdown only on a
+  fixed, near-ground observation — `vectorAnalysis` or the track-based
+  stationary/blackout rules — and shall then lock the landing marker to that
+  observed position.
+  *Verification:* unit — `LandingDetector`; field — walking up to a landed sonde
+  with the receiver in range.
+  *Prohibited:* a touchdown declared from APRS silence alone.
+- **FR-L.3** [Must] **When prediction runs** (`PredictionPolicy.shouldPredict`). The
+  question is not "is it landed?" but **"do we know where it is?"**:
 
   | situation | predict? |
   |---|---|
@@ -1724,6 +1735,9 @@ knowing where the balloon lies:**
 
   A mid-session landing therefore keeps the last flying estimate rather than
   clearing it (`currentLandingPoint` is not cleared).
+  *Verification:* unit — `PredictionPolicy` covers all four rows and both
+  boundaries. *Prohibited:* a second prediction in landed-by-silence once an
+  estimate exists; any prediction after a confirmed touchdown.
 - **`launch_datetime` must be in the future** — SondeHub's Tawhiri rejects a past
   launch, so it is never the sonde's telemetry time. The request launches just ahead
   of now and forecasts forward with current winds. Drift is prevented by not

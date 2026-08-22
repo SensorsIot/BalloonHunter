@@ -11,6 +11,23 @@ A decision still embedded in a service with a network client and a Combine
 subscription is, in practice, untested — which is why extraction comes before the
 test rather than after.
 
+## Where the tests are declared
+
+`testing/test-plan.yaml` lists every test — the unit suites, and the workflows
+executed by hand — with what each needs and what it last produced. A test that is
+not declared there does not exist for planning purposes, however green it runs.
+
+Each case carries two independent classifications: `kind` (`atomic` or `workflow`)
+and `scenario` (`standard`, `deviation`, `negative`, `security`). A **workflow is
+not a loop over its children** — it is one continuous run, and its status is
+independent of theirs. All children green with the workflow red is an integration
+defect, which is precisely the result atomic coverage cannot produce.
+
+Every workflow carries a start state to **establish rather than assume**, the
+`must_not` failure modes that would otherwise produce a false pass, and the
+`evidence_required` a run must capture. For the device and field tiers the steps
+are the manual procedure: what to do, and what to observe in the app or the log.
+
 ## Order
 
 Specification, then test, then code — per requirement. A bug fix writes its

@@ -1,0 +1,203 @@
+# BalloonHunter - test plan
+#
+# Every test this project has, what it needs, and what it last produced. Declared
+# here; implemented beside the code (unit) or executed by hand from the steps below
+# (device, field).
+#
+# Two independent classifications per case:
+#   kind      atomic   - verifies one contract, boundary or prohibited outcome
+#             workflow - one continuous run proving the product does its job
+#   scenario  standard | deviation | negative | security
+#
+# A workflow is NOT a loop over its children. Its status is independent of theirs:
+# all children green with the workflow red is an integration defect, which is the
+# result the second axis exists to express.
+
+tiers:
+  unit: "Simulator, XCTest, no hardware. Runs on every push via the pre-push hook."
+  device: "A real iPhone with the MySondyGo receiver present. Executed by hand."
+  field: "A real hunt with a live sonde. Executed by hand, once per opportunity."
+
+equipment:
+  iphone: "iPhone with the app installed via devicectl."
+  receiver: "MySondyGo, powered, tuned to the sonde being hunted."
+  test_sonde: "A repowered RS41 on the bench, transmitting, absent from SondeHub."
+  live_sonde: "A sonde currently flying or recently landed within receiver range."
+  network: "Reachable SondeHub. Its absence is itself a test condition."
+
+# ------------------------------------------------------------- atomic (unit)
+atomic:
+  - id: U-LANDING
+    kind: atomic
+    scenario: standard
+    tier: unit
+    verifies: [FR-L.2]
+    implemented_by: "LandingDetectorTests, LandingSequenceTests"
+    covers: >
+      The three landing algorithms and their priority; that confirmsTouchdown is true only for a fixed near-ground observation and false for aprsStale.
+    last_result: "49 passing"
+  - id: U-PREDICTION-POLICY
+    kind: atomic
+    scenario: standard
+    tier: unit
+    verifies: [FR-L.3]
+    implemented_by: "LandingSequenceTests"
+    covers: >
+      All four rows of the prediction table and both boundaries: flying always; landed-by-silence only without an estimate; never after a confirmed touchdown. Mutation-checked - removing the hasPrediction term turns testNoPredict_landedBySilence_whenPredictionExists red.
+    last_result: "passing"
+  - id: U-TRACK-MERGE
+    kind: atomic
+    scenario: standard
+    tier: unit
+    implemented_by: "TrackDedupTests"
+    covers: >
+      Position-keyed merge; the BLE/APRS relay skew not duplicating points; the hunt tail being the BLE beyond the last APRS fix, including the interleaved case; fetch-window sizing from the last fetch.
+    last_result: "30 passing"
+  - id: U-TEST-SONDE
+    kind: atomic
+    scenario: negative
+    tier: unit
+    implemented_by: "ForeignSondeTrackerTests"
+    covers: >
+      A retune is refused only on positive evidence - a SondeHub answer that arrives and is empty. Unreachable is not evidence. Mutation-checked.
+    last_result: "15 passing"
+  - id: U-ROUTING
+    kind: atomic
+    scenario: standard
+    tier: unit
+    implemented_by: "CloseRangeGuidanceTests"
+    covers: >
+      No route to somewhere already stood on; renewal on landing-point movement unthrottled and on hunter movement throttled; close-range handover radius.
+    last_result: "30 passing"
+
+# ----------------------------------------------------------------- workflows
+workflows:
+  - id: W-STARTUP
+    kind: workflow
+    scenario: standard
+    tier: device
+    needs: [iphone, network]
+    children: [U-TRACK-MERGE, U-PREDICTION-POLICY]
+    start_state: >
+      App fully quit. Verify - not assume - that no hunt is in progress.
+    steps:
+      - do: "Launch the app."
+        observe: "log: 'Step 1 - Settings only; no sonde data until one is chosen'"
+      - do: "Wait for the picker."
+        observe: "it lists the station's sondes of the last 24 h, newest highlighted"
+      - do: "Let the 5 s auto-confirm run without touching anything."
+        observe: "log: '=== Starting to track sonde ===' and NOT 'Already tracking'"
+      - do: "Watch the map while the context loads."
+        observe: "landing point and green route appear; log: 'Context read ... never fetched -> duration=3d'"
+      - do: "Wait for the history."
+        observe: "red track appears; log: 'RED TRACK: <n> pts'"
+    must_not:
+      - "The log contains 'Already tracking', which means selection returned early and the hunt has no APRS override, no recovery check and no prediction."
+      - "A sonde identity appears in the log before the picker is answered."
+      - "balloontrack.json or sondeName.json exist in the container afterwards."
+    evidence_required:
+      - "balloonhunter.log.csv covering launch to 'STARTUP: Complete'"
+      - "The Documents listing, showing only userSettings.json and hunttail.json"
+    status: not_run
+  - id: W-BACKGROUND
+    kind: workflow
+    scenario: standard
+    tier: device
+    needs: [iphone, network]
+    start_state: >
+      A hunt in progress with a drawn track.
+    steps:
+      - do: "Note the track point count from the log."
+        observe: "the count is recorded before backgrounding"
+      - do: "Send the app to the background; wait at least a minute."
+        observe: "log: 'Entered background - hunt tail persisted' exactly once"
+      - do: "Bring it back to the foreground."
+        observe: "log: '=== Foreground Resume Sequence Started ==='"
+      - do: "Watch the context read."
+        observe: "log: 'Context read ... <n>s since last fetch -> duration=30m'"
+    must_not:
+      - "Two 'hunt tail persisted' lines per cycle, which means the save is firing on .inactive in both directions."
+      - "A full 3d fetch on resume, which means the window is sized from the newest frame rather than the last fetch."
+      - "The landing marker moving while the app was away and nothing arrived."
+    evidence_required:
+      - "The log across the whole background and foreground cycle"
+    status: not_run
+  - id: W-SONDE-CHANGE
+    kind: workflow
+    scenario: standard
+    tier: device
+    needs: [iphone, network]
+    start_state: >
+      A hunt in progress on sonde A, with a drawn track and a landing point.
+    steps:
+      - do: "Open the picker from the button row."
+        observe: "it is never empty; it lists candidates before appearing"
+      - do: "Select a different sonde B and confirm."
+        observe: "log: 'Clearing all old sonde data' then '=== Now tracking B ==='"
+      - do: "Watch the overlays."
+        observe: "A's track is gone; B's landing point and route appear"
+    must_not:
+      - "Any of A's track points surviving into B's track."
+      - "A stored hunt tail belonging to A being restored for B."
+      - "The picker appearing with an empty list."
+    evidence_required:
+      - "The log from picker open to B's first drawn overlay"
+    status: not_run
+  - id: W-TEST-SONDE
+    kind: workflow
+    scenario: negative
+    tier: device
+    needs: [iphone, receiver, test_sonde, network]
+    children: [U-TEST-SONDE]
+    start_state: >
+      A hunt in progress on a real sonde. A repowered test sonde on the bench, transmitting, and confirmed absent from SondeHub for 24 h.
+    steps:
+      - do: "Tune the receiver to the test sonde's frequency."
+        observe: "the data panel shows the test serial decoding"
+      - do: "Wait for five consecutive decodes."
+        observe: "log: 'dropped telemetry for <test> - hunting <real> (5/5)'"
+      - do: "Watch what the app does next."
+        observe: "log: '<test> is a test sonde - SondeHub holds nothing for it. Keeping the hunt on <real>'"
+      - do: "Check the overlays."
+        observe: "the real sonde's track, landing point and route are untouched"
+    must_not:
+      - "'=== Starting to track sonde <test> ===' appearing, which means the bench unit took the hunt."
+      - "Any request to /sonde/<serial>, which is the whole-archive endpoint."
+      - "The real sonde's track being cleared."
+    evidence_required:
+      - "The log across all five decodes and the refusal"
+    status: not_run
+  - id: W-HUNT
+    kind: workflow
+    scenario: standard
+    tier: field
+    needs: [iphone, receiver, live_sonde, network]
+    children: [U-LANDING, U-PREDICTION-POLICY, U-ROUTING]
+    start_state: >
+      A sonde flying or recently down within reach. Receiver powered and tuned. This is the acceptance workflow: it proves what one step produces is what the next consumes, which the atomic cases cannot show.
+    steps:
+      - do: "Tune the receiver to the sonde and confirm it decodes."
+        observe: "the data panel shows the serial and a signal strength"
+      - do: "Launch the app and take the sonde through the picker."
+        observe: "the track, landing point and route all draw"
+      - do: "Drive toward the landing point."
+        observe: "the route rebuilds after about 100 m of movement, not continuously"
+      - do: "Continue while APRS coverage ends."
+        observe: "log: 'Landed by silence (aprsStale) - keeping predicted landing'; the marker stays on the prediction"
+      - do: "Close to within 200 m."
+        observe: "the route disappears; the distance overlay counts down"
+      - do: "Walk in until the receiver hears it on the ground."
+        observe: "log: 'Landing detected - locking position'; the marker moves to the actual position"
+      - do: "Find the sonde."
+        observe: "the distance overlay agrees with reality to within a few metres"
+      - do: "After someone reports the find, relaunch."
+        observe: "the balloon marker is green"
+    must_not:
+      - "The landing marker sitting at the last-heard altitude position during the drive."
+      - "The route still drawn while standing next to the sonde."
+      - "The marker locking to a position the receiver never observed."
+      - "The predicted-descent line vanishing when the state becomes aprsLanded."
+    evidence_required:
+      - "The log for the whole hunt, pulled before the ring buffer rotates"
+      - "The final distance-overlay reading against where the sonde actually lay"
+    status: not_run
