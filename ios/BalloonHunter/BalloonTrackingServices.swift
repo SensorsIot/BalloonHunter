@@ -281,7 +281,6 @@ final class BalloonPositionService: ObservableObject {
         let now = Date()
 
         // Log every position for tracking (debug level to reduce verbosity)
-        appLog("BalloonPositionService: Processing \(source) position for \(position.sondeName) at [\(String(format: "%.5f", position.latitude)), \(String(format: "%.5f", position.longitude))] alt=\(Int(position.altitude))m", category: .service, level: .debug)
 
         // Which sonde is being hunted is decided by selection - at startup, or
         // through the picker - and telemetry never redefines it.
@@ -784,6 +783,21 @@ final class BalloonPositionService: ObservableObject {
 
     // MARK: - Balloon Display Position Management (moved from ServiceCoordinator)
 
+    /// Report which *kind* of position the marker follows, and only when that
+    /// changes. Which of the two it is answers a real question; repeating it for
+    /// every telemetry packet at 1 Hz buries everything else in the log.
+    private var lastDisplayPositionKind: String?
+    private func logDisplayPositionKind(_ kind: String, at coordinate: CLLocationCoordinate2D?) {
+        guard kind != lastDisplayPositionKind else { return }
+        lastDisplayPositionKind = kind
+        if let coordinate {
+            appLog(String(format: "BalloonPositionService: Display position now follows the %@ [%.5f, %.5f]",
+                          kind, coordinate.latitude, coordinate.longitude), category: .service, level: .info)
+        } else {
+            appLog("BalloonPositionService: No position to display (phase=\(balloonPhase))", category: .service, level: .info)
+        }
+    }
+
     private func updateBalloonDisplayPosition() {
         // On foot, only the sonde's own GPS over BLE counts. A SondeHub position
         // marks where the sonde was last *heard*, not where it lies, so it must
@@ -795,14 +809,14 @@ final class BalloonPositionService: ObservableObject {
         if balloonPhase == .landed, let balloonTrackService = balloonTrackService, let landingPosition = balloonTrackService.landingPosition {
             balloonDisplayPosition = landingPosition
             currentLocationService.updateBalloonDisplayPosition(landingPosition, source: source)
-            appLog("BalloonPositionService: Display position set to landing point [\(String(format: "%.5f", landingPosition.latitude)), \(String(format: "%.5f", landingPosition.longitude))]", category: .service, level: .debug)
+            logDisplayPositionKind("landing point", at: landingPosition)
         } else if let position = currentPositionData {
             let livePosition = CLLocationCoordinate2D(latitude: position.latitude, longitude: position.longitude)
             balloonDisplayPosition = livePosition
             currentLocationService.updateBalloonDisplayPosition(livePosition, source: source)
-            appLog("BalloonPositionService: Display position set to live position [\(String(format: "%.5f", livePosition.latitude)), \(String(format: "%.5f", livePosition.longitude))]", category: .service, level: .debug)
+            logDisplayPositionKind("live position", at: livePosition)
         } else {
-            appLog("BalloonPositionService: Cannot update display position - no position data available (phase=\(balloonPhase))", category: .service, level: .debug)
+            logDisplayPositionKind("nothing", at: nil)
         }
     }
 

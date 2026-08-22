@@ -98,6 +98,28 @@ final class MapPresenter: ObservableObject {
     /// itself as an outlier without anyone having to decide in advance where
     /// "wrong" points end up. A radiosonde track is continuous: consecutive
     /// points sit seconds and metres apart. One long leg is the defect.
+    /// Index of the longest leg the last summary reported, so the summary prints on
+    /// change rather than on every track update.
+    private var lastLoggedLongestLeg: Int?
+
+    /// Whether the route was visible when last reported. The reason it is hidden is
+    /// worth knowing; repeating it on every SwiftUI render is not.
+    private var lastLoggedRouteVisible: Bool?
+
+    /// Report a change in route visibility, with the reason it is hidden.
+    func logRouteVisibilityIfChanged() {
+        let visible = routeVisible && userRoute != nil
+        guard visible != lastLoggedRouteVisible else { return }
+        lastLoggedRouteVisible = visible
+        if visible {
+            appLog("🗺️ MAP: Route visible", category: .ui, level: .info)
+        } else if !routeVisible {
+            appLog("🗺️ MAP: Route hidden - state=\(balloonPositionService.currentState.description), within200m=\(isWithin200mOfBalloon)", category: .ui, level: .info)
+        } else {
+            appLog("🗺️ MAP: Route hidden - no route calculated yet", category: .ui, level: .info)
+        }
+    }
+
     private func logRedTrack(_ points: [BalloonTrackPoint]) {
         guard points.count >= 2 else { return }
 
@@ -114,13 +136,19 @@ final class MapPresenter: ObservableObject {
             if metres > 2000 { legs.append((i, metres, seconds)) }
         }
 
+        // The summary is worth printing when the longest leg changes — that is the
+        // signal a stray point produces. A track growing by one point a second is
+        // not news, and printing it every time buries the legs that matter.
         let first = points[0], last = points[points.count - 1]
+        defer { lastLoggedLongestLeg = longest.index }
+        if longest.index != lastLoggedLongestLeg {
         appLog(String(format: "🔴 RED TRACK: %d pts | first=%.5f,%.5f t=%@ | last=%.5f,%.5f t=%@ | longest leg #%d %.0fm over %.0fs",
                       points.count,
                       first.latitude, first.longitude, "\(first.timestamp)",
                       last.latitude, last.longitude, "\(last.timestamp)",
                       longest.index, longest.metres, longest.seconds),
                category: .general, level: .info)
+        }
 
         // Name every implausible leg and both of its endpoints. This is what
         // identifies the stray line and where it came from.
@@ -352,6 +380,7 @@ final class MapPresenter: ObservableObject {
                 } else {
                     self?.userRoute = nil
                 }
+                self?.logRouteVisibilityIfChanged()
                 self?.refitDuringStartup()
             }
             .store(in: &cancellables)
@@ -484,6 +513,7 @@ final class MapPresenter: ObservableObject {
         currentLocationService.$isWithin200mOfBalloon
             .sink { [weak self] isWithin in
                 self?.isWithin200mOfBalloon = isWithin
+                self?.logRouteVisibilityIfChanged()
             }
             .store(in: &cancellables)
 
@@ -492,8 +522,7 @@ final class MapPresenter: ObservableObject {
                 if points.isEmpty {
                     appLog("MapPresenter: Received EMPTY track update - clearing all track points", category: .general, level: .info)
                 } else {
-                    appLog("MapPresenter: Received track update with \(points.count) points", category: .general, level: .debug)
-                }
+                            }
                 self?.logRedTrack(points)
                 // Draw a simplified polyline; the full 1 Hz track stays in
                 // BalloonTrackService for all calculations.

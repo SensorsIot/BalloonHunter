@@ -437,3 +437,27 @@ nonisolated enum TestSonde {
         return recentFrameCount == 0
     }
 }
+
+// MARK: - Whether a route is wanted at all
+
+/// Whether the hunter needs driving directions to a destination, or is already there.
+///
+/// Inside close range the route is not drawn — the hunter is out of the car and
+/// navigating on foot from the distance and bearing. Building one anyway is not
+/// merely wasted work: it feeds the off-route monitor. Apple Maps snaps a two-metre
+/// separation to the nearest road, yielding a route a few tens of metres long that
+/// the hunter is then hundreds of metres "off", which triggers a recalculation, which
+/// snaps differently, which triggers another.
+///
+/// See FSD *Route Calculation Service* and *Phase 4 - On Foot*.
+nonisolated enum RoutePolicy {
+
+    /// The radius inside which the hunt is on foot. One owner for the number: the
+    /// map hides the route and the router declines to build it on the same value,
+    /// so the two can never disagree about whether a route exists.
+    static let closeRangeMetres: CLLocationDistance = 200
+
+    static func shouldCalculateRoute(userToDestinationMetres: CLLocationDistance) -> Bool {
+        userToDestinationMetres >= closeRangeMetres
+    }
+}

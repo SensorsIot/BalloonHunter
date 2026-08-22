@@ -369,7 +369,7 @@ final class CurrentLocationService: NSObject, ObservableObject, CLLocationManage
         let distance = CLLocation(latitude: userCoord.latitude, longitude: userCoord.longitude)
             .distance(from: CLLocation(latitude: balloonPosition.latitude, longitude: balloonPosition.longitude))
 
-        isWithin200mOfBalloon = distance < 200
+        isWithin200mOfBalloon = distance < RoutePolicy.closeRangeMetres
     }
 
     /// The provenance of the last balloon position, so the close-range distance

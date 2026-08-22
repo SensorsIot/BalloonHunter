@@ -161,12 +161,6 @@ struct TrackingMapView: View {
                        let userRoute = mapPresenter.userRoute {
                         MapPolyline(userRoute)
                             .stroke(.green, lineWidth: 3)
-                    } else {
-                        if !routeVisible {
-                            let _ = appLog("🗺️ MAP: Route NOT visible (routeVisible=false, state=\(mapPresenter.balloonPositionService.currentState.description), within200m=\(isWithin200mOfLandedBalloon))", category: .ui, level: .info)
-                        } else if mapPresenter.userRoute == nil {
-                            let _ = appLog("🗺️ MAP: Route NOT visible (userRoute is nil)", category: .ui, level: .info)
-                        }
                     }
 
                     // 4. Landing prediction history: Purple polyline connecting Sondehub landing estimates

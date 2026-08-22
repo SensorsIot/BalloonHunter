@@ -234,6 +234,21 @@ final class RouteCalculationService: ObservableObject {
     func calculateRoute(to destination: CLLocationCoordinate2D) {
         appLog("RouteCalculationService: calculateRoute called to destination [\(String(format: "%.4f", destination.latitude)), \(String(format: "%.4f", destination.longitude))]", category: .service, level: .info)
 
+        // The hunter may already be there. Inside close range the route is not drawn,
+        // and building one feeds the off-route monitor with a road-snapped stub the
+        // hunter is immediately "off" — which recalculates, snaps differently, and
+        // repeats. See `RoutePolicy`.
+        if let userLocation = currentLocationService.locationData {
+            let metres = CLLocation(latitude: userLocation.latitude, longitude: userLocation.longitude)
+                .distance(from: CLLocation(latitude: destination.latitude, longitude: destination.longitude))
+            guard RoutePolicy.shouldCalculateRoute(userToDestinationMetres: metres) else {
+                appLog("RouteCalculationService: Destination is \(Int(metres))m away - within close range, no route wanted", category: .service, level: .info)
+                lastDestination = destination
+                currentRoute = nil
+                return
+            }
+        }
+
         // Check if destination has moved significantly
         var shouldRecalculate = false
         if let previousDestination = lastDestination {

@@ -104,4 +104,30 @@ final class CloseRangeGuidanceTests: XCTestCase {
             }
         }
     }
+
+    // MARK: - A route to where you already stand
+
+    /// Within close range the route is not displayed, so calculating one is work
+    /// nobody sees — and worse, it feeds the off-route monitor. Apple Maps snaps a
+    /// two-metre separation to the nearest road, producing a 13 m route the hunter
+    /// is then "280 m off", which triggers another recalculation, forever.
+    /// See FSD *Route Calculation Service*.
+
+    func testRoute_notCalculatedToSomewhereYouAlreadyStand() {
+        XCTAssertFalse(RoutePolicy.shouldCalculateRoute(userToDestinationMetres: 2),
+                       "standing on the destination: there is nothing to navigate")
+        XCTAssertFalse(RoutePolicy.shouldCalculateRoute(userToDestinationMetres: 199))
+    }
+
+    func testRoute_calculatedOnceTheDestinationIsWorthDrivingTo() {
+        XCTAssertTrue(RoutePolicy.shouldCalculateRoute(userToDestinationMetres: 200))
+        XCTAssertTrue(RoutePolicy.shouldCalculateRoute(userToDestinationMetres: 34_308))
+    }
+
+    /// The radius has one owner. The map hides the route and the router declines to
+    /// build it on the same number, so they can never disagree.
+    func testRoute_sharesItsRadiusWithTheCloseRangeHandover() {
+        XCTAssertEqual(RoutePolicy.closeRangeMetres, 200,
+                       "the same radius that hides the route and starts foot guidance")
+    }
 }

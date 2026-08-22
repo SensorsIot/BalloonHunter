@@ -662,6 +662,14 @@ Discover and connect to MySondyGo devices over Bluetooth Low Energy, subscribe t
 
 #### Diagnostic log — one file (`AppLogFile`)
 
+**Report changes, not events.** The log is capped and rotates, so anything emitted per
+telemetry packet or per SwiftUI render pushes out the decisions worth reading. A
+message repeated at 1 Hz has told you nothing after the first one. Accordingly: route
+visibility is reported when it changes, the display position when it switches between
+the live position and the landing point, and the red-track summary when its longest
+leg changes — the longest leg being the signal a stray point produces. Per-packet
+telemetry is already carried by the sampled BLE line, so nothing else logs it.
+
 There is **one** on-device diagnostic log: `balloonhunter.log.csv` in the app
 container, written by `AppLogFile` from every `appLog` call. It is the same
 content as the Xcode console — state transitions, phase changes with the landing
@@ -1249,6 +1257,18 @@ Request a route from the user’s current location to the landing point using Ap
 #### Smart Route Recalculation
 
 The service implements intelligent route recalculation to minimize API calls while maintaining accuracy:
+
+**No route is built to somewhere the hunter already stands.** Inside
+`RoutePolicy.closeRangeMetres` (200 m) the route is not drawn — the hunt is on foot,
+guided by distance and bearing — so the router declines to build one. The map hides
+the route and the router refuses it on the *same* value, so the two cannot disagree
+about whether a route exists.
+
+This is not merely saved work. A route to a destination a few metres away is snapped
+by Apple Maps to the nearest road, producing a stub tens of metres long which the
+hunter is immediately hundreds of metres "off"; the off-route monitor then triggers a
+recalculation, which snaps differently, and repeats indefinitely — Apple Maps calls
+every few seconds for a route nobody is shown.
 
 **Recalculation Triggers**:
 1. **Landing Point Movement** (≥100m threshold):
