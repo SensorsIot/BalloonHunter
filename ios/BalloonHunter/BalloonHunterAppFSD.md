@@ -587,7 +587,27 @@ Discover and connect to MySondyGo devices over Bluetooth Low Energy, subscribe t
 **Central Manager Lifecycle**
 
 - `centralManagerDidUpdateState` logs state transitions. When `.poweredOn`, emits `centralManagerPoweredOn` and marks BLE healthy; when powered off/unauthorized, sets `connectionStatus = .disconnected` and publishes an unhealthy event.
-- `startScanning()` runs only when Bluetooth is powered on. Scans for peripherals advertising the UART service whose name contains "MySondy"; duplicate discovery is disabled. **Continuous scanning**: When not connected, scanning runs continuously with automatic retry (10s delay after timeout) to enable automatic device discovery and reconnection.
+- `startScanning()` runs only when Bluetooth is powered on. Scans for peripherals advertising the UART service whose name contains "MySondy"; duplicate discovery is disabled. **Continuous scanning**: When not connected, scanning runs continuously with automatic retry (10s delay after a 5s scan timeout) to enable automatic device discovery and reconnection.
+
+  **A cancelled timer must not run its own body.** Both the scan timeout and the
+  retry sleep on a `Task` that is cancelled when a device is found. `try? await
+  Task.sleep(...)` swallows the `CancellationError` and falls through to the next
+  line, so cancelling ran the very handler it was meant to call off: a device
+  discovered 38 ms before the deadline logged "no MySondyGo device found" and
+  scheduled a rescan while the connection was being established. The sleep is
+  therefore awaited with `do/catch` and returns on cancellation.
+
+  > **Measured — 22 Aug 2026.** Discovery at 02:32:31.307, spurious timeout at
+  > 02:32:31.310, connect at 02:32:31.543. The false timeout's 10 s retry came due
+  > at ~02:32:41.31; the first BLE packet — the only thing that moves
+  > `connectionState` off `.notConnected` — arrived at 02:32:41.135. The rescan of
+  > a live connection was avoided by 175 ms.
+
+  **Known gap, not yet closed:** the retry guard tests `connectionState ==
+  .notConnected`, which stays true from `connect()` until the first packet, so it
+  cannot distinguish "connecting" from "no link". Closing it properly needs a
+  connect timeout (CoreBluetooth's `connect` never times out on its own), which is
+  an interval that has to be chosen deliberately — see the note in the same place.
 
 **Peripheral Discovery & Connection**
 

@@ -417,11 +417,21 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
         centralManager.scanForPeripherals(withServices: [UART_SERVICE_UUID], options: [CBCentralManagerScanOptionAllowDuplicatesKey: false])
         publishHealthEvent(.healthy, message: "BLE scanning started")
 
-        // Start scan timeout timer
+        // Start scan timeout timer.
+        //
+        // The sleep must be allowed to throw. `try?` would swallow the
+        // CancellationError and fall through to handleScanTimeout(), so cancelling
+        // this task on discovery would *run* the timeout instead of suppressing it —
+        // a device found microseconds before the deadline logged "no device found"
+        // and scheduled a pointless rescan while the connection was being made.
         scanTimeoutTask?.cancel()
         scanTimeoutTask = Task { @MainActor [weak self] in
             guard let self = self else { return }
-            try? await Task.sleep(nanoseconds: UInt64(self.scanTimeout * 1_000_000_000))
+            do {
+                try await Task.sleep(nanoseconds: UInt64(self.scanTimeout * 1_000_000_000))
+            } catch {
+                return   // cancelled: a device was found, this is not a timeout
+            }
             self.handleScanTimeout()
         }
     }
@@ -470,9 +480,15 @@ final class BLECommunicationService: NSObject, ObservableObject, CBCentralManage
         centralManager.stopScan()
         publishHealthEvent(.healthy, message: "BLE scan timeout - will retry")
 
-        // Wait 10 seconds before restarting scan (battery efficient, iOS friendly)
+        // Wait 10 seconds before restarting scan (battery efficient, iOS friendly).
+        // Same rule as the timeout above: the sleep must throw on cancellation, or
+        // cancelling this retry would immediately start the scan it was meant to call off.
         scanRetryTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: 10_000_000_000) // 10 seconds
+            do {
+                try await Task.sleep(nanoseconds: 10_000_000_000) // 10 seconds
+            } catch {
+                return   // cancelled: a scan or a connection took over
+            }
             guard let self = self, self.connectionState == .notConnected else { return }
             self.scanRetryTask = nil
             self.startScanning()
