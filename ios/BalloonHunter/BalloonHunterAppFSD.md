@@ -371,185 +371,14 @@ Architecture enforces a clean separation of responsibilities while embracing a m
   - Environment-Driven UI: Views observe the coordinator, presenter, and settings objects through @EnvironmentObject. User actions (toggle heading, trigger prediction, open Maps) bubble up through intent methods defined on the presenter/coordinator instead of mutating state locally.
   - Persistence & Caching: PersistenceService handles simple file-based persistence — user settings, and the retained BLE hunt tail keyed by serial. The flight itself is not stored; SondeHub holds it and the context loader fetches it. Caching actors prevent redundant prediction/route work. Both are injected once through AppServices, reinforcing a single source of truth.
 
-#### Direct vs Coordinated Communication Patterns
+#### How the code is organised
 
-The app uses a hybrid architecture that supports both direct service communication and ServiceCoordinator orchestration. The choice depends on the complexity and scope of the operation:
-
-**✅ Use Direct Service Communication When:**
-- Single service owns the data exclusively
-- Simple one-to-one data binding needed
-- View needs immediate service state access
-- No cross-service coordination required
-- Performance-critical data updates
-
-**Examples:**
-```swift
-// ✅ Direct: Single service data display
-@EnvironmentObject var balloonPositionService: BalloonPositionService
-Text("Altitude: \(balloonPositionService.altitude)")
-
-// ✅ Direct: Service-specific operations
-balloonPositionService.manualLocationUpdate()
-```
-
-**✅ Use ServiceCoordinator When:**
-- Multiple services must work together
-- Complex state combining different sources
-- Application-wide state management needed
-- Startup sequences and lifecycle events
-- Cross-cutting concerns (logging, caching, routing)
-
-**Examples:**
-```swift
-// ✅ Coordinated: Cross-service operations
-serviceCoordinator.triggerCompleteStartupSequence()
-serviceCoordinator.openInAppleMaps() // Uses location + routing + settings
-
-// ✅ Coordinated: Multi-service state
-@Published var consolidatedFlightData: FlightData // Combines BLE + APRS + predictions
-```
-
-**Decision Matrix:**
-| Scenario | Pattern | Reasoning |
-|----------|---------|-----------|
-| Display telemetry data | Direct | Single service ownership |
-| Trigger predictions | Direct | PredictionService operation |
-| Startup sequence | Coordinated | Multiple services coordination |
-| Route calculation | Coordinated | Requires location + settings |
-| Map camera updates | Direct via MapPresenter | Map-specific coordination |
-
-**Anti-Patterns to Avoid:**
-- Using ServiceCoordinator as simple data passthrough for single-service decisions
-- Creating unnecessary coordination layers when direct access is simpler
-- Views making direct service calls when coordination is needed
-
-### File Structure
-
-Do not open a new file without asking the user
-
-#### Complete Service Layer Organization (22 Swift files)
-
-The codebase is organized into logical layers with clear separation of responsibilities:
-
-**Infrastructure Layer:**
-- `AppServices.swift` - Dependency injection container and service lifecycle management
-- `CoreModels.swift` - Shared data structures, enums, and logging utilities
-- `PersistenceService.swift` - Core Data persistence, file storage, and document management
-
-**Communication Layer:**
-- `BLEService.swift` - MySondyGo BLE protocol implementation and device communication
-- `APRSDataService.swift` - SondeHub API integration and APRS data management
-- `LocationServices.swift` - GPS tracking, location services, and proximity detection
-
-**Processing Layer:**
-- `BalloonTrackingServices.swift` - Telemetry state machine, position tracking, and motion analysis
-- `PredictionService.swift` - Tawhiri API integration with sophisticated caching (co-located PredictionCache)
-- `RoutingServices.swift` - Apple Maps integration with performance-optimized RoutingCache
-
-**Coordination Layer:**
-- `Coordinator.swift` - ServiceCoordinator orchestration and cross-service state management
-- `CoordinatorServices.swift` - Startup sequence and complex coordination operations
-- `MapPresenter.swift` - Map-specific presentation logic and hybrid service access
-
-**UI Layer:**
-- `BalloonHunterApp.swift` - App entry point and environment object injection
-- `TrackingMapView.swift` - Primary map interface (70% of screen) with 8 annotation types
-- `DataPanelView.swift` - Telemetry display panel (30% of screen) with 2-table layout
-- `SettingsView.swift` - Configuration interface with tabbed device settings
-
-**Utility Layer:**
-- `Settings.swift` - UserSettings and AppSettings with persistence management
-
-#### BalloonHunterApp.swift:
-
-The main entry point of the application. It initializes the dependency container (`AppServices`), creates the `ServiceCoordinator`, injects both (plus shared services such as `LandingPointTrackingService`) into the SwiftUI environment, and manages scene lifecycle tasks like persistence saves and notification routing.
-
-####  AppServices.swift:
-
-A dependency injection container that wires up the core infrastructure: `PersistenceService`, `BLECommunicationService`, `CurrentLocationService`, `BalloonPositionService`, `BalloonTrackService`, `LandingPointTrackingService`, the caching actors, and other singletons used across the app.
-
-#### ServiceCoordinator.swift:
-
-The central architectural component that coordinates all services, manages application state, arbitrates telemetry between BLE and APRS providers, and contains the main business logic that was originally intended for the policy layer in the FSD.
-
-#### CoordinatorServices.swift:
-
-An extension to ServiceCoordinator that specifically contains the detailed startup sequence logic, keeping the main ServiceCoordinator file cleaner. Includes parallel APRS priming, state machine initialization, and startup map zoom functionality.
-
-#### CoreModels.swift:
-
-Centralizes the shared data types (`PositionData`, `RadioChannelData`, `SettingsData`, `BalloonTrackPoint`, `PredictionData`, etc.) plus logging helpers so every service can import the same model definitions without circular references.
-
-#### LocationServices.swift:
-
-Houses the `CurrentLocationService` and related helpers that manage background/precision GPS updates, distance overlays, and proximity checks against the balloon.
-
-#### BalloonTrackingServices.swift:
-
-Contains `BalloonPositionService`, `BalloonTrackService`, and `LandingPointTrackingService`. These coordinate telemetry parsing, track smoothing, landing detection, and persistence of historic track/landing data.
-
-#### RoutingServices.swift:
-
-Houses `RouteCalculationService` and the `RoutingCache` actor: Apple Maps
-directions from the hunter to the landing point, with a cache keyed on
-origin/destination/mode, transport modes (car, bike), the straight-line fallback,
-and the proximity rule that hides the route inside 200 m. Fully specified in
-*Services → Route Calculation Service*.
-
-#### PersistenceService.swift:
-
-Dedicated file for the `PersistenceService`, responsible for simple file-based persistence of current sonde state (track, landing history) and user settings. Single-sonde snapshot model — see *Services → Persistence Service* for the file list.
-
-#### BLEService.swift:
-
-Contains the `BLECommunicationService`, which is responsible for all Bluetooth Low Energy communication, including device scanning, connection, and parsing incoming data packets from the MySondyGo device.
-
-#### MapPresenter.swift:
-
-Owns everything the map needs and nothing else: annotation generation, camera and
-zoom, overlay-state transformation (track polyline, prediction path, route), user
-intents (heading mode, trigger prediction, open Apple Maps), and display
-formatting. It reads single-service data directly and goes through
-`ServiceCoordinator` only for cross-service state — the general rule is in
-*Direct vs Coordinated Communication Patterns* above.
-
-Two decisions live here and nowhere else, because splitting them caused
-regressions: **predicted-path visibility** (`predictionPathVisible` — see *How a
-Landing Is Determined*) and **track simplification for drawing**
-(`simplifiedForDrawing()` — see *Balloon Track Service*).
-
-#### TrackingMapView.swift:
-
-The primary map interface (about 70 % of the screen): the button row, the map
-with its overlays and annotations, and the close-range distance overlay. It is
-presentation only — it draws what `MapPresenter` publishes and decides nothing.
-The overlays, their colours and the button row are specified in
-*Tracking View → Map Overlays* and *Buttons Row*.
-
-#### DataPanelView.swift:
-
-The telemetry panel below the map (about 30 % of the screen): a `Grid`-based
-two-table layout fed by pre-formatted strings from the services. The exact fields,
-their tables, colours and the stale-telemetry frame are specified in
-*Tracking View → Data Panel*.
-
-#### SettingsView.swift:
-
-Contains the UI for all settings, including the main "Sonde Settings" and the tabbed "Device Settings" sheet (with inlined numeric text field control).
-
-#### PredictionService.swift:
-
-Trajectory prediction against SondeHub's Tawhiri API, with the co-located
-`PredictionCache` (5-minute time buckets, coordinate quantisation, LRU eviction).
-Specified in *Services → Prediction Service*; the descent-rate rule is in
-*Descent Rate and Parachute Behaviour*, and when predictions run is in
-*How a Landing Is Determined*.
-
-#### Settings.swift:
-
-Defines `UserSettings`, `DeviceSettings`, and app-level configuration structures. UserSettings (prediction defaults) are persisted. DeviceSettings and transportMode are ephemeral (not persisted).
-
-
+Source layout, layer responsibilities, direct-versus-coordinated access, and the
+prohibitions that go with them are HOW, not WHAT: none of it is observable from
+outside a running system, and none would survive a rewrite in another language.
+They live in the Harness —
+[`docs/Harness/project/source-layout.md`](../../docs/Harness/project/source-layout.md)
+and [`docs/Harness/project/pure-rules.md`](../../docs/Harness/project/pure-rules.md).
 
 ## Services
 
@@ -2412,11 +2241,11 @@ The "TUNE" function in MySondyGo is a calibration process designed to compensate
 
 ## Debugging
 
-Debugging should be according the services. It should contain
-
-* From where the trigger came (one line)  
-* What was executed (one line)   
-* What was delivered (one line per structure)
+What a log line must contain, and the rule that it reports changes rather than
+events, are build rules rather than observable behaviour — see
+[`docs/Harness/standards/engineering.md`](../../docs/Harness/standards/engineering.md).
+Pulling the log off a device is an operator procedure:
+[`docs/UserDocumentation/User-Manual.md`](../../docs/UserDocumentation/User-Manual.md).
 
 # Appendix: 
 
