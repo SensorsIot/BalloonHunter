@@ -917,42 +917,7 @@ final class BalloonTrackService: ObservableObject {
         // Persisted data will be injected during startup sequence
     }
 
-    /// Inject persisted data from startup sequence
-    func injectPersistedData(sondeName: String?, track: [BalloonTrackPoint]) {
-        guard !track.isEmpty else {
-            appLog("BalloonTrackService: No persisted track to inject", category: .service, level: .info)
-            return
-        }
-
-        self.currentBalloonTrack = track
-
-        if let sondeName = sondeName {
-            appLog("BalloonTrackService: Injected persisted track for '\(sondeName)' with \(track.count) points", category: .service, level: .info)
-        } else {
-            appLog("BalloonTrackService: Injected persisted track with \(track.count) points (no sonde name)", category: .service, level: .info)
-        }
-
-        // Extent of what was restored: a leg reaching far outside the flight
-        // shows up here as a coordinate range wider than the flight could be.
-        if let first = track.first, let last = track.last {
-            let lats = track.map(\.latitude), lons = track.map(\.longitude)
-            appLog(String(format: "📍 TRACK EXTENT [restored %d pts]: lat %.5f…%.5f lon %.5f…%.5f | first=%.5f,%.5f last=%.5f,%.5f | span=%.0fmin",
-                          track.count,
-                          lats.min() ?? 0, lats.max() ?? 0, lons.min() ?? 0, lons.max() ?? 0,
-                          first.latitude, first.longitude, last.latitude, last.longitude,
-                          last.timestamp.timeIntervalSince(first.timestamp) / 60),
-                   category: .service, level: .info)
-        }
-
-        // Manually trigger update for subscribers
-        trackUpdated.send()
-
-        // Run track-based landing detection on restored persisted track
-        detectTrackBasedLanding()
-
-        // Note: Gap filling will happen automatically when APRS starts in Step 4
-    }
-    
+    /// Inject persisted data from startup sequence    
     private func setupSubscriptions() {
         // Subscribe to BalloonPositionService position data directly
         balloonPositionService.$currentPositionData
@@ -1056,7 +1021,6 @@ final class BalloonTrackService: ObservableObject {
         // Periodic persistence
         smoothingCounter += 1
         if smoothingCounter % saveInterval == 0 {
-            saveCurrentTrack()
         }
     }
 
@@ -1185,12 +1149,15 @@ final class BalloonTrackService: ObservableObject {
         )
     }
     
-    private func saveCurrentTrack() {
-        persistenceService.saveBalloonTrack(currentBalloonTrack, sondeName: currentBalloonName)
-        // Also save sonde name to keep consistency
-        if let balloonName = currentBalloonName {
-            persistenceService.saveSondeName(balloonName)
-        }
+    /// The BLE stretch beyond APRS coverage, ready to persist — or `nil` when APRS
+    /// holds everything and there is nothing irreplaceable to keep.
+    ///
+    /// The full track is deliberately **not** persisted: SondeHub holds the flight
+    /// and the context loader fetches it, so a local copy would duplicate an
+    /// authoritative source. See FSD *The BLE hunt tail*.
+    func currentHuntTail(now: Date = Date()) -> HuntTail? {
+        guard let serial = currentBalloonName, !serial.isEmpty else { return nil }
+        return HuntTail.from(track: currentBalloonTrack, serial: serial, at: now)
     }
     
     // Public API
@@ -1308,6 +1275,18 @@ final class BalloonTrackService: ObservableObject {
     /// collapses concurrent requests for the same serial onto one of these.
     private func performContextRead(serial: String) async {
         guard let aprsService else { return }
+        // Step 0: the BLE stretch this phone recorded beyond APRS coverage. Restored
+        // here, inside the one canonical loader, and only for the serial actually
+        // being hunted — a tail belonging to another sonde refuses itself.
+        if currentBalloonTrack.isEmpty,
+           let tail = persistenceService.loadHuntTail() {
+            let restored = tail.points(for: serial, now: Date())
+            if !restored.isEmpty {
+                currentBalloonTrack = currentBalloonTrack.mergingByPosition(restored)
+                appLog("BalloonTrackService: Restored \(restored.count) BLE hunt-tail points for \(serial)", category: .service, level: .info)
+            }
+        }
+
         // Ask only for what could have appeared since this serial was last fetched.
         // Not since the newest held frame: that measures how stale the balloon is,
         // not how stale our knowledge is, and the two come apart the moment a sonde
@@ -1316,6 +1295,29 @@ final class BalloonTrackService: ObservableObject {
         let duration = FetchWindow.duration(lastFetch: lastFetch, now: Date())
         let sinceText = lastFetch.map { String(format: "%.0fs since last fetch", Date().timeIntervalSince($0)) } ?? "never fetched"
         appLog("BalloonTrackService: Context read for \(serial) - \(sinceText) -> duration=\(duration), holding \(currentBalloonTrack.count) points", category: .service, level: .info)
+
+        // A whole-flight load takes ten seconds or so, and the landing point needs
+        // exactly one frame — the newest. So when the window is large, ask for the
+        // recent slice first and publish that position immediately: prediction,
+        // landing point and route appear in well under a second, and the history
+        // fills the red track in behind them. When the window is already small the
+        // one request does both jobs and this is skipped.
+        if FetchWindow.isLarge(duration) {
+            let recent = await aprsService.fetchAPRSTelemetryToFillGaps(
+                serial: serial, duration: FetchWindow.recentSlice, localTrack: currentBalloonTrack)
+            await MainActor.run {
+                guard currentBalloonName == serial else { return }
+                if !recent.isEmpty {
+                    _ = insertAPRSPoints(recent)
+                    trackUpdated.send()
+                }
+                if let latest = currentBalloonTrack.last {
+                    appLog("BalloonTrackService: Position published from the recent slice - overlays need not wait for the history", category: .service, level: .info)
+                    aprsService.publishRecoveredPosition(from: latest, serial: serial)
+                }
+            }
+        }
+
         let points = await aprsService.fetchAPRSTelemetryToFillGaps(serial: serial, duration: duration, localTrack: currentBalloonTrack)
         await MainActor.run {
             guard currentBalloonName == serial else { return }   // sonde changed while fetching
@@ -1325,7 +1327,6 @@ final class BalloonTrackService: ObservableObject {
             if !points.isEmpty {
                 _ = insertAPRSPoints(points)
                 trackUpdated.send()
-                saveCurrentTrack()
             }
             if let latest = currentBalloonTrack.last {
                 aprsService.publishRecoveredPosition(from: latest, serial: serial)
@@ -1449,7 +1450,6 @@ final class BalloonTrackService: ObservableObject {
                 sendTrackTruncationNotification(reason: "telemetry blackout", pointsRemoved: pointsRemoved)
 
                 trackUpdated.send()
-                saveCurrentTrack()
                 balloonPositionService.triggerStateEvaluation()
                 return
             }
@@ -1497,7 +1497,6 @@ final class BalloonTrackService: ObservableObject {
                 sendTrackTruncationNotification(reason: "stationary period", pointsRemoved: pointsRemoved)
 
                 trackUpdated.send()
-                saveCurrentTrack()
                 balloonPositionService.triggerStateEvaluation()
                 return
             }
@@ -1559,12 +1558,13 @@ final class BalloonTrackService: ObservableObject {
             adjustedDescentRateMS: nil
         )
 
-        // Clear all track data from disk
-        persistenceService.saveBalloonTrack([], sondeName: currentBalloonName)
-        persistenceService.saveSondeName("")
+        // Drop any stored tail: it belongs to the sonde being left behind, and must
+        // never be offered to the next one. Its serial guard would refuse it anyway;
+        // deleting keeps the disk honest.
+        persistenceService.saveHuntTail(nil)
 
         trackUpdated.send()
-        appLog("BalloonTrackService: All data cleared for new sonde (memory + disk, cancelled in-flight APRS fill)", category: .service, level: .info)
+        appLog("BalloonTrackService: All data cleared for new sonde", category: .service, level: .info)
     }
 }
 

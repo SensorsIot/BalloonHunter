@@ -191,16 +191,18 @@ struct BalloonHunterApp: App {
             }
         }
         .onChange(of: scenePhase) { oldScenePhase, newScenePhase in
-            if newScenePhase == .inactive {
-                // Save data on app close using the track service
-                appServices.persistenceService.saveOnAppClose(
-                    balloonTrackService: appServices.balloonTrackService,
-                    landingPointTrackingService: appServices.landingPointTrackingService
-                )
-                appLog("BalloonHunterApp: App became inactive, saved data.", category: .lifecycle, level: .info)
-            }
-
             if newScenePhase == .background {
+                // Persist on the way out, and only here. iOS passes through
+                // `.inactive` in both directions, so saving there wrote everything a
+                // second time while the app was being *restored* — before it was
+                // interactive, with nothing changed since the write on the way out.
+                // Leaving is the event worth persisting; arriving is not.
+                //
+                // Only the BLE hunt tail is written: the stretch beyond APRS coverage
+                // that SondeHub cannot return. The flight itself is not stored.
+                appServices.persistenceService.saveHuntTail(appServices.balloonTrackService.currentHuntTail())
+                appLog("BalloonHunterApp: Entered background - hunt tail persisted", category: .lifecycle, level: .info)
+
                 // Foreground-only: stop continuous hunter-position tracking so there
                 // is no background-location footprint.
                 appServices.currentLocationService.stopForegroundTracking()

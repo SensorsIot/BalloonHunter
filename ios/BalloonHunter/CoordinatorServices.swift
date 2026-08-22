@@ -77,43 +77,13 @@ extension ServiceCoordinator {
             currentStartupStep = 1
             startupProgress = "Step 1: Loading Data"
         }
-        appLog("STARTUP: Step 1 - Loading persisted data from disk", category: .general, level: .info)
+        appLog("STARTUP: Step 1 - Settings only; no sonde data until one is chosen", category: .general, level: .info)
 
-        let sondeName = persistenceService.loadSondeName()
-        var track = persistenceService.loadBalloonTrack(expecting: sondeName) ?? []
-        // Don't load old landing points - they should only exist for current session
+        // `userSettings` is the only thing read here, and it is not sonde-specific.
+        // Nothing belonging to a sonde is loaded before selection has said which
+        // sonde that would be — see FSD *Startup*. The BLE hunt tail is read later
+        // by the context loader, for the serial actually chosen.
         let landingPoints: [LandingPredictionPoint] = []
-
-        // Is what was stored still the hunt in progress?
-        //
-        // The serial decides identity; elapsed time only decides whether a hunt
-        // nothing is arriving for is still worth drawing. Six hours covers a real
-        // recovery: the climb, the fall, the drive and the walk.
-        // See FSD Hunt Phases -> Hunt Identity.
-        let huntState = HuntState()
-        let storedHunt = (sondeName != nil && !track.isEmpty)
-            ? HuntState.StoredHunt(serial: sondeName!, lastDataAt: track.last!.timestamp)
-            : nil
-        let decision = huntState.decide(stored: storedHunt, hunting: sondeName)
-
-        switch decision {
-        case .resumeHunt:
-            appLog("STARTUP: Step 1 - Resuming hunt for '\(sondeName!)' with \(track.count) track points", category: .general, level: .info)
-        case .tooOldToShow:
-            let hours = Date().timeIntervalSince(track.last!.timestamp) / 3600
-            appLog(String(format: "STARTUP: Step 1 - Last data for '%@' is %.1f h old, beyond the %.0f h a hunt lasts. Not drawing it; waiting for data.",
-                          sondeName!, hours, huntState.staleAfter / 3600),
-                   category: .general, level: .info)
-            track = []
-        case .startNewHunt:
-            appLog("STARTUP: Step 1 - Stored track belongs to another sonde - discarding", category: .general, level: .info)
-            track = []
-        case .nothingStored:
-            if !track.isEmpty {
-                appLog("STARTUP: Step 1 - WARNING: Track data exists but no sonde name", category: .general, level: .error)
-                track = []
-            }
-        }
 
         // Step 2: Service Initialization (already done in init) + Request location
         await MainActor.run {
@@ -130,17 +100,11 @@ extension ServiceCoordinator {
         }
         appLog("STARTUP: Step 3 - Injecting persisted data into services", category: .general, level: .info)
 
-        // Inject track and sonde name into BalloonTrackService
-        balloonTrackService.injectPersistedData(sondeName: sondeName, track: track)
-
-        // Inject sonde name into BalloonPositionService for change detection
-        if let sondeName = sondeName {
-            balloonPositionService.currentBalloonName = sondeName
-            // Filter the receiver from the first packet, before selection runs.
-            bleCommunicationService.huntedSondeName = sondeName
-        }
-
-        // Inject landing points into LandingPointTrackingService
+        // Nothing sonde-specific is injected. Startup must not seed an identity
+        // before selection has produced one: the hunted serial is the picker's
+        // answer alone, and a name written here would later be mistaken for proof
+        // that tracking had been set up. The BLE hunt tail is restored later, by the
+        // context loader, for whichever serial is actually chosen.
         landingPointTrackingService.injectPersistedData(landingPoints: landingPoints)
 
         // Step 4: Start BLE & APRS (gap filling now works on loaded track)

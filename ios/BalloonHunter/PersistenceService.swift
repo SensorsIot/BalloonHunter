@@ -17,8 +17,6 @@ final class PersistenceService: ObservableObject {
 
     // MARK: - File Names
     private let userSettingsFile = "userSettings.json"
-    private let sondeNameFile = "sondeName.json"
-    private let balloonTrackFile = "balloontrack.json"
     private let landingPointsFile = "landingPoints.json"
 
     init() {
@@ -29,7 +27,7 @@ final class PersistenceService: ObservableObject {
         self.deviceSettings = nil
         self.radioSettings = nil
 
-        appLog("PersistenceService: Initialized with 4-file model", category: .service, level: .info)
+        appLog("PersistenceService: Initialized - settings and the BLE hunt tail; the flight itself is not stored", category: .service, level: .info)
     }
 
     // MARK: - User Settings
@@ -77,81 +75,6 @@ final class PersistenceService: ObservableObject {
         appLog("PersistenceService: radioSettings updated in memory: freq=\(String(format: "%.2f", radioSettings.frequency))MHz type=\(radioSettings.probeType)", category: .service, level: .debug)
     }
 
-    // MARK: - Sonde Name
-
-    func saveSondeName(_ sondeName: String) {
-        let encoder = JSONEncoder()
-        if let encoded = try? encoder.encode(sondeName) {
-            saveToDocumentsDirectory(data: encoded, filename: sondeNameFile)
-            appLog("PersistenceService: Sonde name saved: '\(sondeName)'", category: .service, level: .debug)
-        }
-    }
-
-    func loadSondeName() -> String? {
-        let decoder = JSONDecoder()
-        if let data = Self.loadFromDocumentsDirectory(filename: sondeNameFile),
-           let sondeName = try? decoder.decode(String.self, from: data) {
-            appLog("PersistenceService: Sonde name loaded: '\(sondeName)'", category: .service, level: .debug)
-            return sondeName
-        }
-        return nil
-    }
-
-    // MARK: - Balloon Track
-
-    /// A track stored together with the sonde it belongs to.
-    ///
-    /// The two used to live in separate files, with nothing tying them together.
-    /// A track could therefore hold points from one sonde while the name file
-    /// claimed another, and no code could tell: `BalloonTrackPoint` carries no
-    /// serial, so a mixed track is indistinguishable from a clean one.
-    private struct PersistedTrack: Codable {
-        let sondeName: String
-        let points: [BalloonTrackPoint]
-    }
-
-    func saveBalloonTrack(_ track: [BalloonTrackPoint], sondeName: String?) {
-        guard let sondeName, !sondeName.isEmpty else {
-            // Nothing to bind the points to, so storing them would recreate the
-            // very ambiguity this format exists to remove.
-            appLog("PersistenceService: Balloon track not saved - no sonde name to bind it to", category: .service, level: .info)
-            return
-        }
-
-        let encoder = JSONEncoder()
-        if let encoded = try? encoder.encode(PersistedTrack(sondeName: sondeName, points: track)) {
-            saveToDocumentsDirectory(data: encoded, filename: balloonTrackFile)
-            appLog("PersistenceService: Balloon track saved (\(track.count) points for '\(sondeName)')", category: .service, level: .debug)
-        }
-    }
-
-    /// Load the stored track, but only if it demonstrably belongs to `sondeName`.
-    ///
-    /// Anything else is discarded rather than shown: a track from another sonde,
-    /// or one in the old format that names no owner and so cannot be vouched for.
-    func loadBalloonTrack(expecting sondeName: String?) -> [BalloonTrackPoint]? {
-        guard let data = Self.loadFromDocumentsDirectory(filename: balloonTrackFile) else { return nil }
-        let decoder = JSONDecoder()
-
-        guard let stored = try? decoder.decode(PersistedTrack.self, from: data) else {
-            // Old format: a bare array of points with no owner recorded. It may
-            // well be clean, but nothing in it can establish that, and an
-            // unverifiable track is what put another sonde's position on the map.
-            let count = (try? decoder.decode([BalloonTrackPoint].self, from: data))?.count
-            appLog("PersistenceService: Discarding unattributed track\(count.map { " (\($0) points)" } ?? "") - stored without a sonde name", category: .service, level: .info)
-            saveToDocumentsDirectory(data: Data("null".utf8), filename: balloonTrackFile)
-            return nil
-        }
-
-        guard let sondeName, stored.sondeName == sondeName else {
-            appLog("PersistenceService: Discarding track for '\(stored.sondeName)' (\(stored.points.count) points) - now tracking '\(sondeName ?? "nothing")'", category: .service, level: .info)
-            return nil
-        }
-
-        appLog("PersistenceService: Balloon track loaded (\(stored.points.count) points for '\(stored.sondeName)')", category: .service, level: .debug)
-        return stored.points
-    }
-
     // MARK: - Landing Points
 
     func saveLandingPoints(_ landingPoints: [LandingPredictionPoint]) {
@@ -172,24 +95,36 @@ final class PersistenceService: ObservableObject {
         return nil
     }
 
-    // MARK: - App Close Persistence
+    // MARK: - The BLE hunt tail
 
-    func saveOnAppClose(balloonTrackService: BalloonTrackService,
-                        landingPointTrackingService: LandingPointTrackingService) {
-        // Save current sonde name
-        if let currentName = balloonTrackService.currentBalloonName {
-            saveSondeName(currentName)
+    private let huntTailFile = "hunttail.json"
+
+    /// Write the stretch of BLE the network never saw. See `HuntTail`.
+    ///
+    /// Called when the app enters the **background** and nowhere else: the
+    /// background is the only thing persistence exists to survive. Nothing is
+    /// written when the app merely goes inactive, because iOS passes through
+    /// `.inactive` in both directions and the return trip has nothing new to save.
+    func saveHuntTail(_ tail: HuntTail?) {
+        guard let tail else {
+            // Nothing irreplaceable to keep — drop any stale tail rather than leave
+            // a previous hunt's data to be offered to the next one.
+            deleteFromDocumentsDirectory(filename: huntTailFile)
+            appLog("PersistenceService: No BLE hunt tail to save (APRS holds everything)", category: .service, level: .debug)
+            return
         }
+        guard let encoded = try? JSONEncoder().encode(tail) else { return }
+        saveToDocumentsDirectory(data: encoded, filename: huntTailFile)
+        appLog("PersistenceService: BLE hunt tail saved (\(tail.points.count) points for '\(tail.serial)')", category: .service, level: .info)
+    }
 
-        // Save current track
-        let track = balloonTrackService.getAllTrackPoints()
-        saveBalloonTrack(track, sondeName: balloonTrackService.currentBalloonName)
-
-        // Save landing points
-        let landingPoints = landingPointTrackingService.landingHistory
-        saveLandingPoints(landingPoints)
-
-        appLog("PersistenceService: All data saved on app close", category: .service, level: .info)
+    /// The stored tail, whatever sonde it belongs to. Whether it may be used is
+    /// `HuntTail.points(for:now:)`'s decision, not this one's.
+    func loadHuntTail() -> HuntTail? {
+        guard let data = Self.loadFromDocumentsDirectory(filename: huntTailFile),
+              let tail = try? JSONDecoder().decode(HuntTail.self, from: data) else { return nil }
+        appLog("PersistenceService: BLE hunt tail loaded (\(tail.points.count) points for '\(tail.serial)')", category: .service, level: .debug)
+        return tail
     }
 
     // MARK: - Documents Directory Helpers
@@ -202,6 +137,11 @@ final class PersistenceService: ObservableObject {
         } catch {
             appLog("PersistenceService: Failed to save \(filename): \(error)", category: .service, level: .error)
         }
+    }
+
+    private func deleteFromDocumentsDirectory(filename: String) {
+        guard let documentsURL = try? FileManager.default.url(for: .documentDirectory, in: .userDomainMask, appropriateFor: nil, create: false) else { return }
+        try? FileManager.default.removeItem(at: documentsURL.appendingPathComponent(filename))
     }
 
     private static func loadFromDocumentsDirectory(filename: String) -> Data? {

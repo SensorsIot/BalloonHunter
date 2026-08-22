@@ -440,6 +440,26 @@ nonisolated enum FetchWindow {
         (10800, "3h"), (21600, "6h"), (43200, "12h"), (86400, "1d"), (259200, "3d")
     ]
 
+    /// The window asked for first when the full one would be slow.
+    ///
+    /// It is one of SondeHub's own windows, not a new kind of request: the same
+    /// thing a routine delta asks for.
+    static let recentSlice = "30m"
+
+    /// Whether `duration` is big enough that waiting for it would keep the hunter
+    /// staring at a map with no landing point.
+    ///
+    /// The landing point needs exactly one frame — the newest — while the history
+    /// behind it is thousands of points and ten seconds. For a large window the
+    /// recent slice is fetched first so the overlays appear at once; for a small one
+    /// the single request already does both jobs and splitting it would just double
+    /// the traffic.
+    static func isLarge(_ duration: String) -> Bool {
+        guard let index = buckets.firstIndex(where: { $0.1 == duration }),
+              let sliceIndex = buckets.firstIndex(where: { $0.1 == recentSlice }) else { return false }
+        return index > sliceIndex
+    }
+
     /// The `duration` to request.
     ///
     /// - Parameters:

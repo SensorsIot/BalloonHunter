@@ -1963,6 +1963,12 @@ different one — in particular, **only step 3 loads sonde data**.
         selected serial: the retained BLE hunt tail from disk, the SondeHub track
         delta merged onto it by position, the latest position, and the recovery
         status. See *APRS Telemetry: the delta-fetch*.
+    *   **The overlays do not wait for the history.** A whole-flight load takes about
+        ten seconds, and the landing point needs exactly one frame. So when the
+        window is large the loader asks for the recent slice first and publishes that
+        position at once — prediction, landing point and route appear in well under a
+        second — then fetches the history, which fills in the red track behind them.
+        When the window is already small, one request does both jobs and is not split.
     *   An empty SondeHub answer is **normal, not a failure**: a sonde absent from
         SondeHub for 24 h is a test sonde and simply has no APRS track to show. The
         hunt continues on BLE alone, and the track appears by itself once that sonde

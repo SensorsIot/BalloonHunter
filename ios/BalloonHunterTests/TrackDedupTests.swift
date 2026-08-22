@@ -248,6 +248,28 @@ final class TrackDedupTests: XCTestCase {
                        "how stale the balloon is must not decide how much we ask for")
     }
 
+    /// A large window means a slow load, and the landing point needs only the newest
+    /// frame — so a recent slice is fetched first and its position published, rather
+    /// than making the hunter wait ~10 s for the history. A small window does both
+    /// jobs in one request and must not be split.
+    func testWindow_knowsWhichRequestsAreWorthSplitting() {
+        XCTAssertTrue(FetchWindow.isLarge("3d"), "a whole-flight load must not block the landing point")
+        XCTAssertTrue(FetchWindow.isLarge("1d"))
+        XCTAssertTrue(FetchWindow.isLarge("3h"))
+        XCTAssertFalse(FetchWindow.isLarge(FetchWindow.recentSlice),
+                       "the recent slice is never worth splitting from itself")
+        XCTAssertFalse(FetchWindow.isLarge("30m"))
+        XCTAssertFalse(FetchWindow.isLarge("15s"))
+    }
+
+    /// Splitting must not become a second fetch path: the slice is one of the
+    /// windows SondeHub already accepts.
+    func testWindow_recentSliceIsAValidSondeHubWindow() {
+        XCTAssertEqual(FetchWindow.duration(lastFetch: epoch.addingTimeInterval(-120), now: epoch),
+                       FetchWindow.recentSlice,
+                       "the slice is the same window a routine delta already asks for")
+    }
+
     /// A landed sonde is not finished transmitting — a finder can move it and it
     /// reports again. Sizing from the last fetch catches that; skipping the fetch
     /// because it is "landed" would lose it.

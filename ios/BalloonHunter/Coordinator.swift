@@ -58,12 +58,6 @@ final class ServiceCoordinator: ObservableObject {
     // Frequency sync proposal forwarded from APRS service
     @Published var frequencySyncProposal: FrequencySyncProposal? = nil
     private var startupFrequencySyncDone: Bool = false  // Only sync once per startup/sonde change
-    /// The sonde whose tracking chain (context read, recovery, prediction, route)
-    /// has actually been established in this run. Deliberately not the same thing
-    /// as `balloonPositionService.currentBalloonName`, which persistence restore
-    /// sets before any of that has happened. See `startTrackingSonde`.
-    private var establishedSonde: String?
-
     /// What the sonde context load is doing right now, or `nil` when it is not
     /// running. Loading a whole flight from SondeHub takes seconds, and without
     /// this the hunter watches an unchanged screen and reasonably concludes the app
@@ -354,18 +348,11 @@ final class ServiceCoordinator: ObservableObject {
     ///   - name: Sonde serial number
     ///   - checkFrequencySync: Whether to check frequency sync (false for BLE-detected sondes already tuned)
     func startTrackingSonde(name: String, checkFrequencySync: Bool = true) {
-        // "Already tracking" must mean the tracking chain below has actually run
-        // for this sonde — not merely that the name is set. Persistence restore
-        // sets `currentBalloonName` on cold start (STARTUP step 3) before anything
-        // is established, so testing the name made the auto-confirm of the restored
-        // sonde return here and skip the whole chain: no APRS override, no recovery
-        // check, and no prediction — which is what leaves a landed sonde with a red
-        // track but no landing point and no route.
+        // No "already tracking" shortcut. Selection is the only thing that names a
+        // hunted sonde, and it always means: set this one up. Nothing writes the
+        // name beforehand any more, so there is no earlier value that could be
+        // mistaken for proof the chain below has run.
         let previousSonde = balloonPositionService.currentBalloonName
-        guard name != establishedSonde else {
-            appLog("ServiceCoordinator: Already tracking '\(name)'", category: .general, level: .info)
-            return
-        }
 
         appLog("ServiceCoordinator: === Starting to track sonde '\(name)' (was: '\(previousSonde ?? "none")') ===", category: .general, level: .info)
 
@@ -384,7 +371,6 @@ final class ServiceCoordinator: ObservableObject {
 
         // 3. Set the sonde name. One stored copy; BalloonTrackService reads it.
         balloonPositionService.currentBalloonName = name
-        establishedSonde = name
 
         // Tell the receiver which sonde this hunt follows, so telemetry for any
         // other one is dropped before it enters the app.
