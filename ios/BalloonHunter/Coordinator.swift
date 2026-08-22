@@ -411,7 +411,16 @@ final class ServiceCoordinator: ObservableObject {
 
             // ② track is drawn from that data. ③ prediction from the published
             // position → ④ route. One ordered chain, no second fetch.
-            if let position = self.balloonPositionService.aprsService.latestPosition {
+            //
+            // `PredictionPolicy` decides here as everywhere else. A confirmed
+            // touchdown means the position is known and there is nothing left to
+            // estimate, so predicting anyway would move a landing marker off the
+            // balloon the receiver is standing next to.
+            if let position = self.balloonPositionService.aprsService.latestPosition,
+               PredictionPolicy.shouldPredict(
+                   state: self.balloonPositionService.currentState,
+                   touchdownConfirmed: self.balloonPositionService.landingConfirmedByBLE,
+                   hasPrediction: self.predictionService.latestPrediction != nil) {
                 self.sondeContextProgress = "Predicting the landing point…"
                 await self.predictionService.triggerPredictionWithPosition(position, trigger: "sonde-context")
             }

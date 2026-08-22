@@ -1331,12 +1331,10 @@ final class BalloonTrackService: ObservableObject {
             }
             detectTrackBasedLanding()
         }
-        // Sonde older than the fetched window with no track at all: fall back to
-        // the full streaming fetch for a position. Rare — a re-hunt beyond
-        // SondeHub's telemetry retention.
-        if points.isEmpty && currentBalloonTrack.isEmpty {
-            await aprsService.recoverPositionViaStreaming(serial: serial)
-        }
+        // An empty answer is the end of it. A serial SondeHub holds nothing for is a
+        // test sonde, not a flight to recover: a normal sonde's batteries are flat
+        // after about twelve hours, so one still transmitting days later has been
+        // repowered on a bench. There is no older history worth chasing.
     }
 
 

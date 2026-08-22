@@ -1545,6 +1545,14 @@ refuses a retune. This requires a query that separates "nothing there" from "cou
 ask" — `fetchAPRSTelemetryToFillGaps` returns an empty array for both and cannot be
 used for it.
 
+**There is no deeper history to fall back on.** An empty telemetry answer ends the
+enquiry: the app does not consult `/sonde/{serial}`, which serves a serial's entire
+archive from S3. For a bench unit repowered over years that archive is enormous —
+`T4230704` is 9.2 MB gzipped and **383 MB decoded**, held whole in memory to read one
+record, which is enough to have the app killed for memory pressure. The size is itself
+the proof: a real sonde lives about twelve hours, so its complete history is a few MB.
+Nothing outside SondeHub's three-day window is a flight worth recovering.
+
 ### Sonde Change Flow
 
 A sonde change is triggered by **selection** — the startup auto-select, the picker, or a confirmed retune. It is not triggered by an isolated packet bearing a different serial.
@@ -1721,6 +1729,30 @@ the automatic update Phase 3 asks for is not achievable through Apple Maps.
   donate intents for Siri to invoke, never the reverse. If a cancel is required it
   must come from the hunter, and *"Hey Siri, stop navigating"* is the hands-free
   way to give it.
+
+### Sonde Behaviour
+
+Facts about the hardware itself, which several rules depend on.
+
+**A sonde runs about twelve hours on its batteries, then it is dead.** It does not
+go quiet and resume; it stops. The consequences are load-bearing:
+
+- **An old sonde is never hunted.** A flight is over, one way or another, within a
+  day. There is no such thing as picking up the trail of a sonde from last week —
+  it has no power to transmit with.
+- **A serial still transmitting days later has been repowered on a bench.** That is a
+  *test sonde*, and it is the only explanation. The app uses this: a serial the
+  receiver can hear but SondeHub holds no telemetry for is a test sonde, and must not
+  take over the hunt — see *Sonde Selection → Test sondes must not take over the hunt*.
+- **Nothing older than SondeHub's three-day retention is worth fetching.** A sonde
+  outside that window is either dead or a bench unit, so an empty telemetry answer is
+  the end of the enquiry. There is no deeper history to recover.
+
+**A sonde reaches SondeHub within minutes of being airborne.** The network is fed by
+many ground receivers, so anything genuinely flying is visible there almost at once.
+A sonde audible to this phone but absent from SondeHub is therefore close by and on
+the ground, not on its way up: to hear one before it climbs, the receiver must be
+standing at the launch site.
 
 ### Descent Rate and Parachute Behaviour
 
