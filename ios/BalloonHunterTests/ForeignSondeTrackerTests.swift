@@ -120,4 +120,37 @@ final class ForeignSondeTrackerTests: XCTestCase {
                        "a lone packet from a bench sonde must never take over the hunt")
         XCTAssertNotEqual(bench, hunted)
     }
+
+    // MARK: - A test sonde must not take over the hunt
+    //
+    // Five packets from a bench unit are enough to declare a retune, and adopting it
+    // clears the hunted sonde's track, landing point and route. A serial SondeHub
+    // holds no telemetry for is a test sonde. See FSD *Sonde Selection → Test sondes
+    // must not take over the hunt*.
+
+    func testTestSonde_confirmedEmptyRefusesTheRetune() {
+        XCTAssertTrue(TestSonde.isTestSonde(recentFrameCount: 0),
+                      "SondeHub answered and holds nothing: the sonde is not flying anywhere")
+    }
+
+    func testTestSonde_recentFramesMeanOrdinarySonde() {
+        XCTAssertFalse(TestSonde.isTestSonde(recentFrameCount: 1),
+                       "a single recent frame is enough to show it is a real sonde")
+        XCTAssertFalse(TestSonde.isTestSonde(recentFrameCount: 10_218))
+    }
+
+    /// Off-grid hunting is normal, and an unreachable SondeHub is not evidence of
+    /// anything. Only an answer that arrives and is empty declares a test sonde.
+    func testTestSonde_unreachableSondeHubIsNotEvidence() {
+        XCTAssertFalse(TestSonde.isTestSonde(recentFrameCount: nil),
+                       "cannot ask is not the same as nothing there — assume an ordinary sonde")
+    }
+
+    /// The distinction the rule depends on: "nothing there" and "could not ask" must
+    /// reach it as different values, never both as an empty result.
+    func testTestSonde_emptyAndUnreachableDisagree() {
+        XCTAssertNotEqual(TestSonde.isTestSonde(recentFrameCount: 0),
+                          TestSonde.isTestSonde(recentFrameCount: nil),
+                          "collapsing these two would refuse legitimate retunes whenever the network drops")
+    }
 }

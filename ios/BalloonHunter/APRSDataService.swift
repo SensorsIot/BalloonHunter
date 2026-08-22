@@ -777,6 +777,35 @@ final class APRSDataService: ObservableObject {
     ///   - duration: How far back to fetch - default "3d" for maximum coverage
     ///   - localTrack: Current local track points with timestamps
     /// - Returns: New track points to add (returns empty array on error)
+    /// How many frames SondeHub holds for `serial` within its retention window, or
+    /// `nil` when SondeHub could not be answered.
+    ///
+    /// Deliberately separate from `fetchAPRSTelemetryToFillGaps`, which returns an
+    /// empty array both for "nothing there" and for "could not ask". Refusing a
+    /// retune requires telling those apart: see `TestSonde`.
+    func recentFrameCount(serial: String) async -> Int? {
+        let url = URL(string: "\(Self.sondeHubBaseURL)/sondes/telemetry?serial=\(serial)&duration=3d")!
+        var request = URLRequest(url: url)
+        request.timeoutInterval = Self.aprsApiTimeout
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("gzip, deflate", forHTTPHeaderField: "Accept-Encoding")
+        request.setValue("BalloonHunter iOS App", forHTTPHeaderField: "User-Agent")
+
+        do {
+            let (data, response) = try await session.data(for: request)
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { return nil }
+            let nested = try JSONDecoder().decode([String: [String: SondeHubAPRSPoint]].self, from: data)
+            let count = nested
+                .filter { $0.key.caseInsensitiveCompare(serial) == .orderedSame }
+                .reduce(0) { $0 + $1.value.count }
+            appLog("APRSDataService: SondeHub holds \(count) frames for \(serial) in the last 3d", category: .service, level: .info)
+            return count
+        } catch {
+            appLog("APRSDataService: Could not ask SondeHub about \(serial) (\(error.localizedDescription)) - assuming an ordinary sonde", category: .service, level: .info)
+            return nil
+        }
+    }
+
     func fetchAPRSTelemetryToFillGaps(
         serial: String,
         duration: String = "3d",

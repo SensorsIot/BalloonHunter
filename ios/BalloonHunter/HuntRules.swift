@@ -407,3 +407,33 @@ nonisolated enum FetchWindow {
         return buckets.first { seconds <= $0.0 }?.1 ?? "3d"
     }
 }
+
+// MARK: - Test sondes
+
+/// Whether a foreign serial is a bench unit rather than a balloon worth hunting.
+///
+/// A sonde on a bench transmits like any other, and five of its packets are enough
+/// to declare a retune — which clears the hunted sonde's track, landing point and
+/// route for a unit that is going nowhere.
+///
+/// A serial SondeHub holds no telemetry for is a test sonde. SondeHub retains three
+/// days, so "no frames in three days" is the strongest statement obtainable cheaply,
+/// and it is decisive: anything genuinely flying reaches SondeHub within minutes. A
+/// newly launched sonde is not endangered — hearing one on the ground means standing
+/// at the launch site, and once it has climbed far enough to be heard at distance,
+/// SondeHub has it too.
+///
+/// See FSD *Sonde Selection → Test sondes must not take over the hunt*.
+nonisolated enum TestSonde {
+
+    /// - Parameter recentFrameCount: frames SondeHub holds for the serial within its
+    ///   retention window, or `nil` when SondeHub could not be reached.
+    ///
+    /// Declaring a test sonde requires positive evidence. An unreachable SondeHub is
+    /// not evidence and off-grid hunting is normal, so only an answer that arrives
+    /// and is empty refuses a retune.
+    static func isTestSonde(recentFrameCount: Int?) -> Bool {
+        guard let recentFrameCount else { return false }
+        return recentFrameCount == 0
+    }
+}

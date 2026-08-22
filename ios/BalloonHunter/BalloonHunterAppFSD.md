@@ -1512,7 +1512,38 @@ is precisely the kind of order-dependence a single stored copy removes.
 
 Telemetry whose serial differs from the hunted sonde is discarded in `BLECommunicationService` before publication. A single such packet is a sample, not a change: acting on one allowed a bench unit to clear a live hunt and write its own position into the flight track.
 
-A **retune** is different and must still clear everything. It is declared only when the same unexpected serial arrives `foreignSondeConfirmCount` (5) times in succession with none of the hunted sonde between them, at which point the coordinator runs the full clear-and-adopt through `startTrackingSonde`. `ForeignSondeTracker` carries this rule as a pure value type and is unit-tested.
+A **retune** is different and must still clear everything. It is declared only when the same unexpected serial arrives `foreignSondeConfirmCount` (5) times in succession with none of the hunted sonde between them. `ForeignSondeTracker` carries this rule as a pure value type and is unit-tested.
+
+#### Test sondes must not take over the hunt
+
+A sonde on a bench transmits like any other, and five of its packets are enough to
+declare a retune. Adopting it clears the hunted sonde — its track, landing point and
+route — for a unit that is going nowhere.
+
+**A serial SondeHub has no telemetry for is a test sonde.** SondeHub retains three
+days, which is also the largest window its telemetry endpoint accepts, so "no frames
+in three days" is the strongest statement obtainable cheaply — and it is decisive:
+anything genuinely flying reaches SondeHub within minutes.
+
+This does not endanger a newly launched sonde. To hear one on the ground the receiver
+must be at the launch site, and once it has climbed far enough to be heard at
+distance, SondeHub has it too. A sonde audible to this phone but unknown to SondeHub
+is next to the hunter, not on its way up.
+
+**The check runs before anything is cleared**, on a confirmed retune only — one small
+request, not per packet:
+
+| SondeHub answer | verdict |
+|---|---|
+| frames within the retention window | ordinary sonde — adopt |
+| **answered, and holds nothing** | **test sonde — refuse; keep hunting the current sonde** |
+| could not be reached | ordinary sonde — adopt |
+
+**Declaring a test sonde requires positive evidence.** An unreachable SondeHub is not
+evidence, and off-grid hunting is normal, so only an answer that arrives and is empty
+refuses a retune. This requires a query that separates "nothing there" from "could not
+ask" — `fetchAPRSTelemetryToFillGaps` returns an empty array for both and cannot be
+used for it.
 
 ### Sonde Change Flow
 

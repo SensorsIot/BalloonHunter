@@ -224,13 +224,27 @@ final class ServiceCoordinator: ObservableObject {
         // Receiver retuned to a different sonde. Per FSD "Sonde Change Flow",
         // every trace of the previous sonde is cleared before the new one is
         // adopted - which is what startTrackingSonde does.
+        //
+        // Ask SondeHub about the serial *before* clearing anything. A sonde on a
+        // bench transmits like any other and five of its packets declare a retune,
+        // so without this the hunted sonde's track, landing point and route are
+        // discarded for a unit that is going nowhere. One request, on a confirmed
+        // retune only. See FSD *Test sondes must not take over the hunt*.
         bleCommunicationService.$confirmedSondeChange
             .compactMap { $0 }
             .sink { [weak self] newSonde in
                 guard let self else { return }
-                appLog("🎈 ServiceCoordinator: Receiver retuned to '\(newSonde)' - clearing previous sonde", category: .service, level: .info)
                 self.bleCommunicationService.confirmedSondeChange = nil
-                self.startTrackingSonde(name: newSonde, checkFrequencySync: false)
+                Task { [weak self] in
+                    guard let self else { return }
+                    let frames = await self.balloonPositionService.aprsService.recentFrameCount(serial: newSonde)
+                    guard !TestSonde.isTestSonde(recentFrameCount: frames) else {
+                        appLog("🧪 ServiceCoordinator: '\(newSonde)' is a test sonde - SondeHub holds nothing for it. Keeping the hunt on '\(self.balloonPositionService.currentBalloonName ?? "none")'", category: .service, level: .info)
+                        return
+                    }
+                    appLog("🎈 ServiceCoordinator: Receiver retuned to '\(newSonde)' - clearing previous sonde", category: .service, level: .info)
+                    self.startTrackingSonde(name: newSonde, checkFrequencySync: false)
+                }
             }
             .store(in: &cancellables)
 
