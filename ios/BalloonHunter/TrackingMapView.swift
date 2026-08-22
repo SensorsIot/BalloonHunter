@@ -203,8 +203,9 @@ struct TrackingMapView: View {
                         }
                     }
                     
-                    // 6. Balloon Live Position: Color based on flight phase
-                    // Prefer three-channel position data, fallback to legacy telemetry
+                    // Where the balloon is. Prefer three-channel position data,
+                    // fallback to legacy telemetry. The marker itself is declared
+                    // last (below) so it draws in front of everything else.
                     let balloonCoordinate: CLLocationCoordinate2D? = {
                         if let displayPosition = mapPresenter.balloonDisplayPosition {
                             return displayPosition
@@ -215,6 +216,29 @@ struct TrackingMapView: View {
                         return nil
                     }()
 
+                    // 7. Burst Point: State-driven visibility handled by MapPresenter
+                    if let burstPoint = mapPresenter.burstPoint {
+                        Annotation("", coordinate: burstPoint) {
+                            Image(systemName: "burst.fill")
+                                .font(.title2)
+                                .foregroundColor(.orange)
+                        }
+                    }
+                    
+                    // 8. Landing Point: Always visible if available
+                    if let landingPoint = mapPresenter.landingPoint {
+                        Annotation("", coordinate: landingPoint) {
+                            Image(systemName: "target")
+                                .font(.title2)
+                                .foregroundColor(.purple)
+                                .background(Circle().fill(.white).stroke(.purple, lineWidth: 2))
+                        }
+                    }
+
+                    // 9. Balloon Live Position — declared LAST so it draws in front
+                    //    of every other marker. Once landed the balloon and the
+                    //    landing target sit on the same spot, and whichever is
+                    //    declared later wins: the hunter must always see the balloon.
                     if let balloonCoordinate = balloonCoordinate {
                         let (balloonIcon, balloonColor): (String, Color) = {
                             switch mapPresenter.balloonPhase {
@@ -245,24 +269,6 @@ struct TrackingMapView: View {
                         }
                     }
 
-                    // 7. Burst Point: State-driven visibility handled by MapPresenter
-                    if let burstPoint = mapPresenter.burstPoint {
-                        Annotation("", coordinate: burstPoint) {
-                            Image(systemName: "burst.fill")
-                                .font(.title2)
-                                .foregroundColor(.orange)
-                        }
-                    }
-                    
-                    // 8. Landing Point: Always visible if available
-                    if let landingPoint = mapPresenter.landingPoint {
-                        Annotation("", coordinate: landingPoint) {
-                            Image(systemName: "target")
-                                .font(.title2)
-                                .foregroundColor(.purple)
-                                .background(Circle().fill(.white).stroke(.purple, lineWidth: 2))
-                        }
-                    }
                 }
                     }
                 .mapControls {

@@ -753,12 +753,29 @@ never coordinate — one simply finds nothing.
   the buckets `15s, 1m, 30m, 1h, 3h, 6h, 12h, 1d, 3d`; `sondeHubDurationBucket(covering:)`
   picks the smallest bucket that covers the gap.
 
-**How the delta is decided** (`gapSinceNewestFrame`):
-- Gap = `now − newest-held-frame-time + 60 s` margin.
-- **Empty track → gap is unbounded → `3d`** (a fresh selection loads the whole flight).
-- A track a few minutes stale → `1m`/`30m` — a small, fast request, not the 3-day payload.
-- This is why polling a multi-hour flight never re-fetches 3 days: after the first load
-  each `readBalloonContext` pulls only the seconds since the newest frame it already has.
+**How the delta is decided** — *from when this serial was last asked about, never
+from how old its newest frame is.*
+
+- Gap = `now − last successful fetch for this serial + 60 s` margin.
+- **Never fetched for this serial → the whole flight (`3d`).** A fresh selection, or
+  a restored BLE tail with no SondeHub history behind it yet.
+- Asked two minutes ago → `30m`. Asked five seconds ago → `15s`.
+- A fetch that **fails does not count as asked**, so the next attempt covers the
+  same ground plus the time since.
+
+**Why not from the newest held frame.** That measures how stale the *balloon* is,
+when what governs the request is how stale our *knowledge* is. The two come apart
+whenever a sonde goes quiet: a balloon whose last frame is eighteen hours old, asked
+about two minutes ago, can have at most two minutes of new data — yet sizing from the
+frame asks for a full day and re-downloads ten thousand points that are already held,
+on every foreground resume.
+
+It also keeps the recovery case working. A landed sonde is **not** finished
+transmitting — the *telemetry blackout* rule below exists precisely because a finder
+can move it and it starts reporting again from somewhere else. Sizing from the last
+fetch catches those frames whether the balloon is flying, lying in a field, or in the
+back of someone's car; a rule that skipped fetching for "landed" sondes would lose
+them silently.
 
 **APRS Point Fields** (parsed from SondeHub response):
 - Essential tracking: `serial`, `datetime`, `lat`, `lon`, `alt`
@@ -881,10 +898,18 @@ stops location, since tracking already runs.
 
 ####   Input Triggers:
 
-1. **App startup** - Load persisted state into services
-2. **During run** - Save track (batched), landing points (immediate on each new point), sonde name (immediate on change)
-3. **Settings changes** - Save userSettings immediately
-4. **App shutdown** - Final save of all state
+1. **Settings changes** - save `userSettings` immediately.
+2. **Entering the background** - write the BLE hunt tail. This is the only moment it
+   is needed, because the background is the only thing the app has to survive.
+
+**Save on `.background`, never on `.inactive`.** iOS passes through `.inactive` in
+*both* directions, so saving there writes everything a second time while the app is
+being *restored* — before it is interactive, and with nothing changed since the write
+on the way out. Leaving is the event worth persisting; arriving is not.
+
+The sonde's identity is not saved as its own file and is never restored as the hunted
+serial — it exists only as the label on the tail. See *Startup*, which reads
+`userSettings.json` and nothing else before a sonde is chosen.
 
 ####   Persisted Files:
 
@@ -2032,6 +2057,7 @@ The overlays must remain accurately positioned and correctly cropped within the 
 * Balloon Track: The map overlay shall show the current balloon track as a thin red line. It starts empty and is filled by the context loader once a sonde is selected. New telemetry points are appended to the array as they are received. The array is automatically cleared if a different sonde name is received (new sonde). It is updated when a new point is added to the track. The track should appear on the map when it is available.  
 * Balloon Predicted Path: The complete predicted flight path from the Sondehub API is displayed as a thick blue line. While the balloon is ascending, a distinct marker indicates the predicted burst location; the burst marker is visible only while ascending. Visibility of the path itself is decided in one place — `MapPresenter.predictionPathVisible` — and the view draws whatever the presenter publishes. There is no "Prediction on/off" button. See *How a Landing Is Determined → Drawing the predicted-descent line*.  
 * Landing point: Shall be visible if a valid landing point is available  
+* **Marker order: the balloon is drawn in front of everything else.** Markers are drawn in declaration order, so the balloon annotation is declared last. Once landed, the balloon and the landing target occupy the same spot, and the hunter must always be able to see the balloon rather than the marker predicting where it would be.  
 * Planned Route from User to Landing Point: The recommended route from the user's current location to the predicted landing point is retrieved from Apple Maps and displayed on the map as a green overlay path. When bicycle mode is selected the in-app overlay still uses walking directions (MapKit limitation) but the Apple Maps button launches native cycling navigation. The route should appear on the map when it is available.  
 
 A new route calculation is triggered by a **material change, never by a clock** —

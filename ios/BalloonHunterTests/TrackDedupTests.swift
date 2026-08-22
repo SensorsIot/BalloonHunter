@@ -213,33 +213,48 @@ final class TrackDedupTests: XCTestCase {
         XCTAssertEqual(merged.count, full.count, "a complete track gains nothing from a re-offer")
     }
 
-    // MARK: - Sizing the delta fetch
+    // MARK: - Sizing the window from when we last asked
 
-    /// "Nothing held" is expressed as `nil`, never as a sentinel Double. A sentinel
-    /// invites a guard that fails to recognise it — `.greatestFiniteMagnitude`
-    /// satisfies `isFinite`, so an `isFinite` check waves it through and any later
-    /// `Int()` conversion traps.
-    func testBucket_nothingHeld_isWholeFlight() {
-        XCTAssertEqual(BalloonTrackService.sondeHubDurationBucket(covering: nil), "3d",
-                       "an empty track must fetch the whole flight")
+    /// The window is measured from the **last successful fetch for this serial**,
+    /// never from how old the newest held frame is. Those come apart the moment a
+    /// sonde goes quiet, and sizing from the frame then re-downloads the whole
+    /// flight on every resume. See FSD *How the delta is decided*.
+
+    func testWindow_neverFetched_isWholeFlight() {
+        XCTAssertEqual(FetchWindow.duration(lastFetch: nil, now: epoch), "3d",
+                       "nothing asked yet — the whole flight is wanted")
     }
 
-    func testBucket_roundsUpToSondeHubsAllowedWindows() {
-        // SondeHub accepts only these, so a delta must round up to one of them.
-        XCTAssertEqual(BalloonTrackService.sondeHubDurationBucket(covering: 10), "15s")
-        XCTAssertEqual(BalloonTrackService.sondeHubDurationBucket(covering: 15), "15s")
-        XCTAssertEqual(BalloonTrackService.sondeHubDurationBucket(covering: 16), "1m")
-        XCTAssertEqual(BalloonTrackService.sondeHubDurationBucket(covering: 90), "30m")
-        XCTAssertEqual(BalloonTrackService.sondeHubDurationBucket(covering: 3600), "1h")
-        XCTAssertEqual(BalloonTrackService.sondeHubDurationBucket(covering: 3601), "3h")
-        XCTAssertEqual(BalloonTrackService.sondeHubDurationBucket(covering: 86_400), "1d")
+    func testWindow_sizedFromTheLastFetch() {
+        // The 60 s margin (relay skew + clock difference) is added before rounding
+        // up, and SondeHub's buckets jump straight from 1m to 30m — so in practice
+        // any repeat fetch asks for 30m. That is still ~1/100 of the 3d payload.
+        XCTAssertEqual(FetchWindow.duration(lastFetch: epoch, now: epoch), "1m",
+                       "just asked: the margin alone fits the 1m bucket")
+        XCTAssertEqual(FetchWindow.duration(lastFetch: epoch.addingTimeInterval(-5), now: epoch), "30m",
+                       "5 s + 60 s margin exceeds 1m, so it rounds up to the next bucket SondeHub offers")
+        XCTAssertEqual(FetchWindow.duration(lastFetch: epoch.addingTimeInterval(-120), now: epoch), "30m")
+        XCTAssertEqual(FetchWindow.duration(lastFetch: epoch.addingTimeInterval(-7200), now: epoch), "3h")
+        XCTAssertEqual(FetchWindow.duration(lastFetch: epoch.addingTimeInterval(-400_000), now: epoch), "3d",
+                       "beyond retention there is nothing larger to ask for")
     }
 
-    /// Beyond SondeHub's retention there is nothing larger to ask for.
-    func testBucket_beyondRetentionClampsToThreeDays() {
-        XCTAssertEqual(BalloonTrackService.sondeHubDurationBucket(covering: 400_000), "3d")
-        XCTAssertEqual(BalloonTrackService.sondeHubDurationBucket(covering: .greatestFiniteMagnitude), "3d",
-                       "an absurd value must clamp, not trap")
+    /// The case that was re-downloading ten thousand points on every resume: the
+    /// balloon has been silent 18 h, but we asked two minutes ago, so at most two
+    /// minutes of new data can exist.
+    func testWindow_silentBalloonAskedRecently_staysSmall() {
+        let askedTwoMinutesAgo = epoch.addingTimeInterval(-120)
+        XCTAssertEqual(FetchWindow.duration(lastFetch: askedTwoMinutesAgo, now: epoch), "30m",
+                       "how stale the balloon is must not decide how much we ask for")
+    }
+
+    /// A landed sonde is not finished transmitting — a finder can move it and it
+    /// reports again. Sizing from the last fetch catches that; skipping the fetch
+    /// because it is "landed" would lose it.
+    func testWindow_landedSondeIsStillAskedAbout() {
+        let askedRecently = epoch.addingTimeInterval(-60)
+        XCTAssertNotEqual(FetchWindow.duration(lastFetch: askedRecently, now: epoch), "",
+                          "a landed sonde is still polled — the blackout/recovery case depends on it")
     }
 
     // MARK: - The BLE hunt tail

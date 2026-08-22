@@ -411,3 +411,45 @@ nonisolated struct HuntTail: Codable {
         return points
     }
 }
+
+
+// MARK: - Sizing a SondeHub telemetry request
+
+/// How much history to ask SondeHub for.
+///
+/// The window is measured from **when this serial was last successfully asked
+/// about**, never from how old its newest held frame is. Those two come apart the
+/// moment a sonde goes quiet: a balloon silent for eighteen hours, asked about two
+/// minutes ago, can have at most two minutes of new data. Sizing from the frame
+/// asks for a full day and re-downloads what is already held, on every resume.
+///
+/// It also keeps the recovery case working. A landed sonde is not finished
+/// transmitting — a finder can move it and it reports again from somewhere else —
+/// so it must still be asked. Sizing from the last fetch catches those frames;
+/// skipping the fetch because the balloon is "landed" would lose them silently.
+///
+/// See FSD *APRS Telemetry: the delta-fetch → How the delta is decided*.
+nonisolated enum FetchWindow {
+
+    /// Covers the BLE/APRS relay skew and any clock difference.
+    static let margin: TimeInterval = 60
+
+    /// SondeHub accepts only these windows, so a delta rounds up to one of them.
+    private static let buckets: [(TimeInterval, String)] = [
+        (15, "15s"), (60, "1m"), (1800, "30m"), (3600, "1h"),
+        (10800, "3h"), (21600, "6h"), (43200, "12h"), (86400, "1d"), (259200, "3d")
+    ]
+
+    /// The `duration` to request.
+    ///
+    /// - Parameters:
+    ///   - lastFetch: when this serial was last fetched successfully, or `nil` if it
+    ///     never has been — in which case the whole flight is wanted. A failed fetch
+    ///     must not update this, so the next attempt covers the same ground again.
+    ///   - now: the current time.
+    static func duration(lastFetch: Date?, now: Date) -> String {
+        guard let lastFetch else { return "3d" }
+        let seconds = now.timeIntervalSince(lastFetch) + margin
+        return buckets.first { seconds <= $0.0 }?.1 ?? "3d"
+    }
+}

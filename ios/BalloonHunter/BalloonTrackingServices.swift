@@ -871,6 +871,11 @@ final class BalloonTrackService: ObservableObject {
     /// than each starting their own fetch-merge-detect pass. See `readBalloonContext`.
     private var contextRead: (serial: String, task: Task<Void, Never>)?
 
+    /// When each serial was last successfully fetched from SondeHub. This — not the
+    /// age of the newest held frame — sizes the next request, so a balloon that has
+    /// been silent for hours is not re-downloaded in full on every resume.
+    private var lastContextFetch: [String: Date] = [:]
+
     // Track management
     private var smoothingCounter = 0
     private let saveInterval = 10 // Save every 10 telemetry points
@@ -1303,17 +1308,20 @@ final class BalloonTrackService: ObservableObject {
     /// collapses concurrent requests for the same serial onto one of these.
     private func performContextRead(serial: String) async {
         guard let aprsService else { return }
-        // Fetch only what we don't already hold: the window from the newest frame
-        // in the retained track to now (a small margin covers the BLE/APRS skew),
-        // or the whole flight when we hold nothing. The track stays complete;
-        // position-dedup keeps a re-drawn stretch from doubling BLE points.
-        let gap = gapSinceNewestFrame()
-        let duration = Self.sondeHubDurationBucket(covering: gap)
-        let gapText = gap.map { String(format: "%.0fs", $0) } ?? "whole flight"
-        appLog("BalloonTrackService: Context read for \(serial) - gap \(gapText) -> duration=\(duration), holding \(currentBalloonTrack.count) points", category: .service, level: .info)
+        // Ask only for what could have appeared since this serial was last fetched.
+        // Not since the newest held frame: that measures how stale the balloon is,
+        // not how stale our knowledge is, and the two come apart the moment a sonde
+        // goes quiet. See FSD *How the delta is decided*.
+        let lastFetch = lastContextFetch[serial]
+        let duration = FetchWindow.duration(lastFetch: lastFetch, now: Date())
+        let sinceText = lastFetch.map { String(format: "%.0fs since last fetch", Date().timeIntervalSince($0)) } ?? "never fetched"
+        appLog("BalloonTrackService: Context read for \(serial) - \(sinceText) -> duration=\(duration), holding \(currentBalloonTrack.count) points", category: .service, level: .info)
         let points = await aprsService.fetchAPRSTelemetryToFillGaps(serial: serial, duration: duration, localTrack: currentBalloonTrack)
         await MainActor.run {
             guard currentBalloonName == serial else { return }   // sonde changed while fetching
+            // Only a fetch that returned counts as "asked"; a failure must leave the
+            // window wide so the next attempt covers the same ground again.
+            lastContextFetch[serial] = Date()
             if !points.isEmpty {
                 _ = insertAPRSPoints(points)
                 trackUpdated.send()
@@ -1332,31 +1340,6 @@ final class BalloonTrackService: ObservableObject {
         }
     }
 
-    /// Seconds of history `readBalloonContext` must fetch: from the newest frame
-    /// already held (plus a margin for the ~17 s BLE/APRS skew) to now.
-    ///
-    /// `nil` means nothing is held, so the whole flight is wanted. Deliberately not
-    /// a sentinel value: `.greatestFiniteMagnitude` satisfies `isFinite`, so any
-    /// guard written against it waves it through and the next `Int()` conversion
-    /// traps — which is exactly what crashed a sonde change, whose first act is to
-    /// empty the track.
-    private func gapSinceNewestFrame() -> TimeInterval? {
-        guard let newest = currentBalloonTrack.map({ $0.timestamp }).max() else { return nil }
-        return Date().timeIntervalSince(newest) + 60
-    }
-
-    /// Smallest SondeHub `duration` bucket that covers `seconds`, or the whole
-    /// flight when `seconds` is `nil` (nothing held). SondeHub accepts only a fixed
-    /// set (`15s,1m,30m,1h,3h,6h,12h,1d,3d`), so a delta rounds up, and anything
-    /// past its retention clamps to the largest.
-    nonisolated static func sondeHubDurationBucket(covering seconds: TimeInterval?) -> String {
-        guard let seconds else { return "3d" }
-        let buckets: [(TimeInterval, String)] = [
-            (15, "15s"), (60, "1m"), (1800, "30m"), (3600, "1h"),
-            (10800, "3h"), (21600, "6h"), (43200, "12h"), (86400, "1d"), (259200, "3d")
-        ]
-        return buckets.first { seconds <= $0.0 }?.1 ?? "3d"
-    }
 
     /// Send local notification when track is truncated due to detected landing
     private func sendTrackTruncationNotification(reason: String, pointsRemoved: Int) {
