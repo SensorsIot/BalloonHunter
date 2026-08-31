@@ -50,7 +50,7 @@ RUN printf '%s\n' \
     '# --- Persistent claude session (auto-attach tmux on interactive SSH) ---' \
     'if [ -n "$SSH_CONNECTION" ] && [ -z "$TMUX" ] && [ "$TERM_PROGRAM" != "vscode" ] && [ ! -f "$HOME/.no-tmux" ] && command -v tmux >/dev/null 2>&1; then' \
     '    case "$-" in' \
-    '        *i*) exec tmux new-session -A -s main -c /workspaces/BalloonHunter "claude --dangerously-skip-permissions; exec bash" ;;' \
+    '        *i*) exec tmux new-session -A -s main -c /workspaces/BalloonHunter "claude; exec bash" ;;' \
     '    esac' \
     'fi' \
     >> /home/dev/.bashrc
